@@ -7,7 +7,6 @@ use crate::schema::{
 };
 use rustmotion_core::engine::renderer::{color4f_from_hex, paint_from_hex};
 
-/// Draw an animated background (gradient, concentric circles, grid dots, halo, or heropattern).
 pub(super) fn draw_animated_background(
     canvas: &Canvas,
     bg: &AnimatedBackground,
@@ -15,14 +14,8 @@ pub(super) fn draw_animated_background(
     width: f32,
     height: f32,
 ) {
-    // Compute scroll offset for tiled presets (gradient_shift handles rotation internally)
     let (scroll_x, scroll_y) = compute_scroll_offset(bg, time);
 
-    // Whole tile periods the wrap removed. The geometry doesn't care (the
-    // pattern is periodic on `spacing`) but `draw_bg_grid_dots`'s pulse is
-    // a function of position, so without adding these back its phase would
-    // jump by `spacing * 0.01` radians every time the offset wraps — a
-    // visible, periodic pop in every dot's radius and alpha at once.
     let (raw_x, raw_y) = raw_scroll_offset(bg, time);
     let phase_origin = (raw_x - scroll_x, raw_y - scroll_y);
 
@@ -56,9 +49,6 @@ pub(super) fn draw_animated_background(
     canvas.restore();
 }
 
-/// Draw animated background with camera parallax for world views.
-/// Offsets the grid pattern by (cam_x, cam_y) modulo spacing so that
-/// the texture scrolls as the camera pans.
 pub(super) fn draw_world_bg_with_parallax(
     canvas: &Canvas,
     bg: &AnimatedBackground,
@@ -71,13 +61,6 @@ pub(super) fn draw_world_bg_with_parallax(
 ) {
     match &bg.preset {
         BackgroundPreset::Halo(cfg) => {
-            // `HaloZone`'s x/y/radius are fractions of the surface it is painted
-            // on. In a slide view that is the viewport; here it is the world the
-            // camera travels, so it has to be the *actual* extent
-            // (`WorldTimeline::world_extent`). It used to be `viewport * 5.0`,
-            // a constant unrelated to the scenes' own positions: the same
-            // `radius: 0.55` that reads as a half-screen glow in a slide became
-            // a five-screen wash, and calibrating one was trial and error.
             let (world_x, world_y, world_w, world_h) = world;
             canvas.save();
             canvas.translate((world_x - cam_x, world_y - cam_y));
@@ -85,7 +68,6 @@ pub(super) fn draw_world_bg_with_parallax(
             canvas.restore();
         }
         _ => {
-            // Grid-based backgrounds: modulo offset for seamless tiling.
             let (spacing_x, spacing_y) = tile_spacing(&bg.preset);
             let offset_x = -(cam_x % spacing_x);
             let offset_y = -(cam_y % spacing_y);
@@ -124,7 +106,6 @@ fn draw_bg_gradient_shift(
     let base_colors: Vec<skia_safe::Color4f> =
         cfg.colors.iter().map(|c| color4f_from_hex(c)).collect();
 
-    // Direction determines rotation sense; default is cw
     let sign = match direction {
         Some(ScrollDirection::Ccw) => -1.0,
         _ => 1.0,
@@ -132,11 +113,6 @@ fn draw_bg_gradient_shift(
     let angle = (sign * speed * time) % 360.0;
     let rad = angle.to_radians();
 
-    // Subdivide color stops (16 intermediate steps between each pair),
-    // interpolating in *linear light* and re-encoding to sRGB per generated
-    // stop — see `subdivide_gradient_stops` for why this can't be delegated
-    // to a Skia `ColorSpace` tag on the shader (the render surfaces carry no
-    // color space, so any such tag is a silent no-op).
     let (colors, positions) = subdivide_gradient_stops(&base_colors, 16);
 
     let shader = match cfg.gradient_type {
@@ -177,25 +153,6 @@ fn draw_bg_gradient_shift(
     }
 }
 
-/// Subdivide gradient color stops by inserting intermediate interpolated
-/// colors. Returns (colors, positions) with `subdivisions` extra stops
-/// between each original pair.
-///
-/// RGB is interpolated in **linear light** (decoded from sRGB, lerped,
-/// re-encoded to sRGB per generated stop) — the actual fix for
-/// rules/gradient-quality.md's "linear color space interpolation" claim.
-/// The two mitigations used to rely on Skia: tagging the shader's colors
-/// with `ColorSpace::new_srgb_linear()` and subdividing so Skia's own
-/// per-pixel lerp had more (supposedly linear-space) stops to work with.
-/// Both were silent no-ops: the render surfaces are created with no color
-/// space (`ImageInfo::new(..., None)`), which short-circuits any
-/// color-space conversion Skia would otherwise do — so the colors stayed
-/// gamma-encoded sRGB the whole time, and subdividing an already-sRGB lerp
-/// is a mathematical identity (17x more stops, zero visual effect). Doing
-/// the gamma conversion here, on plain `f32`s, works regardless of what
-/// color space (if any) the destination surface ends up tagged with later.
-///
-/// Alpha is NOT gamma-encoded and keeps a plain linear lerp.
 pub(super) fn subdivide_gradient_stops(
     colors: &[skia_safe::Color4f],
     subdivisions: u32,
@@ -217,8 +174,6 @@ pub(super) fn subdivide_gradient_stops(
             let t = s as f32 / steps as f32;
             let global_t = (i as f32 + t) / seg;
             let color = if t == 0.0 {
-                // Exact copy at the segment start — no conversion round-trip
-                // drift on stops that already existed pre-subdivision.
                 *c0
             } else {
                 skia_safe::Color4f {
@@ -232,21 +187,17 @@ pub(super) fn subdivide_gradient_stops(
             out_pos.push(global_t);
         }
     }
-    // Last color — exact copy, same reasoning as the `t == 0.0` case above.
     out_colors.push(colors[n - 1]);
     out_pos.push(1.0);
 
     (out_colors, out_pos)
 }
 
-/// Lerp one sRGB-encoded channel (0..1) by decoding both endpoints to linear
-/// light, interpolating there, and re-encoding back to sRGB.
 fn lerp_srgb_channel(a: f32, b: f32, t: f32) -> f32 {
     let linear = srgb_to_linear(a) + (srgb_to_linear(b) - srgb_to_linear(a)) * t;
     linear_to_srgb(linear)
 }
 
-/// sRGB EOTF (decode): gamma-encoded 0..1 -> linear light 0..1.
 fn srgb_to_linear(c: f32) -> f32 {
     let c = c.clamp(0.0, 1.0);
     if c <= 0.04045 {
@@ -256,7 +207,6 @@ fn srgb_to_linear(c: f32) -> f32 {
     }
 }
 
-/// sRGB OETF (encode): linear light 0..1 -> gamma-encoded 0..1.
 fn linear_to_srgb(c: f32) -> f32 {
     let c = c.clamp(0.0, 1.0);
     if c <= 0.0031308 {
@@ -266,29 +216,19 @@ fn linear_to_srgb(c: f32) -> f32 {
     }
 }
 
-/// Soft colored glow zones (halo preset).
 fn draw_bg_halo(canvas: &Canvas, cfg: &HaloConfig, speed: f32, time: f32, width: f32, height: f32) {
     for (i, zone) in cfg.zones.iter().enumerate() {
         let cx = zone.x * width;
         let cy = zone.y * height;
         let base_radius = zone.radius * width.max(height);
-        // Each zone gets a unique phase and slightly different frequency.
         let phase =
             (zone.x * 17.3 + zone.y * 31.7 + i as f32 * 0.73).fract() * std::f32::consts::TAU;
-        // `speed` is shared with the scrolling presets, where it means pixels
-        // per second and defaults to 30. Used directly as an angular frequency
-        // that is 30 rad/s — a ~5 Hz strobe, not a glow. BREATH_RATE converts
-        // it into a slow ambient pulse: at the default it gives a period of
-        // roughly 10 seconds, which reads as light rather than as flicker.
         const BREATH_RATE: f32 = 0.02;
         let freq = speed * BREATH_RATE * (0.7 + (zone.x * 13.1 + zone.y * 7.9).fract() * 0.6);
         let breath = 1.0 + 0.15 * (time * freq + phase).sin();
         let radius = base_radius * breath;
 
         let mut color = color4f_from_hex(&zone.color);
-        // `opacity` multiplies whatever alpha `color` already carries (opaque
-        // by default, or hex-encoded, e.g. `#1E3A8A55`). Default 1.0 is a
-        // true no-op — it leaves the colour's own alpha untouched.
         color.a *= zone.opacity.clamp(0.0, 1.0);
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
@@ -302,7 +242,6 @@ fn draw_bg_halo(canvas: &Canvas, cfg: &HaloConfig, speed: f32, time: f32, width:
     }
 }
 
-/// Expanding concentric circles from center.
 fn draw_bg_concentric_circles(
     canvas: &Canvas,
     cfg: &ConcentricCirclesConfig,
@@ -334,7 +273,6 @@ fn draw_bg_concentric_circles(
 
     let mut r = offset;
     while r < max_radius {
-        // Fade out as circles expand
         let alpha = 1.0 - (r / max_radius).clamp(0.0, 1.0);
         paint.set_alpha_f(alpha * 0.3);
         canvas.draw_circle((cx, cy), r, &paint);
@@ -342,21 +280,12 @@ fn draw_bg_concentric_circles(
     }
 }
 
-/// Pulse factor (radius multiplier and alpha basis) of the dot drawn at
-/// canvas-local `(x, y)`.
-///
-/// `phase_origin` is the whole number of tile periods `compute_scroll_offset`
-/// wrapped away, and is subtracted so the argument stays the dot's position
-/// on the *unwrapped* scroll track. Geometry is periodic on `spacing` and so
-/// survives the wrap unchanged; this `sin` is not, and would otherwise step
-/// by `spacing * 0.01` rad at every wrap.
 fn dot_pulse(x: f32, y: f32, time: f32, phase_origin: (f32, f32)) -> f32 {
     let wx = x - phase_origin.0;
     let wy = y - phase_origin.1;
     (wx * 0.01 + wy * 0.01 + time * 2.0).sin() * 0.3 + 0.7
 }
 
-/// Animated dot grid pattern.
 fn draw_bg_grid_dots(
     canvas: &Canvas,
     cfg: &GridDotsConfig,
@@ -371,18 +300,10 @@ fn draw_bg_grid_dots(
     let spacing = cfg.spacing.max(20.0);
     let dot_radius = cfg.element_size / 2.0;
 
-    // Scroll is handled by compute_scroll_offset + canvas translate
-    // upstream, which now wraps the offset into `(-spacing, spacing)` (see
-    // `compute_scroll_offset`) — this loop must overscan symmetrically on
-    // BOTH axes (one `spacing` of margin on every side) to still cover the
-    // full viewport for any offset in that range. The x-loop used to start
-    // at 0 with no left margin (asymmetric vs. the y-loop below), so any
-    // positive scroll left a growing blank band on the left edge.
     let mut y = -spacing;
     while y < height + spacing {
         let mut x = -spacing;
         while x < width + spacing {
-            // Pulse: subtle size variation based on position + time
             let phase = dot_pulse(x, y, time, phase_origin);
             let r = dot_radius * phase;
             paint.set_alpha_f(phase * 0.4);
@@ -393,25 +314,15 @@ fn draw_bg_grid_dots(
     }
 }
 
-/// A ruled grid of horizontal and vertical lines.
-///
-/// Unlike `grid_dots`, nothing here pulses: a grid is structure behind the
-/// content, and structure that breathes competes with what sits on it. The
-/// motion, if any, comes from the shared `speed`/`direction` scroll applied by
-/// the caller's canvas translate.
 fn draw_bg_grid_lines(canvas: &Canvas, cfg: &GridLinesConfig, width: f32, height: f32) {
     let cell = cfg.cell.max(4.0);
     let mut minor = paint_from_hex(&cfg.color);
-    minor.set_anti_alias(false); // hairlines stay crisp unblurred
+    minor.set_anti_alias(false);
     minor.set_stroke_width(cfg.weight.max(0.5));
     minor.set_style(skia_safe::PaintStyle::Stroke);
     let mut major = minor.clone();
     major.set_stroke_width(cfg.major_weight.max(0.5));
 
-    // One cell of overscan on every side: the caller wraps the scroll offset
-    // into `(-cell, cell)`, so without the margin a scrolled grid leaves a
-    // blank band on the leading edge (the same trap `draw_bg_grid_dots`
-    // documents on its own loop).
     let pick = |index: i32| -> &Paint {
         if cfg.major_every > 0 && index.rem_euclid(cfg.major_every as i32) == 0 {
             &major
@@ -432,12 +343,6 @@ fn draw_bg_grid_lines(canvas: &Canvas, cfg: &GridLinesConfig, width: f32, height
     }
 }
 
-/// Deterministic 0..1 value for a cell.
-///
-/// A hash of the coordinates, not a random number generator: the same cell
-/// must resolve the same way on every frame, or the field boils instead of
-/// holding still. Same reason `seed` is part of the input rather than process
-/// state — two renders of one scenario have to match.
 fn cell_hash(col: i32, row: i32, seed: u32, salt: u32) -> f32 {
     let mut h = seed
         .wrapping_mul(0x9E37_79B9)
@@ -450,7 +355,6 @@ fn cell_hash(col: i32, row: i32, seed: u32, salt: u32) -> f32 {
     (h & 0x00FF_FFFF) as f32 / 0x0100_0000 as f32
 }
 
-/// How much of the field is filled at this point, before the cell's own draw.
 fn ramp_at(ramp: PixelDensityRamp, x: f32, y: f32, width: f32, height: f32) -> f32 {
     let fx = if width > 0.0 {
         (x / width).clamp(0.0, 1.0)
@@ -468,12 +372,10 @@ fn ramp_at(ramp: PixelDensityRamp, x: f32, y: f32, width: f32, height: f32) -> f
         PixelDensityRamp::Left => 1.0 - fx,
         PixelDensityRamp::Bottom => fy,
         PixelDensityRamp::Top => 1.0 - fy,
-        // Full at the centre, nothing at the corners.
         PixelDensityRamp::Radial => {
             let (dx, dy) = (fx - 0.5, fy - 0.5);
             (1.0 - (dx * dx + dy * dy).sqrt() * 2.0).clamp(0.0, 1.0)
         }
-        // The inverse: a vignette that leaves the middle clear.
         PixelDensityRamp::Edges => {
             let (dx, dy) = (fx - 0.5, fy - 0.5);
             ((dx * dx + dy * dy).sqrt() * 2.0).clamp(0.0, 1.0)
@@ -481,12 +383,6 @@ fn ramp_at(ramp: PixelDensityRamp, x: f32, y: f32, width: f32, height: f32) -> f
     }
 }
 
-/// A lattice of square cells: the pixel-tile texture.
-///
-/// Occupancy is decided per cell by a hash against `density * ramp`, so the
-/// pattern is stable across frames and reproducible across renders. Colours
-/// alternate by `(col + row)`, which turns two colours at `density: 1.0` into
-/// a checkerboard and one colour below 1.0 into a scattered tile field.
 fn draw_bg_pixel_grid(
     canvas: &Canvas,
     cfg: &PixelGridConfig,
@@ -499,8 +395,6 @@ fn draw_bg_pixel_grid(
         return;
     }
     let size = cfg.size.max(1.0);
-    // Cells must not overlap: a spacing under `size` would draw a solid sheet
-    // and silently lose the lattice the preset exists for.
     let spacing = cfg.spacing.max(size);
     let density = cfg.density.clamp(0.0, 1.0);
     let t = time * speed.max(0.0);
@@ -525,8 +419,6 @@ fn draw_bg_pixel_grid(
 
             let mut threshold = density * ramp_at(cfg.density_ramp, x, y, width, height);
             if cfg.motion == PixelGridMotion::Sweep {
-                // A band of extra density crossing the field, wrapped so it
-                // never runs off and leaves the texture flat.
                 let head = (t * 0.25).fract();
                 let d = ((x / width.max(1.0)) - head).abs().min(1.0);
                 threshold += (0.35 - d).max(0.0);
@@ -540,10 +432,6 @@ fn draw_bg_pixel_grid(
             let paint = &mut paints[idx];
 
             if cfg.motion == PixelGridMotion::Twinkle {
-                // Full 0 → 1 → 0, not a partial dip: a cell that only fades to
-                // 10 % still reads as a permanent dot, so the lattice looks
-                // fixed and merely dimmer. Each cell gets its own phase from
-                // its own hash, or the whole field blinks in unison.
                 let phase = cell_hash(col, row, cfg.seed, 1) * std::f32::consts::TAU;
                 let a = 0.5 + 0.5 * (t * 1.6 + phase).sin();
                 paint.set_alpha_f(paint.alpha_f() * a);
@@ -558,7 +446,6 @@ fn draw_bg_pixel_grid(
             }
 
             if cfg.motion == PixelGridMotion::Twinkle {
-                // `paint` is reused by the next cell that picks this colour.
                 *paint = paint_from_hex(&cfg.colors[idx]);
                 paint.set_anti_alias(cfg.radius > 0.0);
             }
@@ -566,17 +453,6 @@ fn draw_bg_pixel_grid(
     }
 }
 
-/// Re-emit a scenario-supplied heropattern colour as a canonical
-/// `#rrggbbaa` before it is spliced into generated SVG source.
-///
-/// `cfg.color` is free-form user input landing inside a double-quoted
-/// `fill="{{color}}"` attribute of hand-built SVG text; routing it through
-/// `color4f_from_hex` first guarantees the only characters that can ever
-/// reach the SVG are hex digits and `#`, so a colour string can never close
-/// the attribute and inject markup, whatever it contains.
-/// `color4f_from_hex` is infallible: unresolvable input resolves to the
-/// same opaque-magenta sentinel every other unresolved colour in this
-/// engine does, rather than passing the raw string through.
 fn canonical_hero_color(color: &str) -> String {
     let c = color4f_from_hex(color);
     format!(
@@ -588,16 +464,6 @@ fn canonical_hero_color(color: &str) -> String {
     )
 }
 
-/// `usvg::Options` for parsing a generated heropattern tile.
-///
-/// Neutralises the default `image_href_resolver`'s string resolver, which
-/// reads arbitrary files from disk for any `<image href="...">` it
-/// encounters (usvg-0.44.0's `ImageHrefResolver::default_string_resolver`).
-/// A heropattern tile never legitimately references an external image, so
-/// an `<image>` element reaching this parser can only be an injection —
-/// `canonical_hero_color` closes the splice that could put one there in the
-/// first place; this is the defence-in-depth half, for any other way one
-/// could arrive.
 fn heropattern_svg_options() -> usvg::Options<'static> {
     usvg::Options {
         image_href_resolver: usvg::ImageHrefResolver {
@@ -608,13 +474,6 @@ fn heropattern_svg_options() -> usvg::Options<'static> {
     }
 }
 
-/// Tiled heropattern background.
-///
-/// The tile is rasterized once at `cfg.scale`, using `heropattern_raster_size`
-/// and a matching `resvg` render transform, then tiled 1:1 by the shader.
-/// It used to be rasterized at 1x and magnified by the shader's own matrix
-/// instead, which turned the vector source into hard nearest-neighbour
-/// blocks above `scale: 1` and aliased it below `scale: 1`.
 fn draw_bg_heropattern(
     canvas: &Canvas,
     cfg: &HeropatternConfig,
@@ -703,14 +562,6 @@ fn draw_bg_heropattern(
     );
 }
 
-/// Pixel size to rasterize one heropattern tile at, so the vector source is
-/// re-rendered crisp at `scale` instead of rasterized at the pattern's
-/// native `(width, height)` and then magnified. Clamped to `MAX_TILE_PX`
-/// per axis: `HeropatternConfig::scale` has no upper bound in the schema, so
-/// an unclamped scale could ask for an arbitrarily large pixmap allocation.
-/// A clamped tile still tiles seamlessly with itself — it just renders
-/// smaller than an extreme `scale` asked for, which is the trade the "sane
-/// maximum" this is named for is making.
 fn heropattern_raster_size(width: f32, height: f32, scale: f32) -> (u32, u32) {
     const MAX_TILE_PX: f32 = 4096.0;
     let pw = (width * scale).ceil().clamp(1.0, MAX_TILE_PX) as u32;
@@ -718,7 +569,6 @@ fn heropattern_raster_size(width: f32, height: f32, scale: f32) -> (u32, u32) {
     (pw, ph)
 }
 
-/// Interpolate two AnimatedBackground structs. `t` goes from 0.0 (fully `a`) to 1.0 (fully `b`).
 #[allow(dead_code)]
 pub(super) fn interpolate_animated_bg(
     a: &AnimatedBackground,
@@ -788,7 +638,6 @@ pub(super) fn interpolate_animated_bg(
         out
     }
 
-    // Interpolate preset — same type: interpolate fields, different type: snap at t >= 0.5
     let preset = match (&a.preset, &b.preset) {
         (BackgroundPreset::GradientShift(ac), BackgroundPreset::GradientShift(bc)) => {
             BackgroundPreset::GradientShift(GradientShiftConfig {
@@ -833,7 +682,6 @@ pub(super) fn interpolate_animated_bg(
             })
         }
         _ => {
-            // Different preset types: snap to b at midpoint
             if t >= 0.5 {
                 b.preset.clone()
             } else {
@@ -851,17 +699,6 @@ pub(super) fn interpolate_animated_bg(
     }
 }
 
-/// Per-axis tile period (px) a preset's own draw loop repeats on — the
-/// amount by which a scroll offset can be wrapped, independently per axis,
-/// without changing the rendered pattern. Shared by `compute_scroll_offset`
-/// (below) and `draw_world_bg_with_parallax`'s camera-pan modulo so the two
-/// never diverge on what "one period" means for a given preset.
-///
-/// Every preset but `Heropattern` tiles on a square cell, so both axes share
-/// one scalar. Heropattern is the one exception: most of the 87 bundled SVGs
-/// are not square (e.g. `aztec` is 32×64), so wrapping the vertical offset
-/// on the horizontal period desyncs the two axes and the pattern snaps at
-/// every wrap.
 fn tile_spacing(preset: &BackgroundPreset) -> (f32, f32) {
     match preset {
         BackgroundPreset::GridDots(cfg) => {
@@ -893,12 +730,6 @@ fn tile_spacing(preset: &BackgroundPreset) -> (f32, f32) {
     }
 }
 
-/// Raise `period` to the smallest multiple of itself that is at least
-/// `floor`, instead of clamping it outright to `floor`. A plain clamp would
-/// no longer be a multiple of the pattern's own period, breaking the
-/// periodicity `compute_scroll_offset`'s wrap depends on for any pattern
-/// narrower/shorter than `floor` (e.g. `bamboo`, 16px wide). Non-positive
-/// `period` has no well-defined multiple; `floor` is the fallback.
 fn period_floor(period: f32, floor: f32) -> f32 {
     if period <= 0.0 {
         floor
@@ -909,33 +740,12 @@ fn period_floor(period: f32, floor: f32) -> f32 {
     }
 }
 
-/// Compute the scroll offset for tiled backgrounds based on direction +
-/// speed, wrapped into `(-spacing, spacing)` per axis so it never grows
-/// unbounded.
-///
-/// Bug this fixes: the offset used to grow linearly with `time` forever.
-/// The tiled draw loops (`draw_bg_grid_dots`, `draw_bg_heropattern`) only
-/// ever overscan by one `spacing`/`margin` around the viewport — with the
-/// canvas translated by an unbounded offset, the pattern slides off-frame
-/// and leaves a growing blank band once the offset exceeds that one-tile
-/// margin (see paint.md finding #5). Since every tiled pattern is exactly
-/// periodic on its own `tile_spacing`, translating by any offset congruent
-/// mod that period produces byte-identical pixels — Rust's `%` already
-/// returns a value with `|result| < spacing` and the same sign as the
-/// input, which is exactly the symmetric `(-spacing, spacing)` margin the
-/// (now-symmetric, see `draw_bg_grid_dots`) draw loops need. `t=0` (or
-/// `speed=0`) stays an exact `(0.0, 0.0)` no-op — `0.0 % spacing == 0.0`.
 pub(super) fn compute_scroll_offset(bg: &AnimatedBackground, time: f32) -> (f32, f32) {
     let (raw_x, raw_y) = raw_scroll_offset(bg, time);
     let (spacing_x, spacing_y) = tile_spacing(&bg.preset);
     (raw_x % spacing_x, raw_y % spacing_y)
 }
 
-/// The unwrapped scroll offset — how far the pattern *would* have travelled
-/// under the old unbounded scheme. Only `compute_scroll_offset` (for the
-/// wrap) and the grid-dot pulse phase (for continuity across a wrap, see
-/// `phase_origin` in `draw_animated_background`) need this; nothing should
-/// translate a canvas by it.
 fn raw_scroll_offset(bg: &AnimatedBackground, time: f32) -> (f32, f32) {
     let speed = bg.speed;
     if speed == 0.0 {
@@ -950,7 +760,7 @@ fn raw_scroll_offset(bg: &AnimatedBackground, time: f32) -> (f32, f32) {
         Some(ScrollDirection::UpRight) => (0.707, -0.707),
         Some(ScrollDirection::DownLeft) => (-0.707, 0.707),
         Some(ScrollDirection::DownRight) => (0.707, 0.707),
-        _ => (0.0, 0.0), // Cw/Ccw handled inside gradient_shift
+        _ => (0.0, 0.0),
     };
     (dx * speed * time, dy * speed * time)
 }
@@ -960,7 +770,6 @@ mod halo_opacity_tests {
     use crate::encode::video::{build_frame_tasks, render_frame_task, FrameTask};
     use crate::loader::load_scenario_from_source;
 
-    /// Render frame 0 of the first scene in a scenario JSON string.
     fn render_first_frame(json: &str) -> Vec<u8> {
         let scenario = load_scenario_from_source(None, Some(json)).expect("load");
         let tasks = build_frame_tasks(&scenario);
@@ -971,7 +780,6 @@ mod halo_opacity_tests {
         render_frame_task(&scenario.video, &scenario, task).expect("render")
     }
 
-    /// A single centered white halo zone on a black ground, `opacity` templated in.
     fn halo_scenario(opacity_field: &str) -> String {
         format!(
             r##"{{"video":{{"width":100,"height":100,"background":"#000000"}},
@@ -989,9 +797,6 @@ mod halo_opacity_tests {
 
     #[test]
     fn opacity_defaults_to_1_and_is_a_true_noop() {
-        // Explicit 1.0 and an entirely absent field must render byte-identically:
-        // multiplying an f32 alpha by 1.0 is an exact IEEE-754 identity, so this
-        // also proves the default composes as a no-op with the color's own alpha.
         let with_field = render_first_frame(&halo_scenario(r#","opacity":1.0"#));
         let without_field = render_first_frame(&halo_scenario(""));
         assert_eq!(
@@ -1014,7 +819,6 @@ mod halo_opacity_tests {
             r1 > r05 && r05 > r02,
             "expected monotonic falloff: opacity=1.0 -> {r1}, 0.5 -> {r05}, 0.2 -> {r02}"
         );
-        // White zone over a black ground: center pixel ≈ 255 * opacity.
         assert_eq!(r1, 255);
         assert!(
             (r05 as i32 - 128).abs() <= 2,
@@ -1025,8 +829,6 @@ mod halo_opacity_tests {
 
     #[test]
     fn opacity_multiplies_the_colors_own_hex_alpha() {
-        // #1E3A8A55 already carries alpha 0x55 (~0.333). opacity 0.5 must
-        // multiply through to an effective alpha of ~0.1667, not override it.
         let bg = "#05060A";
         let scenario = format!(
             r##"{{"video":{{"width":100,"height":100,"background":"{bg}"}},
@@ -1060,7 +862,6 @@ mod halo_opacity_tests {
 
         let negative = render_first_frame(&halo_scenario(r#","opacity":-1.0"#));
         let (r, g, b, _a) = center_rgba(&negative, 100);
-        // Fully clamped to 0 alpha: only the black scene background shows through.
         assert_eq!(
             (r, g, b),
             (0, 0, 0),
@@ -1071,10 +872,6 @@ mod halo_opacity_tests {
 
 #[cfg(test)]
 mod scroll_offset_wrap_tests {
-    //! TDD tests for paint.md finding #5: `compute_scroll_offset` must wrap
-    //! into one tile period instead of growing unbounded, or the tiled
-    //! background's draw loops (which only ever overscan by one `spacing`
-    //! around the viewport) leave a growing blank band.
 
     use super::*;
     use crate::schema::GridDotsConfig;
@@ -1095,10 +892,6 @@ mod scroll_offset_wrap_tests {
 
     #[test]
     fn scroll_offset_stays_within_one_tile_period() {
-        // Repro (paint.md #5): 300x200, grid_dots, speed 60, direction
-        // right, spacing 40 — at t=3s the raw offset is 180px (4.5
-        // spacings), way outside what `draw_bg_grid_dots`'s one-tile
-        // overscan margin can cover.
         let bg = grid_bg(ScrollDirection::Right, 60.0);
         for t in [0.0f32, 0.1, 0.5, 1.0, 3.0, 10.0, 37.3] {
             let (dx, dy) = compute_scroll_offset(&bg, t);
@@ -1115,8 +908,6 @@ mod scroll_offset_wrap_tests {
 
     #[test]
     fn scroll_offset_at_t0_is_unchanged_zero() {
-        // Non-regression: t=0 must stay an exact no-op, not jump to a whole
-        // tile period ahead/behind.
         let bg = grid_bg(ScrollDirection::Right, 60.0);
         assert_eq!(compute_scroll_offset(&bg, 0.0), (0.0, 0.0));
     }
@@ -1127,22 +918,15 @@ mod scroll_offset_wrap_tests {
         assert_eq!(compute_scroll_offset(&bg, 5.0), (0.0, 0.0));
     }
 
-    /// Regression guard for a side effect of the wrap itself: geometry is
-    /// periodic on `spacing` so it crosses a wrap unchanged, but the dot
-    /// pulse is a `sin` of position and is not. Feeding it canvas-local
-    /// coordinates made every dot's radius and alpha step at once, once per
-    /// `spacing / speed` seconds.
     #[test]
     fn dot_pulse_is_continuous_across_a_wrap() {
         let bg = grid_bg(ScrollDirection::Right, 60.0);
-        // spacing 40 / speed 60 => the offset wraps at t = 2/3 s.
         let (before, after) = (0.6666_f32, 0.6667_f32);
         assert!(
             compute_scroll_offset(&bg, before).0 > compute_scroll_offset(&bg, after).0,
             "test setup: these two instants must straddle a wrap"
         );
 
-        // Pulse of whichever dot lands on a fixed screen position.
         let (sx_screen, sy_screen) = (200.0_f32, 100.0_f32);
         let sampled = |t: f32| {
             let (sx, sy) = compute_scroll_offset(&bg, t);
@@ -1155,8 +939,6 @@ mod scroll_offset_wrap_tests {
             "pulse must not jump across a wrap, got delta {delta}"
         );
 
-        // Witness that this is a real hazard and not a vacuous assertion:
-        // the same sample without the phase origin does step visibly.
         let naive = |t: f32| {
             let (sx, sy) = compute_scroll_offset(&bg, t);
             dot_pulse(sx_screen - sx, sy_screen - sy, t, (0.0, 0.0))
@@ -1168,8 +950,6 @@ mod scroll_offset_wrap_tests {
         );
     }
 
-    /// The pulse must be untouched before the first wrap, so the fix cannot
-    /// change how any existing scenario's opening seconds look.
     #[test]
     fn dot_pulse_matches_the_original_formula_with_no_wrap_yet() {
         let bg = grid_bg(ScrollDirection::Right, 60.0);
@@ -1201,21 +981,12 @@ mod scroll_offset_wrap_tests {
 
 #[cfg(test)]
 mod gradient_linear_space_tests {
-    //! TDD tests for paint.md finding #7: the "linear color space
-    //! interpolation" and "subdivided stops" banding mitigations were both
-    //! inert (the render surfaces carry no Skia `ColorSpace`, so the
-    //! `ColorsInSpace(..., Some(linear_cs))` tag was a silent no-op, and
-    //! subdividing an already-sRGB-space lerp is a mathematical identity).
-    //! Fix: `subdivide_gradient_stops` itself now interpolates in linear
-    //! light and re-encodes to sRGB per generated stop.
 
     use super::*;
     use skia_safe::Color4f;
 
     #[test]
     fn subdivide_interpolates_in_linear_light_not_srgb_gamma() {
-        // Black -> white: the true midpoint in *linear light* (0.5) encodes
-        // back to sRGB as ~188, not the naive sRGB-byte midpoint of 127.
         let black = Color4f::new(0.0, 0.0, 0.0, 1.0);
         let white = Color4f::new(1.0, 1.0, 1.0, 1.0);
         let (colors, positions) = subdivide_gradient_stops(&[black, white], 1);
@@ -1247,8 +1018,6 @@ mod gradient_linear_space_tests {
 
     #[test]
     fn subdivide_alpha_stays_linear_not_gamma_corrected() {
-        // Alpha is not gamma-encoded — it must keep lerping plainly, unlike
-        // RGB.
         let a = Color4f::new(0.0, 0.0, 0.0, 0.0);
         let b = Color4f::new(0.0, 0.0, 0.0, 1.0);
         let (colors, _positions) = subdivide_gradient_stops(&[a, b], 1);
@@ -1277,8 +1046,6 @@ mod pixel_grid_tests {
         }
     }
 
-    /// The pattern must be a function of the cell, not of when it is drawn:
-    /// a per-frame random makes the whole field boil.
     #[test]
     fn a_cell_resolves_the_same_way_every_time() {
         let a = cell_hash(3, 5, 7, 0);
@@ -1290,7 +1057,6 @@ mod pixel_grid_tests {
         );
     }
 
-    /// …and two seeds must actually scatter differently, or `seed` is a lie.
     #[test]
     fn the_seed_changes_which_cells_are_drawn() {
         let same_seed: Vec<f32> = (0..40).map(|i| cell_hash(i, 0, 7, 0)).collect();
@@ -1298,8 +1064,6 @@ mod pixel_grid_tests {
         assert_ne!(same_seed, other_seed);
     }
 
-    /// Neighbouring cells must not correlate — a hash that walks in step with
-    /// the coordinate draws diagonal stripes instead of a scatter.
     #[test]
     fn neighbouring_cells_are_uncorrelated() {
         let drawn = |c: i32, r: i32| cell_hash(c, r, 7, 0) < 0.5;
@@ -1307,7 +1071,6 @@ mod pixel_grid_tests {
             .flat_map(|c| (0..30).map(move |r| (c, r)))
             .filter(|&(c, r)| drawn(c, r) == drawn(c + 1, r + 1))
             .count();
-        // 900 cells; a stripe pattern would agree ~100 % of the time.
         assert!(
             (300..600).contains(&matches),
             "diagonal neighbours agree {matches}/900 times — that is a pattern, not a scatter"
@@ -1322,28 +1085,22 @@ mod pixel_grid_tests {
         assert!(ramp_at(PixelDensityRamp::Left, 10.0, 50.0, w, h) > 0.8);
         assert!(ramp_at(PixelDensityRamp::Bottom, 90.0, 90.0, w, h) > 0.8);
         assert!(ramp_at(PixelDensityRamp::Top, 50.0, 10.0, w, h) > 0.8);
-        // Radial is full at the centre and gone at the corners.
         assert!(ramp_at(PixelDensityRamp::Radial, 50.0, 50.0, w, h) > 0.99);
         assert_eq!(ramp_at(PixelDensityRamp::Radial, 0.0, 0.0, w, h), 0.0);
-        // `Edges` is the vignette: clear in the middle, heavy at the border.
         assert_eq!(ramp_at(PixelDensityRamp::Edges, 50.0, 50.0, w, h), 0.0);
         assert!(ramp_at(PixelDensityRamp::Edges, 0.0, 50.0, w, h) > 0.99);
         assert!(ramp_at(PixelDensityRamp::Edges, 100.0, 50.0, w, h) > 0.99);
-        // …and the exact inverse of `Radial`, which is the point of having both.
         for (x, y) in [(0.0, 0.0), (25.0, 60.0), (100.0, 50.0)] {
             let r = ramp_at(PixelDensityRamp::Radial, x, y, w, h);
             let e = ramp_at(PixelDensityRamp::Edges, x, y, w, h);
             assert!((r + e - 1.0).abs() < 1e-6, "at ({x},{y}): {r} + {e} != 1");
         }
 
-        // `None` is uniform: the same everywhere, including the edges.
         for x in [0.0, 50.0, 100.0] {
             assert_eq!(ramp_at(PixelDensityRamp::None, x, 0.0, w, h), 1.0);
         }
     }
 
-    /// `spacing` below `size` would draw a solid sheet and lose the lattice
-    /// the preset exists for, so it is clamped rather than honoured.
     #[test]
     fn spacing_never_goes_below_the_cell_size() {
         let mut c = cfg();
@@ -1352,8 +1109,6 @@ mod pixel_grid_tests {
         assert_eq!(tile_spacing(&BackgroundPreset::PixelGrid(c)), (40.0, 40.0));
     }
 
-    /// `twinkle` has to reach both ends. A cell that only dips to 10 % still
-    /// reads as a permanent dot: the field looks fixed, just dimmer.
     #[test]
     fn twinkle_spans_the_whole_opacity_range() {
         let phase = 0.0f32;
@@ -1365,8 +1120,6 @@ mod pixel_grid_tests {
         assert!(hi > 0.99, "must come all the way back, ceiling was {hi}");
     }
 
-    /// Degenerate configs must be inert, not panic: an empty palette has
-    /// nothing to draw with, and a zero size no area to draw.
     #[test]
     fn degenerate_configs_draw_nothing_without_panicking() {
         let mut surface = skia_safe::surfaces::raster_n32_premul((32, 32)).expect("surface");
@@ -1389,13 +1142,6 @@ mod pixel_grid_tests {
 
 #[cfg(test)]
 mod grid_lines_tests {
-    //! `grid_lines` is the ruled counterpart of `grid_dots`: dots mark the
-    //! intersections and read as texture, lines read as structure. The
-    //! properties worth pinning are that the lines actually land on the cell
-    //! pitch, that `major_every` thickens the right ones, and that the grid
-    //! covers the frame edge to edge (the trap `grid_dots` already documents
-    //! on its own loop: an asymmetric overscan leaves a blank leading band
-    //! once the background scrolls).
 
     use super::*;
     use crate::schema::GridLinesConfig;
@@ -1451,9 +1197,6 @@ mod grid_lines_tests {
                 "a vertical line should sit at x={x} (one cell pitch apart)"
             );
         }
-        // And a mid-cell column carries only where the *horizontal* lines
-        // cross it — a few pixels, not a full column. Without that gap this
-        // would be a wash, not a grid.
         for x in [20, 60, 100] {
             assert!(
                 column_ink(&buf, x) * 10 < column_ink(&buf, 40),
@@ -1468,8 +1211,6 @@ mod grid_lines_tests {
     #[test]
     fn the_grid_reaches_all_four_edges() {
         let buf = render(base(40.0));
-        // Corners: the horizontal line at y=0 and the vertical at x=0 both
-        // pass through, and the far edges are covered by the overscan.
         assert!(alpha_at(&buf, 0, 0) > 0, "top-left corner is on the grid");
         assert!(
             (0..H).any(|y| alpha_at(&buf, W - 1, y) > 0),
@@ -1489,8 +1230,6 @@ mod grid_lines_tests {
             ..base(40.0)
         };
         let buf = render(cfg);
-        // Index 2 (x=80) is major, index 1 (x=40) is not. Compare the ink in
-        // a band around each: the thick line spills into its neighbours.
         let band =
             |centre: i32| -> u32 { (centre - 3..=centre + 3).map(|x| column_ink(&buf, x)).sum() };
         assert!(
@@ -1516,7 +1255,6 @@ mod grid_lines_tests {
 
     #[test]
     fn a_degenerate_cell_does_not_hang_the_render() {
-        // 0 would be an infinite loop's worth of lines; the painter clamps.
         let buf = render(base(0.0));
         assert_eq!(buf.len(), (W * H * 4) as usize, "it still produced a frame");
     }
@@ -1524,11 +1262,6 @@ mod grid_lines_tests {
 
 #[cfg(test)]
 mod heropattern_period_tests {
-    //! `tile_spacing` used to return the Heropattern's *width* as the
-    //! period on both axes. 41 of the 87 bundled SVGs are not square (e.g.
-    //! `aztec` is 32x64 — see `crates/rustmotion-core/src/engine/heropatterns.rs`),
-    //! so wrapping the vertical offset on the horizontal period snaps the
-    //! pattern mid-tile on every wrap.
 
     use super::*;
     use crate::schema::HeropatternConfig;
@@ -1562,10 +1295,6 @@ mod heropattern_period_tests {
     #[test]
     fn vertical_scroll_does_not_wrap_at_half_the_tile_height() {
         let bg = hero_bg("aztec", ScrollDirection::Down, 60.0);
-        // 48px of vertical travel sits strictly between one width-period
-        // (32px — where the pre-fix code would wrap) and the pattern's
-        // actual 64px height: the correct wrap leaves it untouched, the bug
-        // wraps it down to 48 % 32 = 16.
         let t = 48.0 / 60.0;
         let (_dx, dy) = compute_scroll_offset(&bg, t);
         assert!(
@@ -1589,11 +1318,6 @@ mod heropattern_period_tests {
 
 #[cfg(test)]
 mod heropattern_raster_tests {
-    //! The heropattern tile used to be rasterized at 1x (the
-    //! pattern's native width/height) and then magnified by the shader's
-    //! own matrix with nearest-neighbour sampling — blocky above `scale: 1`,
-    //! aliased below it. `heropattern_raster_size` must honour `scale`
-    //! directly in the raster resolution instead.
 
     use super::*;
 
@@ -1636,12 +1360,6 @@ mod heropattern_raster_tests {
 
 #[cfg(test)]
 mod heropattern_svg_injection_tests {
-    //! A scenario-supplied heropattern colour used to be spliced unescaped
-    //! into hand-built SVG source inside a double-quoted `fill="..."`
-    //! attribute, then parsed by usvg with its default (file-reading)
-    //! `image_href_resolver`. A colour containing a `"` could close the
-    //! attribute and inject arbitrary markup, including an `<image
-    //! href="...">` the default resolver would read straight off disk.
 
     use super::*;
 

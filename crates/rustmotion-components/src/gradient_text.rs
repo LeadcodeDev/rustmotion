@@ -57,11 +57,6 @@ rustmotion_core::impl_traits!(GradientText {
 });
 
 impl GradientText {
-    /// Family/weight/style resolution only, independent of `font_size` — so
-    /// `text-autofit` (below) can build a fresh `Font` at each candidate
-    /// size from the same resolved typeface without re-resolving the
-    /// family/weight/style lookup per candidate. `paint` builds the actual
-    /// `Font` itself once the final (possibly autofit-shrunk) size is known.
     fn resolve_typeface(&self) -> Option<skia_safe::Typeface> {
         let font_family = self.style.font_family_or("Inter");
 
@@ -96,12 +91,6 @@ impl GradientText {
             return;
         }
 
-        // `font-size` itself now resolves through `LengthContext` too (lot B,
-        // wave S) — it used to stay context-free (`font_size_px_or`),
-        // silently dropping `rem`/`vw`/`vh` font-size to 0px. `em`/`%` on
-        // `font-size` itself remain approximate — see
-        // `crate::intrinsic::font_size_ctx`'s doc comment (cascade.rs
-        // doesn't track the real parent font-size).
         let base_ctx = crate::intrinsic::font_size_ctx(
             ctx.video_width as f32,
             ctx.video_height as f32,
@@ -111,16 +100,6 @@ impl GradientText {
         let Some(typeface) = self.resolve_typeface() else {
             return;
         };
-        // `letter-spacing`/`line-height`'s `em`/`%` are relative to this
-        // element's own font-size, no cascade dependency — a real
-        // `LengthContext` is available here, so use the context-aware
-        // resolvers (issue #125 §2: correctly handles `vw`/`vh`/`rem`/
-        // line-height-`%`). `letter_spacing` itself: this component never
-        // read `style.letter-spacing` before this fix — the wrap/measure/
-        // draw calls below always tracked at 0.0 regardless of what was
-        // set, which is the same class of measure/paint disagreement issue
-        // #125 §1 describes elsewhere. It's threaded through consistently
-        // now.
         let type_ctx = rustmotion_core::css::units::LengthContext {
             font_size,
             ..base_ctx
@@ -128,11 +107,6 @@ impl GradientText {
         let mut line_height_val = self.style.line_height_for_ctx(font_size, &type_ctx);
         let mut letter_spacing = self.style.letter_spacing_px_ctx(&type_ctx);
 
-        // M1: `white-space: nowrap|pre` keeps the whole content on one line
-        // even past `layout_width` (it bleeds); anything else word-wraps at
-        // the box width — same rule `text.rs` uses. `gradient_text` has no
-        // `max_width` field of its own (unlike `text`/`caption`), so its box
-        // width is simply the resolved layout width, if any.
         let nowrap = matches!(
             self.style.white_space,
             Some(CssWhiteSpace::Nowrap | CssWhiteSpace::Pre)
@@ -140,11 +114,6 @@ impl GradientText {
         let box_width = (layout_width.is_finite() && layout_width > 0.0).then_some(layout_width);
         let wrap_at = if nowrap { None } else { box_width };
 
-        // `text-autofit` — see `text.rs::Text::paint`'s identical step and
-        // `resolve_text_autofit`'s doc comment for the shared-computation
-        // parity argument with `TextIntrinsic::measure`. Resolved before
-        // building the real `Font` below so the rest of this function draws
-        // at the (possibly shrunk) resolved size.
         if matches!(self.style.text_autofit, Some(true)) {
             let declared_height = content_height.filter(|h| *h > 0.0 && h.is_finite());
             let (fs, ls, lh) = crate::intrinsic::resolve_text_autofit(
@@ -165,15 +134,9 @@ impl GradientText {
         let font = Font::from_typeface(typeface, font_size);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
 
-        // Tracking-aware wrap (issue #125 §1), consistent with the
-        // real-tracking measurement/draw below.
         let lines =
             wrap_text_with_tracking(&self.content, &font, &emoji_font, wrap_at, letter_spacing);
 
-        // Measure the overall (possibly multi-line) bounding box. The
-        // gradient is defined once across this whole block rather than
-        // per-line, so wrapping reflows the text without fragmenting the
-        // colour transition.
         let (_, metrics) = font.metrics();
         let ascent = -metrics.ascent;
         let descent = metrics.descent;
@@ -183,12 +146,6 @@ impl GradientText {
             .fold(0.0f32, f32::max);
         let text_h = (lines.len().max(1) - 1) as f32 * line_height_val + ascent + descent;
 
-        // `text-align`, on the same rule `text.rs` applies: each line is
-        // placed within the box width, and `Start`/`Justify` fall back to the
-        // left edge like every other left-ish value. Without this the draw
-        // loop below passed a literal `x = 0.0`, so a `gradient_text` and a
-        // `text` sharing a box and a `text-align: center` disagreed — the
-        // plain one centred, the gradient one sat at the left edge (#337).
         let align_width = if layout_width.is_finite() && layout_width > 0.0 {
             layout_width
         } else {
@@ -200,22 +157,14 @@ impl GradientText {
             CssTextAlign::Right | CssTextAlign::End => align_width - advance,
             _ => 0.0,
         };
-        // The gradient is defined once across the whole block, so its span
-        // has to travel with the aligned block instead of staying pinned to
-        // the box's left edge: a centred block's glyphs would otherwise run
-        // past the shader's end stop and all pick up the clamped last
-        // colour. The block occupies `text_w` — the widest line — so that
-        // line's own offset is what the endpoints shift by.
         let block_x = line_x(text_w);
 
-        // Compute angle (possibly animated)
         let angle = if self.animate_angle {
             self.angle + time as f32 * self.speed * 360.0
         } else {
             self.angle
         };
 
-        // Compute gradient endpoints from angle, spanning the full block.
         let angle_rad = angle * std::f32::consts::PI / 180.0;
         let cx = block_x + text_w / 2.0;
         let cy = text_h / 2.0;
@@ -229,7 +178,6 @@ impl GradientText {
             cy + angle_rad.sin() * half_diag,
         );
 
-        // Parse gradient colors
         let skia_colors: Vec<skia_safe::Color> = self
             .colors
             .iter()
@@ -239,7 +187,6 @@ impl GradientText {
             })
             .collect();
 
-        // Build linear gradient shader
         let positions: Option<&[f32]> = None;
         let colors4f: Vec<Color4f> = skia_colors.iter().map(|c| Color4f::from(*c)).collect();
         let stops = Colors::new(&colors4f, positions, skia_safe::TileMode::Clamp, None);
@@ -254,7 +201,6 @@ impl GradientText {
                 p
             }
             None => {
-                // Fallback: draw with the first color, no gradient.
                 let mut p = paint_from_hex(&self.colors[0]);
                 p.set_anti_alias(true);
                 p
@@ -294,8 +240,6 @@ impl Painter for GradientText {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        // See `Text::paint_content`'s identical step for why `None` here
-        // means "nothing to fit against" rather than "fit to zero".
         let (_, _, _, content_height) = layout.content_box();
         let content_height =
             (content_height > 0.0 && content_height.is_finite()).then_some(content_height);
@@ -373,7 +317,6 @@ mod tests {
         false
     }
 
-    /// Horizontal span of every painted pixel, as `(first_x, last_x)`.
     fn ink_x_span(grid: &[u8], surface_width: i32, height: i32) -> Option<(i32, i32)> {
         let mut span: Option<(i32, i32)> = None;
         for y in 0..height {
@@ -391,11 +334,6 @@ mod tests {
 
     #[test]
     fn text_align_center_centres_the_line_in_the_box() {
-        // #337: the draw loop passed a literal `x = 0.0`, so a `gradient_text`
-        // and a `text` sharing a box and a `text-align: center` disagreed --
-        // the plain one centred, the gradient one sat at the left edge.
-        // Measured on pixels rather than on the offset the code computes: the
-        // painted span's own centre must land on the box's centre.
         const W: i32 = 700;
         const H: i32 = 80;
         const BOX_W: f32 = 600.0;
@@ -444,9 +382,6 @@ mod tests {
 
     #[test]
     fn no_text_align_still_starts_at_the_box_left_edge() {
-        // The default must not move: every scenario written before #337 read
-        // `gradient_text` as left-aligned whatever `text-align` said, and a
-        // file that never set it has to render identically.
         const W: i32 = 700;
         const H: i32 = 80;
 
@@ -464,11 +399,6 @@ mod tests {
 
     #[test]
     fn centring_keeps_the_gradient_over_the_glyphs() {
-        // The shader spans the block, so it has to travel with the aligned
-        // block: pinned at the box's left edge it would end before a centred
-        // block's last glyphs, which would all come out the clamped end
-        // colour. Compare the last glyph's colour centred against
-        // left-aligned -- same glyph, same place in the block, same colour.
         const W: i32 = 700;
         const H: i32 = 80;
         const BOX_W: f32 = 600.0;
@@ -497,7 +427,6 @@ mod tests {
             ));
             let alpha: Vec<u8> = (0..(W * H) as usize).map(|i| buf[i * 4 + 3]).collect();
             let (_, hi) = ink_x_span(&alpha, W, H).expect("must paint");
-            // The densest opaque pixel on the last glyph's column.
             let (mut best_y, mut best_a) = (0i32, 0u8);
             for y in 0..H {
                 let a = alpha[(y * W + hi) as usize];
@@ -522,8 +451,6 @@ mod tests {
 
     #[test]
     fn nowrap_paints_a_single_line_past_the_layout_width() {
-        // M1 render-level proof, gradient_text: `white-space: nowrap` stays
-        // on one line and bleeds past `layout_width`.
         let gt = make_gradient_text(
             "the quick brown fox jumps over the lazy dog",
             Some(CssWhiteSpace::Nowrap),
@@ -567,9 +494,6 @@ mod tests {
 
     #[test]
     fn rem_font_size_paints_visible_ink() {
-        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
-        // context-free `font_size_px_or`, so `resolve_font` built a 0px font
-        // and nothing measurable painted.
         let gt = GradientText {
             content: "HELLO".into(),
             colors: default_colors(),
@@ -596,8 +520,6 @@ mod tests {
             "gradient_text at font-size: 2rem must paint visible ink"
         );
     }
-
-    // ─── text-autofit ───────────────────────────────────────────────────
 
     fn autofit_gradient_text(
         content: &str,
@@ -633,7 +555,7 @@ mod tests {
             90.0,
             Some(CssWhiteSpace::Nowrap),
         );
-        const BOX_W: f32 = 300.0; // clears this sentence's floor-fit width
+        const BOX_W: f32 = 300.0;
 
         let (measured_w, _) = GradientTextIntrinsic::from_gradient_text(&gt).measure(
             (None, None),
@@ -666,9 +588,6 @@ mod tests {
 
     #[test]
     fn without_text_autofit_nowrap_still_bleeds_past_the_box_exactly_as_before() {
-        // Backward compatibility twin of `nowrap_paints_a_single_line_past_the_layout_width`,
-        // now also passing a real `content_height` — proves that alone
-        // doesn't trigger shrinking without the flag.
         let gt = make_gradient_text(
             "the quick brown fox jumps over the lazy dog",
             Some(CssWhiteSpace::Nowrap),
@@ -688,9 +607,6 @@ mod tests {
 
     #[test]
     fn autofit_is_stable_across_frames_for_fixed_content() {
-        // Trap #2: `angle` can animate over time via `animate_angle`, but
-        // here it's static — the resolved font size must not depend on
-        // `time` at all for fixed content in a fixed box.
         let gt = autofit_gradient_text(
             "the quick brown fox jumps over the lazy dog",
             90.0,

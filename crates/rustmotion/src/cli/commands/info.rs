@@ -87,18 +87,6 @@ pub fn cmd_info(input: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// "Quelle largeur/hauteur fait ce texte, à cette taille, dans cette
-/// police" (text-autofit workstream, lot text-autofit) exposed the same way
-/// `rustmotion info` already exposes spring settle times (see
-/// `SpringReport` above) rather than as a bespoke, separate command:
-/// `rustmotion info` walks the scenario and reports; this adds one more
-/// thing it reports.
-///
-/// The measurement is the natural (unconstrained) size at the declared
-/// `font-size`/family — via `TextIntrinsic`/`GradientTextIntrinsic`, the
-/// exact same Skia-backed measurer the layout engine and the geometry
-/// validator use, so this is never a second, independently-drifting
-/// estimate of what the same text measures elsewhere.
 struct TextMeasurement {
     label: String,
     kind: &'static str,
@@ -183,9 +171,6 @@ fn collect_text_measurements_in_children(
     }
 }
 
-/// Truncate a long content string for a single-line report — the full
-/// content is already visible in the source scenario file; this is a label,
-/// not a transcript.
 fn preview(content: &str) -> String {
     const MAX_CHARS: usize = 40;
     let char_count = content.chars().count();
@@ -197,11 +182,6 @@ fn preview(content: &str) -> String {
     }
 }
 
-/// Where a `SpringConfig` was found, and the settle time computed for it —
-/// the "measure du repos" issue #167 lot E asks `rustmotion info` to
-/// surface, so an author can size the enclosing animation's `duration`
-/// around a spring instead of guessing (see `SpringConfig::duration`'s doc
-/// comment for why the two are not automatically kept in sync).
 #[derive(Debug)]
 struct SpringReport {
     label: String,
@@ -276,33 +256,6 @@ fn spring_report(label: &str, spring: &SpringConfig) -> SpringReport {
     }
 }
 
-/// "How long is this audio file? What are the dimensions of this image?" —
-/// answered the same way `rustmotion info` already answers "what does this
-/// spring settle at" and "how big does this text measure": walk the
-/// scenario, report a line per asset found. `audio[].src` plus every
-/// component whose `src` names a required, standalone media file (`image`,
-/// `gif`, `video`, `avatar`, `avatar_group`, `mockup`) is covered.
-///
-/// `lottie` and `svg` also carry a `src`, but it is optional there — an
-/// inline `data` (or, for `lottie`, a pre-rendered `frames_dir`) is a fully
-/// valid alternative — and what "metadata" even means for them differs from
-/// a raster header or a media container's duration (a Lottie/Bodymovin JSON
-/// document has its own `w`/`h`/`fr`/`ip`/`op` fields; an SVG has its own
-/// `viewBox`). Deliberately not covered here.
-///
-/// Two rules, applied uniformly to every kind below, are what make this safe
-/// to run unconditionally as part of `info` rather than needing an opt-in
-/// flag:
-///
-/// 1. **Never touch the network.** A `src` starting with `http://`/
-///    `https://` is reported as [`MediaStatus::Remote`] without ever being
-///    opened — probing a remote asset could mean downloading an unbounded
-///    amount of data just to read a header.
-/// 2. **A bad asset reports a reason, it never aborts the walk.** A missing
-///    local file is [`MediaStatus::Missing`]; one that exists but can't be
-///    decoded/probed (corrupt, wrong format, `ffprobe` absent, ...) is
-///    [`MediaStatus::Unreadable`] carrying the underlying error's message.
-///    `cmd_info` still exits `0` and still prints every other section.
 #[derive(Debug)]
 struct MediaAssetReport {
     label: String,
@@ -371,14 +324,6 @@ impl MediaAssetReport {
     }
 }
 
-/// `true` for a `src` this codebase does not attempt to probe: everything
-/// here resolves `src` as a local filesystem path (see the module-level
-/// research this fix is built on — no component's `src` supports a remote
-/// URL today, video's ffmpeg-backed path only reaches one incidentally by
-/// handing the string straight to ffmpeg's own demuxer). Probing would mean
-/// this command deciding, on an author's behalf, to make a network request —
-/// and for a container whose metadata sits at the end of the file, that can
-/// mean downloading the whole thing just to answer "how long is this?".
 fn is_remote(src: &str) -> bool {
     src.starts_with("http://") || src.starts_with("https://")
 }
@@ -477,10 +422,6 @@ fn collect_media_assets_in_children(
                 status: probe_local_video(&c.src),
                 src: c.src.clone(),
             }),
-            // `Avatar`/`AvatarGroup` are two of issue #333's eleven
-            // frozen-composition components: deprecating the struct
-            // deprecates every field read on it, and asset probing reads
-            // `src`/`avatars` directly.
             #[allow(deprecated)]
             Component::Avatar(c) => out.push(MediaAssetReport {
                 label: p.clone(),
@@ -516,9 +457,6 @@ fn collect_media_assets_in_children(
 
 #[cfg(test)]
 mod media_asset_tests {
-    //! media-io lot: `rustmotion info` must report duration/dimensions for
-    //! every media asset a scenario references, and must never fail the
-    //! whole command over one bad asset — it reports why instead.
     use super::*;
 
     fn scratch_path(name: &str) -> std::path::PathBuf {
@@ -584,10 +522,6 @@ mod media_asset_tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// The core "never fails a valid scenario" proof: a scenario whose only
-    /// problem is one missing image must still walk to completion and
-    /// report every other section — `collect_media_assets` never returns an
-    /// `Err`, and never panics, on a missing/unreadable asset.
     #[test]
     fn collect_media_assets_never_fails_the_walk_on_a_bad_asset() {
         let json = serde_json::json!({
@@ -671,9 +605,6 @@ mod media_asset_tests {
 
 #[cfg(test)]
 mod spring_report_tests {
-    //! Issue #167 lot E: `rustmotion info` must surface the settle time of
-    //! every spring it finds, recursing into containers the same way
-    //! `validate_schema::validate_children` already does.
     use super::*;
     use rustmotion::components::ChildComponent;
 

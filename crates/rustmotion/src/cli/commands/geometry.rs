@@ -1,53 +1,3 @@
-//! Geometry validator — walks the resolved box tree of every scene and
-//! reports nodes whose absolute bounding box leaves the device viewport.
-//!
-//! Scope:
-//!   * detect absolute positions placed past the viewport edge, folding in
-//!     static `style.transform` (including rotation/skew, via the four
-//!     transformed corners — #128 item 3) and a static (non-keyframed)
-//!     `scene.camera` pan/zoom (H5; still partial: 3D transform functions
-//!     and keyframed camera motion are not modeled)
-//!   * detect components whose unwrapped natural width exceeds the
-//!     allocated width when `white-space: nowrap`/`pre` is set
-//!     (`text`/`gradient_text`/`caption`)
-//!   * detect wrapping content whose natural size exceeds its own resolved
-//!     box (`text`/`gradient_text`/`caption`/`rich_text`/`table` — #128
-//!     item 1: originally `text`-only)
-//!   * exempt `marquee` and `cursor` (designed to bleed)
-//!   * never report a node clipped by an `overflow: hidden`/`clip`/`scroll`/
-//!     `auto` ancestor as a viewport overflow (H4) — the ancestor's own bbox
-//!     is still checked independently, at its own level
-//!
-//! Deliberately NOT in scope: a component's box vs its nearest ancestor
-//! `card`'s box, independent of the viewport (#128 item 2, briefly added
-//! then retired — round 4 audit, constat 7). CLAUDE.md and
-//! `geometry-safety.md` both promise the validator only complains about
-//! content escaping the *viewport*, never about escaping a non-clipping
-//! (`overflow: visible`, the default) container — "a badge sticking out of
-//! a card is legal". A box-vs-card check can only ever fire in exactly that
-//! legal case (a clipping card already suppresses it the same way it
-//! suppresses every other check here, so there is nothing left for it to
-//! report when the card *does* clip either) — see the retired call site's
-//! comment in `walk` for the full reasoning.
-//!
-//! Animation handling is layered: by default we only check the resting
-//! (untransformed) layout, built once with `anim: None`. With
-//! `--strict-anim`, we additionally sample frames — proportionally to scene
-//! duration (H6; round 4 audit, constat 8: dense enough to stay near a
-//! promised 8/s up to 60s scenes) — and at EACH sample, rebuild the box
-//! tree and rerun layout with a real `BuildAnimationCtx` (round 4 audit,
-//! constats 2 & 9): the same engine path `render_with_new_pipeline_iter`
-//! calls once per rendered frame, rather than building once at rest and
-//! hand-deriving only translate/scale afterwards. This is what makes
-//! `timeline` style states, audio-reactive transforms, and animated
-//! rotation all visible to `--strict-anim`, not just translate/scale — see
-//! `validate_geometry_animated`'s doc comment. The paint pass's
-//! start_at/end_at visibility window (resolved at box-tree build time,
-//! independent of `anim`) is honoured the same way in both modes.
-//!
-//! This walker runs the new CSS-engine pipeline (taffy + cosmic-text) so the
-//! geometry it checks matches what the renderer will actually paint.
-
 use std::collections::HashSet;
 
 use rustmotion::components::box_builder::{
@@ -70,22 +20,16 @@ use rustmotion::engine::render;
 use rustmotion::schema::{Camera, ResolvedScenario, ResolvedView, Scene, TransitionType, ViewType};
 use serde::Serialize;
 
-/// One detected layout violation.
 #[derive(Debug, Clone, Serialize)]
 pub struct GeometryViolation {
     pub view_index: usize,
     pub scene_index: usize,
-    /// JSON-style path to the offending child (e.g. `views[0].scenes[1].children[2].children[0]`).
     pub path: String,
-    /// Component type name (e.g. "text", "counter").
     pub component: String,
     pub axis: Axis,
     pub kind: ViolationKind,
-    /// Node bounding box, in viewport coordinates.
     pub bbox: BBox,
-    /// Viewport size at validation time.
     pub viewport: (u32, u32),
-    /// Human-readable hint suggesting a fix.
     pub hint: String,
 }
 
@@ -99,34 +43,13 @@ pub enum Axis {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-#[allow(clippy::enum_variant_names)] // "Overflow" postfix is load-bearing: serde output matches CLI docs
+#[allow(clippy::enum_variant_names)]
 pub enum ViolationKind {
-    /// Component bbox crosses the viewport edge.
     ViewportOverflow,
-    /// `white-space: nowrap`/`pre` set but the natural width exceeds the
-    /// allocated width.
     UnwrappableTextOverflow,
-    /// Wrapping text's content, measured at the width its own box was
-    /// actually assigned, needs more width (an unbreakable word/token) or
-    /// height (wrapped lines) than that box's `content_box()` — e.g. a
-    /// paragraph whose parent has a fixed `height` too small for it. Text
-    /// painters never clip themselves, so this paints outside its box
-    /// regardless of where that box sits relative to the viewport.
     ContentOverflowsBox,
-    /// Retired (round 4 audit, constat 7) — no longer constructed by
-    /// `walk`/`walk_anim`. Was: a component's own (resolved, post-layout)
-    /// box extending past its nearest ancestor `card`'s box (#128 item 2),
-    /// unconditionally on any non-clipping card — exactly the "badge
-    /// sticking out of a card" pattern CLAUDE.md and `geometry-safety.md`
-    /// document as legal (`overflow: visible`, the default). Kept as a
-    /// variant — not renamed/removed — for `--fix`'s match arm and
-    /// `--report` JSON schema stability (frozen violation-kind contract);
-    /// see the module doc comment's "Deliberately NOT in scope" note for
-    /// the full reasoning.
-    #[allow(dead_code)] // never constructed by design — see doc comment above
+    #[allow(dead_code)]
     ContentOverflowsCard,
-    /// Animated transform (scale/translate/wiggle/orbit) pushes the bbox out
-    /// of the viewport at some sampled time. Only emitted with `--strict-anim`.
     AnimatedTextOverflow,
 }
 
@@ -138,23 +61,10 @@ pub struct BBox {
     pub h: f32,
 }
 
-/// Top-level entry: validate every scene of every view.
 pub fn validate_geometry(scenario: &ResolvedScenario) -> Vec<GeometryViolation> {
     let mut violations = Vec::new();
     for (vi, view) in scenario.views.iter().enumerate() {
         for (si, scene) in view.scenes.iter().enumerate() {
-            // Round 4 audit, constat 4: a `world` scene's decorative
-            // children (particles) are never fed into the flex box tree at
-            // render time either — `render_world_frame_scaled` paints them
-            // full-viewport via `paint_decorative_fullscreen`, filtered out
-            // of `render_with_new_pipeline_iter`'s children entirely (see
-            // `scene_children.iter().filter(|c| !c.is_decorative())` there).
-            // Leaving them in here would let them occupy a flex slot that
-            // pushes sibling positions around in a way that never happens
-            // at render, so they're dropped from the walk the same way for
-            // `world` views only — `slide` views never filtered them (a
-            // particle IS flex-flowed there), so scoping this to `world`
-            // keeps slide-view behaviour byte-identical.
             let is_world = matches!(view.view_type, ViewType::World);
             let indexed = deserialize_children_indexed(scene);
             let indexed: Vec<(usize, ChildComponent)> = if is_world {
@@ -198,10 +108,6 @@ pub fn validate_geometry(scenario: &ResolvedScenario) -> Vec<GeometryViolation> 
                 si,
                 &path_root,
                 Some(&raw_indices),
-                // Nothing clips top-level scene children but the viewport
-                // frame itself — and that's exactly what check_viewport
-                // tests, so top level must not be pre-suppressed.
-                /*parent_clips=*/
                 false,
                 camera,
                 root_bound,
@@ -212,16 +118,6 @@ pub fn validate_geometry(scenario: &ResolvedScenario) -> Vec<GeometryViolation> 
     violations
 }
 
-/// Deserialize a scene's raw JSON children like `render::deserialize_children`,
-/// but keep each survivor's index into the RAW `scene.children` array.
-///
-/// `render::deserialize_children` filters failures out and returns a plain
-/// `Vec`, so a plain `.enumerate()` over its output drifts from
-/// `scene.children` as soon as an earlier sibling fails to deserialize.
-/// `apply_fixes`/`navigate` in `validate.rs` walk the RAW JSON array, so a
-/// path built from the drifted index patches the wrong sibling (H3). We
-/// duplicate the (trivial) filter-and-skip here so violation paths always
-/// resolve to the JSON node we actually measured.
 fn deserialize_children_indexed(scene: &Scene) -> Vec<(usize, ChildComponent)> {
     scene
         .children
@@ -235,13 +131,6 @@ fn deserialize_children_indexed(scene: &Scene) -> Vec<(usize, ChildComponent)> {
         .collect()
 }
 
-/// True when any top-level child declares an explicit `style.depth` — the v1
-/// parallax-plane rule (mirrors the private `scene_uses_depth` in
-/// `engine/render/scene.rs`, reimplemented here since that one isn't `pub`).
-/// When depth planes are in play the renderer applies a per-plane,
-/// depth-scaled camera instead of the single global transform
-/// `fold_static_camera` models, so callers skip camera folding entirely in
-/// that case rather than risk a wrong correction.
 fn scene_uses_depth(children: &[ChildComponent]) -> bool {
     children
         .iter()
@@ -257,17 +146,9 @@ fn walk(
     vi: usize,
     si: usize,
     path: &str,
-    // Maps loop position -> raw JSON array index. `None` at nested levels,
-    // where the container's own `Vec<ChildComponent>` field is strict serde
-    // (fails the whole parent rather than skipping one bad element), so
-    // loop position already matches the JSON array position.
     path_indices: Option<&[usize]>,
     parent_clips: bool,
     camera: Option<&Camera>,
-    // The nearest containing block's own resolved content box (width,
-    // height) — see `check_content_overflows_box`'s doc comment for why an
-    // in-flow child's own post-layout box is no longer sufficient on its
-    // own (RM-34).
     container_bound: Option<(f32, f32)>,
     out: &mut Vec<GeometryViolation>,
 ) {
@@ -280,16 +161,6 @@ fn walk(
             None => continue,
         };
         let raw_bbox = bbox_of(layout);
-        // `box_node.css.position` (not `ChildComponent::is_flow`, a
-        // different, looser predicate — false for any declared `position`
-        // shorthand, "absolute" or not, see its doc comment) is the exact
-        // condition `box_builder.rs` used to decide whether taffy treats
-        // this node as `Position::Absolute`. Only that actually takes a
-        // node out of flex flow: its own box is then sized purely from its
-        // own content/style, never shrunk or grown to fit a sibling slot,
-        // so the containing block's size is irrelevant to it (see
-        // `absolutely_positioned_*_spilling_past_a_visible_card_is_legal`,
-        // which depends on this staying unbound).
         let own_bound = if box_node.css.position == Some(Position::Absolute) {
             None
         } else {
@@ -304,19 +175,6 @@ fn walk(
                 }
                 check_viewport(&child.component, &child_path, &vbbox, viewport, vi, si, out);
             }
-            // Round 4 audit, constat 3: this natural-width-vs-own-box check
-            // is content vs its OWN box, exactly the same category as
-            // `check_content_overflows_box` below (just for the nowrap/
-            // single-line case instead of the wrapped one) — so it gets the
-            // identical double exemption: an ancestor that clips
-            // (`parent_clips`) genuinely crops the overflowing line before
-            // it can paint past the box, and a node that clips ITSELF
-            // (`container_clips`) does the same to its own content. Before
-            // this fix it ran unconditionally, contradicting
-            // geometry-safety.md's documented promise ("A node is also
-            // exempt when it clips itself, or when any ancestor clips it")
-            // and `--fix` would then strip a legitimate `white-space:
-            // nowrap` from a component that was never actually broken.
             if !parent_clips && !container_clips(&child.component) {
                 check_unwrappable_text(
                     &child.component,
@@ -328,11 +186,6 @@ fn walk(
                     out,
                 );
             }
-            // Suppressed under a clipping ancestor (parent_clips) exactly
-            // like check_viewport, and when the node clips its own overflow
-            // (paint_pass applies a node's own `overflow: hidden`/clip/
-            // scroll/auto BEFORE painting its own content, at step 4 —
-            // self-clipping is real, not just a container->children thing).
             if !parent_clips && !container_clips(&child.component) {
                 check_content_overflows_box(
                     &child.component,
@@ -345,31 +198,6 @@ fn walk(
                     out,
                 );
             }
-            // #128 item 2 (`ContentOverflowsCard`) used to live here: a
-            // component's box vs its nearest ancestor `card`'s box,
-            // unconditionally (as long as nothing clipped in between).
-            // Round 4 audit, constat 7: that check is structurally
-            // incompatible with the validator's own documented contract.
-            // Its own suppression (`!parent_clips`, mirroring every other
-            // check here) is reachable if and only if the nearest card AND
-            // everything between it and this node is non-clipping — i.e. it
-            // could only ever fire in exactly the case CLAUDE.md ("le
-            // validateur ne se plaint que si le contenu sort du viewport,
-            // pas d'un parent visible") and geometry-safety.md:34/77 ("a
-            // badge sticking out of a card is legal" when the card's
-            // `overflow` is `visible`, the default — "no change needed")
-            // both promise is legal and must NOT be reported. Whenever the
-            // card *does* clip (`overflow: hidden`), `parent_clips` already
-            // suppresses this whole block, so the content is invisible
-            // anyway and there is nothing left to warn about either way.
-            // There is no configuration where firing is both reachable and
-            // consistent with the documented contract, so it is retired
-            // here rather than patched with a redundant escape hatch —
-            // `check_overflows_card` (and the `nearest_card` tracking that
-            // fed it) is deleted; the `ViolationKind::ContentOverflowsCard`
-            // variant itself is kept, unconstructed, for `--fix`'s match arm
-            // and `--report` JSON schema stability (frozen violation-kind
-            // contract — see that variant's doc comment).
         }
 
         if let Some(grandchildren) = container_children(&child.component) {
@@ -404,35 +232,10 @@ fn bbox_of(layout: &BoxLayout) -> BBox {
 fn is_exempted(c: &Component) -> bool {
     matches!(
         c,
-        // A pointer joins `marquee`/`cursor` for the same reason: its
-        // waypoints are authored against the scene, so a demo that walks it
-        // to a control near the edge legitimately puts the arrow's tail
-        // past it. Its box is the glyph, not the content it points at.
         Component::Marquee(_) | Component::Cursor(_) | Component::Pointer(_)
     )
 }
 
-/// Extends the exemption above with an *opt-in* declaration: a component
-/// author who sets top-level `bleed: true` (see `ChildComponent::bleed`) is
-/// asserting that extending past the frame is this component's job — a
-/// radial glow used as a base layer, the same category as `marquee`/`cursor`
-/// but not knowable from the component's *type* alone (a shape is very often
-/// real, non-bleeding content).
-///
-/// Deliberately narrower than [`is_exempted`]: that one is checked once at
-/// the top of `walk`/`walk_anim` and suppresses every check in the block
-/// below it, `content_overflows_box` included. `bleed` must NOT do that —
-/// content larger than its own box is a different defect, unrelated to
-/// whether the box itself is allowed to cross the viewport edge, and staying
-/// reported is the whole point of `content_overflows_box` existing. So this
-/// is consulted individually at each of the two call sites it's allowed to
-/// affect (`check_viewport` in `walk`, the animated-overflow check in
-/// `walk_anim`) rather than folded into `is_exempted`.
-///
-/// `bleed` lives on `ChildComponent`, one per component instance, so a
-/// parent declaring it never reaches its children: each child in a
-/// container's own `children: Vec<ChildComponent>` carries its own `bleed`
-/// (default `false`), untouched by the parent's.
 fn bleeds(child: &ChildComponent) -> bool {
     child.bleed
 }
@@ -444,14 +247,6 @@ fn container_children(c: &Component) -> Option<&[ChildComponent]> {
     }
 }
 
-/// Whether a container clips its children to its own box — CSS `overflow`
-/// semantics (H4). A node inside a clipping ancestor is bounded by that
-/// ancestor before it can ever reach the viewport edge, so `check_viewport`
-/// skips it entirely; the ancestor's own bbox is still checked independently,
-/// at its own level in `walk`/`walk_anim`. Mirrors exactly what the paint
-/// pass clips on (`Overflow::Hidden | Clip | Scroll | Auto`) — a plain
-/// `background` does NOT imply clipping in CSS, so it is deliberately not a
-/// trigger here.
 fn container_clips(c: &Component) -> bool {
     let style = c.as_styled().style_config();
     matches!(
@@ -465,35 +260,6 @@ fn container_clips(c: &Component) -> bool {
     )
 }
 
-/// Static (build-time, non-animated) CSS `transform` fold (H5; #128 item 3
-/// closes the rotation/skew gap) — maps the box's four corners through the
-/// same ordered transform-function chain the paint pass's 2D fast path
-/// applies (`canvas.translate/scale/rotate/skew`, called once per function
-/// in `style.transform` order, pivoted at `style.transform-origin` —
-/// resolved by [`resolve_transform_origin_2d`], defaulting to the box centre
-/// exactly like the paint pass does when it's absent), then takes the AABB
-/// of the four transformed corners. This is what makes rotation/skew
-/// contribute correctly: an exact AABB under rotation needs the four
-/// corners, not a translate/scale-only shortcut.
-///
-/// 3D transform functions (`RotateX`/`RotateY`/`Rotate3d`/`TranslateZ`/
-/// `Translate3d`'s z component/`ScaleZ`/`Scale3d`/`Perspective`/
-/// `Matrix3d`) and the general 2D `Matrix` are intentionally still not
-/// modeled (identity for that function) — an exact AABB there needs
-/// projecting through the full 3D pipeline `apply_transform` uses for that
-/// path, out of scope for this fix. Animated transform-producing presets are
-/// folded separately in `walk_anim`; this only handles what a component
-/// declares directly in `style.transform`.
-///
-/// RM-15: `font_size` is the NODE's own resolved font-size
-/// (`css.font_size_px_or(16.0)`), not a hardcoded 16px — an `em` length in
-/// `transform` must scale with the element it's declared on, exactly like
-/// `paint_pass.rs`'s `length_ctx` does for the same field. Percentage
-/// lengths inside `transform` resolve per axis (`ctx_x`/`ctx_y`, mirroring
-/// `paint_pass.rs`'s `length_ctx_x`/`length_ctx_y`) rather than against a
-/// single `bbox.w.max(bbox.h)` shared by both axes — see
-/// `apply_transform_chain`'s doc comment for why a shared context there was
-/// wrong for every non-square box.
 fn apply_static_node_transform(bbox: &BBox, css: &CssStyle, viewport: (f32, f32)) -> BBox {
     let transform = match css.transform.as_deref() {
         Some(t) if !t.is_empty() => t,
@@ -543,27 +309,6 @@ fn apply_static_node_transform(bbox: &BBox, css: &CssStyle, viewport: (f32, f32)
     }
 }
 
-/// Round 4 audit, constat 5: resolve `style.transform-origin` to an absolute
-/// viewport-space pivot `(x, y)`, in the same way the paint pass's own
-/// `resolve_origin` does (`crates/rustmotion-core/src/engine/paint_pass.rs`)
-/// — percentages resolve against the box's own width (x) / height (y), an
-/// absent axis defaults to 50%, and an absent `transform-origin` altogether
-/// defaults to dead-centre.
-///
-/// This mirrors `resolve_origin`'s 2D resolution rather than calling it
-/// directly: that function is private to `paint_pass.rs`, which sits outside
-/// this workstream's file perimeter (round 4 audit, lot VALIDATION
-/// GÉOMÉTRIQUE — geometry.rs/validate.rs/scene.rs only), so it cannot be
-/// marked `pub`/re-exported from here without touching a file outside that
-/// scope. What's duplicated is only the small resolution *orchestration*;
-/// the actual unit-conversion primitives it calls (`parse_origin_component`,
-/// `ParsedLength::resolve`) are `pub` in `rustmotion_core::css::units` and
-/// are the exact same functions `resolve_origin` itself calls, so the two
-/// can only drift on the orchestration shape, not on what a given length
-/// string resolves to. Keep this in sync with `resolve_origin` if that
-/// function's resolution rules change; the z component is intentionally not
-/// resolved (this fold is 2D-only, see this function's caller's doc comment
-/// on the 3D exemption).
 fn resolve_transform_origin_2d(
     origin: Option<&TransformOrigin>,
     bbox: &BBox,
@@ -599,29 +344,6 @@ fn resolve_transform_origin_2d(
     (ox, oy)
 }
 
-/// Apply a `style.transform` function list to a point already expressed
-/// relative to the pivot, in the same order `apply_transform`'s 2D fast path
-/// composes them: `canvas.translate/scale/rotate/skew` are called once per
-/// function in list order, and each subsequent canvas call operates in the
-/// coordinate frame the previous ones established. Concretely: the *last*
-/// function in the list is the one closest to the box (applied to the point
-/// first), the *first* function is outermost (applied last) — standard CSS
-/// transform-list composition — so this iterates `list` in reverse.
-///
-/// Matches each 2D function's exact canvas semantics: `Rotate`/`RotateZ` use
-/// the same signed-angle convention as `Canvas::rotate` (positive = visually
-/// clockwise on a y-down canvas, i.e. `x' = x·cosθ − y·sinθ`,
-/// `y' = x·sinθ + y·cosθ`); `Skew`/`SkewX`/`SkewY` match `Canvas::skew`
-/// (`x' = x + y·tan(skew_x)`, `y' = y + x·tan(skew_y)`).
-///
-/// RM-15: `ctx_x`/`ctx_y` are separate contexts differing only in
-/// `parent_size` (the box's own width / height respectively), used for
-/// `Translate`/`TranslateX`/`TranslateY`/`Translate3d`'s percentage
-/// resolution — CSS resolves a translate's x-component percentage against
-/// the box's own WIDTH and the y-component against its own HEIGHT, never a
-/// single value shared by both axes (that's only correct for square boxes).
-/// `Scale`/`Rotate`/`Skew` take unitless factors/degrees and never consult
-/// either context.
 fn apply_transform_chain(
     list: &[TransformFn],
     x: f32,
@@ -652,8 +374,6 @@ fn apply_transform_chain(
             }
             TransformFn::SkewX { x: sx } => (x + y * sx.to_radians().tan(), y),
             TransformFn::SkewY { y: sy } => (x, y + x * sy.to_radians().tan()),
-            // 3D functions and the general Matrix: not modeled (see the
-            // caller's doc comment) — identity for this point.
             _ => (x, y),
         };
         x = nx;
@@ -662,14 +382,6 @@ fn apply_transform_chain(
     (x, y)
 }
 
-/// Static (non-keyframed) global scene-camera fold (H5, partial) — mirrors
-/// `apply_camera_transform` in `engine/render/scene.rs` for the
-/// non-rotated case: `device = zoom*p + (1-zoom)*origin - zoom*pan`.
-/// Rotation and keyframed camera motion are ignored. Callers only pass a
-/// camera here when the scene isn't using per-plane depth parallax (see
-/// `scene_uses_depth`) — that path applies a *different*, depth-scaled
-/// camera per top-level plane, and folding the global formula there would
-/// be wrong.
 fn fold_static_camera(bbox: &BBox, camera: &Camera, viewport: (f32, f32)) -> BBox {
     let zoom = camera.zoom;
     let (cx, cy) = camera
@@ -700,9 +412,6 @@ fn check_viewport(
     let vh = viewport.1 as f32;
     let right = bbox.x + bbox.w;
     let bottom = bbox.y + bbox.h;
-    // Sub-pixel tolerance for floating-point rounding. 0.5 px is well below
-    // the human-visible threshold and avoids false positives from layout math
-    // that produces e.g. 1080.0001 on a 1080-px viewport.
     let eps = 0.5;
 
     let x_over = bbox.x < -eps || right > vw + eps;
@@ -758,20 +467,6 @@ fn hint_for_viewport(component: &Component, axis: Axis, bbox: &BBox, vp: (u32, u
     }
 }
 
-/// #128 item 1: this component's `IntrinsicMeasure`, if it has one, plus
-/// whether `white-space: nowrap|pre` disables its wrapping. Shared by
-/// `check_unwrappable_text` (nowrap-only: natural width vs available width)
-/// and `check_content_overflows_box` (wrapped content vs the box's own
-/// assigned size) — the two checks this generalizes beyond `text` alone.
-///
-/// `nowrap` is only meaningful for the text-family types whose *painters*
-/// actually honor `white-space` the same way `text` does — `gradient_text`
-/// and `caption` both mirror `text`'s wrap/nowrap rule exactly (see
-/// `intrinsic.rs`'s "M1 follow-up" doc comments), so their measured size
-/// agrees with what gets painted; always `false` for the rest.
-///
-/// Excludes atomic single-line components (`badge`/`kbd`/`counter`) —
-/// out of scope for this pass, see the workstream report.
 fn measurer_and_nowrap(component: &Component) -> Option<(Box<dyn IntrinsicMeasure>, bool)> {
     fn is_nowrap(ws: &Option<WhiteSpace>) -> bool {
         matches!(ws, Some(WhiteSpace::Nowrap | WhiteSpace::Pre))
@@ -796,28 +491,6 @@ fn measurer_and_nowrap(component: &Component) -> Option<(Box<dyn IntrinsicMeasur
     }
 }
 
-/// RM-31: natural (unwrapped) width vs the node's own CONTENT box, not its
-/// border box. `LegacyPaintDispatcher::dispatch` hands every painter
-/// (`Text`/`GradientText`/`Caption` included) a synthetic
-/// `BoxLayout` built from `layout.content_box()`, translated to the
-/// content-box origin — so the painter wraps and draws inside the content
-/// box, not the raw taffy layout box this walker reads. Comparing against
-/// the border box (as this used to) under-reports by exactly
-/// `padding.left + padding.right + border.left + border.right`, mirroring
-/// the same fix `check_content_overflows_box` already applies for the
-/// wrapped case.
-///
-/// Measured via the same cosmic-text–backed intrinsic the layout engine
-/// uses. Width is bounded by the node's own resolved content-box width
-/// (not `MaxContent`) so a `text-autofit: true` node can shrink to fit it —
-/// see `measurer_and_nowrap`'s `TextIntrinsic`/`GradientTextIntrinsic` arms
-/// and `CssStyle::text_autofit`'s doc comment. For a non-autofit node this
-/// changes nothing: `TextIntrinsic::measure` only reads the width
-/// constraint at all when `text_autofit` is on (see its early return), and
-/// `nowrap` already forces a single unwrapped line here regardless of what
-/// width is offered — so `natural_w` below is "natural" in the non-autofit
-/// case exactly as before, and "shrunk to fit, if that's enough" when the
-/// author declared it.
 fn check_unwrappable_text(
     component: &Component,
     path: &str,
@@ -862,57 +535,6 @@ fn check_unwrappable_text(
     }
 }
 
-/// H4 (second half) / #128 item 1: content larger than its *own* content
-/// box, independent of where that box sits relative to the viewport.
-/// `check_viewport` only catches a box escaping the *frame*; it says
-/// nothing about a box whose declared size is simply too small for what's
-/// inside it — e.g. a card with a fixed `height` shorter than the paragraph
-/// it wraps. These painters never clip themselves and `overflow: visible`
-/// (the CSS default) applies no clip in the paint pass, so that content
-/// paints straight out of its box with zero signal from any other check.
-///
-/// Originally `text`-only (#128 item 1: "content overflow is checked for
-/// text only"); now covers every component with an `IntrinsicMeasure` whose
-/// natural size can legitimately be smaller than what layout assigned it —
-/// see `measurer_and_nowrap`'s doc comment for exactly which types.
-///
-/// Complementary to `check_unwrappable_text`, not overlapping with it on the
-/// WIDTH axis: that one covers `white-space: nowrap`/`pre` (single unwrapped
-/// line, measured at natural/unconstrained width). This function covers the
-/// default wrapping case's width — measured at the width the box actually
-/// *has* (`content_box().2`, unconstrained height) so it also catches a
-/// single unbreakable word/token/URL that's wider than the box even though
-/// wrap is on (wrapping can't break within a word), plus the width axis
-/// stays consistent with what will actually be painted.
-///
-/// RM-32: the HEIGHT axis is this function's job regardless of `nowrap` — a
-/// nowrap node used to return here before measuring height at all, so a
-/// single unwrapped line taller than its box validated clean. Re-measuring
-/// nowrap's WIDTH at a constrained space would wrap text that actually
-/// paints as one (too-wide) line, which is exactly why `check_unwrappable_
-/// text` owns that axis instead — but a single line's height is exactly one
-/// `line_height`, independent of any width constraint, so it's measured at
-/// `(MaxContent, Definite(ch))` and reported on `Axis::Y` only, leaving
-/// `Axis::X` to `check_unwrappable_text`.
-///
-/// RM-34: `layout.content_box()` is no longer trustworthy as the sole bound
-/// on its own. `fix(css): default flex-direction to column when unset`
-/// (8afc4c1) means a single in-flow child's MAIN axis (height, in the
-/// overwhelmingly common column case) is no longer clamped by `align-items:
-/// stretch` — that only ever clamped the CROSS axis. A node's own resolved
-/// box now legitimately grows past its container's declared size to match
-/// its content exactly (`min-height: auto`-style flex overflow, matching
-/// real CSS), which makes a self-vs-self comparison vacuous: the box IS the
-/// content, by construction. `container_bound` — the nearest containing
-/// block's own resolved content box, threaded down from `walk` — is the
-/// fix: an in-flow node's effective box is `min(own, container)` per axis,
-/// so a still-fixed-size ancestor (the ordinary case; card/flex/grid boxes
-/// are NOT subject to the same unclamped growth, since nothing above forces
-/// them to shrink-wrap their own children) keeps constraining what "fits"
-/// means, even though the leaf's post-layout box no longer does. `None`
-/// (absolutely positioned children, and the historical behavior for callers
-/// that don't have an ancestor to compare against) leaves `cw`/`ch`
-/// unchanged.
 fn check_content_overflows_box(
     component: &Component,
     path: &str,
@@ -968,15 +590,6 @@ fn check_content_overflows_box(
         return;
     }
 
-    // Height is bounded by the node's own resolved content-box height `ch`
-    // (not `MaxContent`) for the same reason width is bounded by `cw`: a
-    // `text-autofit: true` node can only try to shrink into a target it's
-    // actually told about. `TextIntrinsic::measure` only reads this height
-    // bound at all when `text_autofit` is on (see its early return right
-    // after the base, non-autofit measurement), so a non-autofit node's
-    // `measured_h` is unaffected — this is the same "safe to change
-    // unconditionally" argument as `check_unwrappable_text`'s width bound
-    // above.
     let (measured_w, measured_h) = intrinsic.measure(
         (None, None),
         (AvailableSpace::Definite(cw), AvailableSpace::Definite(ch)),
@@ -1030,38 +643,6 @@ fn check_content_overflows_box(
     });
 }
 
-// ─── M4: legibility floor (issue #110 / #102) ──────────────────────────────
-//
-// "Fits in the frame" (checked above) is not "readable in a video". A table
-// column, a badge, a caption line — any of them can validate perfectly
-// clean while rendering at a font size nobody could read once the video is
-// scaled down from its native resolution, which is how video is normally
-// watched (embedded players, mobile feeds, thumbnails) unlike a web page,
-// which is usually viewed close to 1:1.
-//
-// The calibration and its threshold now live on `MIN_LEGIBLE_FONT_RATIO`
-// itself, in `rustmotion_core::css::style` — relocated there (not
-// duplicated) so `CssStyle::text_autofit`'s shrink floor can reuse the exact
-// same calibrated ratio instead of inventing a second one; `rustmotion-core`
-// is a dependency of this crate, never the other way around, so that is the
-// only direction the constant can live in for both sides to share it.
-
-/// Check every text-bearing component's effective font size against
-/// [`MIN_LEGIBLE_FONT_RATIO`] of the output height. Always advisory (a
-/// warning, never a blocking error) — this is a legibility floor, not a
-/// geometry correctness check, and the "right" size is ultimately an
-/// authorial call.
-///
-/// Coverage: every component whose `Painter` resolves its rendered font
-/// size from `style.font-size` (falling back to that component's own
-/// documented default when unset) — text, rich_text, gradient_text,
-/// caption, counter, table, callout, list, pill_nav, badge, kbd, tooltip,
-/// marquee.
-/// Not covered: components whose text sizing isn't a simple
-/// `style.font-size`-or-default resolution (chart axis/labels, gauge, stat,
-/// sparkline, heatmap, treemap, dot_map, avatar initials, progress label,
-/// rating, countdown, comparison, stepper, timeline, tag_cloud) — see the
-/// workstream report for the full list.
 pub fn check_legibility(scenario: &ResolvedScenario) -> Vec<String> {
     let mut warnings = Vec::new();
     let video_h = scenario.video.height as f32;
@@ -1091,7 +672,6 @@ fn walk_legibility(
     out: &mut Vec<String>,
 ) {
     for (label, effective_px) in text_sizes(component) {
-        // 0.05px tolerance for float rounding; not a meaningful visual gap.
         if effective_px < min_px - 0.05 {
             out.push(format!(
                 "{path}: {label} renders at ~{effective_px:.0}px on a {video_h:.0}px-tall frame \
@@ -1104,21 +684,6 @@ fn walk_legibility(
         }
     }
 
-    // The check above reads the *declared* size, which is the rendered size
-    // for every component except an autofitting one: `text-autofit` shrinks
-    // toward `TEXT_AUTOFIT_MIN_FONT_PX`, a constant pinned to a 1080-tall
-    // reference so that measure and paint cannot disagree about it (see that
-    // constant's doc comment). `min_px` here is relative to the *real* frame
-    // height, so on any canvas taller than 1080 the floor sits below the
-    // legibility threshold — and a declared 120px that shrinks to ~13px on a
-    // 2160-tall frame would otherwise pass this check in silence, which is
-    // the exact failure mode autofit exists to remove rather than relocate.
-    //
-    // Advisory and conditional: it fires only when the two genuinely diverge
-    // (taller-than-1080 canvases), and says "may" because resolving the
-    // actual shrunk size needs layout, which this pass does not run. The
-    // precise fix is a canvas-relative floor on both sides, which requires
-    // plumbing the frame height into `TextIntrinsic` — tracked separately.
     if declares_text_autofit(component) && TEXT_AUTOFIT_MIN_FONT_PX < min_px - 0.05 {
         out.push(format!(
             "{path}: text-autofit may shrink this text to ~{TEXT_AUTOFIT_MIN_FONT_PX:.0}px, below \
@@ -1140,15 +705,6 @@ fn walk_legibility(
     }
 }
 
-/// Effective rendered font size(s) for a component, mirroring exactly the
-/// default each `Painter` falls back to when `style.font-size` is unset
-/// (see the file/line citations below — kept in sync by hand since these
-/// defaults live in `rustmotion-components`, out of this workstream's
-/// scope). A component can report more than one size.
-/// Whether this component's painter actually honours `style.text-autofit`.
-/// Deliberately the same two variants `TextIntrinsic::with_autofit` is called
-/// for — every other component ignores the field, so warning about them would
-/// be a false positive about a shrink that cannot happen.
 fn declares_text_autofit(component: &Component) -> bool {
     match component {
         Component::Text(t) => matches!(t.style.text_autofit, Some(true)),
@@ -1157,39 +713,21 @@ fn declares_text_autofit(component: &Component) -> bool {
     }
 }
 
-// `Counter`/`PillNav`/`Callout`/`List`/`Kbd`/`Tooltip`/`Marquee`/`Badge` are
-// eight of the twenty-seven frozen-composition components deprecated by
-// issue #333 — most of this function's own match arms read a field of one
-// of them. (`Notification` used to be a ninth; it was deleted outright
-// rather than merely deprecated.) Narrowest scope that still compiles:
-// the whole function, not a per-arm `#[allow(deprecated)]` nine times over,
-// since deprecating a struct deprecates every field read on it and this
-// function's entire purpose is reading exactly those fields for the
-// legibility-floor table below.
 #[allow(deprecated)]
 fn text_sizes(component: &Component) -> Vec<(&'static str, f32)> {
     match component {
-        // text.rs, rich_text.rs, gradient_text.rs, caption.rs, counter.rs: 48.0
         Component::Text(t) => vec![("text", t.style.font_size_px_or(48.0))],
         Component::RichText(t) => vec![("rich_text", t.style.font_size_px_or(48.0))],
         Component::GradientText(t) => vec![("gradient_text", t.style.font_size_px_or(48.0))],
         Component::Caption(t) => vec![("caption", t.style.font_size_px_or(48.0))],
         Component::Counter(c) => vec![("counter", c.style.font_size_px_or(48.0))],
-        // table.rs, pill_nav.rs: 14.0
         Component::Table(t) => vec![("table", t.style.font_size_px_or(14.0))],
         Component::PillNav(p) => vec![("pill_nav", p.style.font_size_px_or(14.0))],
-        // callout.rs, list.rs: 16.0
         Component::Callout(c) => vec![("callout", c.style.font_size_px_or(16.0))],
         Component::List(l) => vec![("list", l.style.font_size_px_or(16.0))],
-        // These carry their own `font_size` field (already serde-resolved
-        // to its component default when absent from JSON), overridable by
-        // `style.font-size` exactly like the rest — kbd.rs, tooltip.rs,
-        // marquee.rs.
         Component::Kbd(k) => vec![("kbd", k.style.font_size_px_or(k.font_size))],
         Component::Tooltip(t) => vec![("tooltip", t.style.font_size_px_or(t.font_size))],
         Component::Marquee(m) => vec![("marquee", m.style.font_size_px_or(m.font_size))],
-        // badge.rs: BadgeSize::{Sm,Md,Lg}.params().0 = {12.0, 14.0, 18.0}.
-        // `params()` is private to badge.rs, so the table is duplicated here.
         Component::Badge(b) => {
             let default_fs = match b.badge_size {
                 rustmotion::components::badge::BadgeSize::Sm => 12.0,
@@ -1202,39 +740,10 @@ fn text_sizes(component: &Component) -> Vec<(&'static str, f32)> {
     }
 }
 
-// ─── Animated overflow sampling (--strict-anim) ─────────────────────────────
-
-/// Samples per second of scene duration. ~8/s (125ms resolution) is dense
-/// enough to land inside the high-risk window right after an entrance
-/// preset's delay — where opacity has started ramping up but translate/scale
-/// is still near its most extreme — without either a fixed sample count
-/// (misses short bursts in long scenes) or a fixed interval (wastes cycles
-/// on long, mostly-static scenes).
 const ANIM_SAMPLES_PER_SECOND: f64 = 8.0;
 const ANIM_MIN_SAMPLES: usize = 5;
-/// Round 4 audit, constat 8: raised from 40 (a ~5s ceiling on the promised
-/// 8/s cadence) to 480 - 60s worth of samples at exactly 8/s, the audit's
-/// own reference duration ("pas de 0.51s a 20s, 1.0s a 40s, 1.5s a 60s").
-/// Past a 5s scene, the old cap widened the step linearly with duration
-/// (0.51s at 20s, 1.0s at 40s, 1.5s at 60s), so a brief transform excursion
-/// shorter than that step could land entirely between two samples and never
-/// get checked. Cost, measured on the box-tree-rebuild-per-sample walker
-/// this cap now drives (constats 2 & 9): a 15-component animated scene at
-/// 60s / 480 samples took 309ms wall-clock in a `--release` build
-/// (~0.64ms/sample) and 543ms in a debug build (~1.13ms/sample) - see
-/// `timing_probe_for_constat_8` (run with `--ignored`) for the harness.
-/// `--strict-anim` is opt-in, and `validate`/`render`'s implicit checks
-/// don't pass it, so this cost is paid only when explicitly asked for.
-/// Scenes longer than 60s still degrade past this cap - CLAUDE.md's own
-/// architecture favours many short scenes stitched by transitions/world
-/// panning over one very long scene, so a single-scene ceiling at 60s
-/// covers the documented common case.
 const ANIM_MAX_SAMPLES: usize = 480;
 
-/// Sample times (seconds, scene-relative) for `--strict-anim`, spaced evenly
-/// across `[0, scene_duration]`. Count scales with `scene_duration` (H6) —
-/// more samples for longer scenes — and is clamped to keep validation time
-/// bounded.
 fn anim_sample_times(scene_duration: f64) -> Vec<f64> {
     if scene_duration <= 0.0 {
         return vec![0.0];
@@ -1249,37 +758,12 @@ fn anim_sample_times(scene_duration: f64) -> Vec<f64> {
         .collect()
 }
 
-/// Walk every scene at multiple sampled times, apply the *real* renderer's
-/// animation resolution to each widget's bbox, and report viewport
-/// overflows. Only emits `AnimatedTextOverflow` violations: the
-/// resting-layout checks live in `validate_geometry`.
-///
-/// Round 4 audit, constats 2 & 9: rebuilds the box tree AND reruns layout at
-/// EACH sampled time, with a real `BuildAnimationCtx` — exactly the engine
-/// path `render_with_new_pipeline_iter` calls once per rendered frame
-/// (`build_scene_from_refs` + `run_layout`) — instead of building once at a
-/// frozen resting state (`anim: None`) and hand-deriving only
-/// translate/scale afterwards in `walk_anim`. This one change fixes two
-/// separate blind spots at once, because both are downstream of the SAME
-/// `anim: None`:
-///   * `build_child` only applies `apply_style_states` (`timeline` steps)
-///     and the audio-reactive CSS block at the times a REAL `local_actx` is
-///     available — a `timeline` step that changes a box-model property
-///     (e.g. `width`) was invisible at every sample (constat 2).
-///   * `apply_animated_props` bakes the resolved transform (translate,
-///     scale, AND rotation) into `css.transform` — so once the tree is
-///     rebuilt with the real time, `apply_static_node_transform` (already
-///     used for static `style.transform`, already handling rotation/skew
-///     via a four-corner AABB) picks up animated rotation too, with no
-///     separate rotation-aware fold needed (constat 9).
 pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryViolation> {
     let mut violations = Vec::new();
     let mut seen: HashSet<(usize, usize, String)> = HashSet::new();
     let fps = scenario.video.fps;
     for (vi, view) in scenario.views.iter().enumerate() {
         for (si, scene) in view.scenes.iter().enumerate() {
-            // Constat 4: same decorative-child filtering as `validate_geometry`
-            // — see that call site's comment for why.
             let (children, raw_indices) = scene_geometry_children(view, scene);
             let viewport = (scenario.video.width, scenario.video.height);
 
@@ -1290,30 +774,11 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
 
             let path_root = format!("views[{}].scenes[{}]", vi, si);
             let scene_duration = scene.duration;
-            // A frozen scene renders nothing past `freeze_at` — every path
-            // now funnels through `SceneTime`, which clamps there (#164). So
-            // sampling beyond it evaluates transforms at instants the video
-            // never contains, which is how `--strict-anim` reports a
-            // violation that cannot happen. Bounding the sample list rather
-            // than clamping each `time` afterwards also avoids generating a
-            // run of identical post-freeze samples.
-            //
-            // `scene_duration` itself stays untouched below: duration-relative
-            // effects (contract from PR #27) must keep their real window —
-            // only the sampling ceiling moves.
             let sample_until = scene
                 .freeze_at
                 .map_or(scene_duration, |f| f.clamp(0.0, scene_duration));
 
             for time in anim_sample_times(sample_until) {
-                // `scenario_time` reuses the per-scene-local `time` here (not
-                // the scene's real absolute offset into the scenario) —
-                // pre-existing, unchanged by this refactor: an audio-reactive
-                // component validated on scene 2 is checked against the
-                // wrong absolute clock. Out of this fix's scope; see
-                // `validate_geometry_transitions`, which threads the real
-                // `global_frame`-derived value through instead because it
-                // has it on hand for free from the frame-task schedule.
                 sample_scene_geometry(
                     scene,
                     &children,
@@ -1326,8 +791,8 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
                     &path_root,
                     fps,
                     time,
-                    /*scenario_time=*/ time,
-                    /*transition_label=*/ None,
+                    time,
+                    None,
                     &mut seen,
                     &mut violations,
                 );
@@ -1337,13 +802,6 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
     violations
 }
 
-/// `scene`'s children, indexed for path-preserving reporting exactly like
-/// [`validate_geometry`]'s own walk (H3), with the same `world`-view
-/// decorative-child filter [`validate_geometry_animated`]'s doc comment
-/// explains (round 4 audit, constat 4). Factored out so
-/// [`validate_geometry_transitions`] prepares a transition's two sides the
-/// identical way `validate_geometry_animated` prepares an ordinary scene,
-/// rather than a second, independently-drifting copy of this filter.
 fn scene_geometry_children(
     view: &ResolvedView,
     scene: &Scene,
@@ -1363,14 +821,6 @@ fn scene_geometry_children(
     (children, raw_indices)
 }
 
-/// Build the box tree at one specific `(time, scenario_time)` and walk it —
-/// the inner body [`validate_geometry_animated`] runs once per sampled
-/// instant, factored out so [`validate_geometry_transitions`] can run the
-/// exact same construction at a transition frame's own local time, with one
-/// extra knob an ordinary in-scene sample never needs: `transition_label`,
-/// prefixed onto every violation's hint so a `--report` reader can tell
-/// "only found during a transition frame" apart from "found on this scene's
-/// own resting/animated sampling" without cross-referencing paths by hand.
 #[allow(clippy::too_many_arguments)]
 fn sample_scene_geometry(
     scene: &Scene,
@@ -1415,7 +865,7 @@ fn sample_scene_geometry(
         si,
         path_root,
         Some(raw_indices),
-        /*parent_clips=*/ false,
+        false,
         camera,
         transition_label,
         time,
@@ -1425,20 +875,6 @@ fn sample_scene_geometry(
     );
 }
 
-/// `boxes` filtered down to principal nodes — motion-blur/trail ghosts
-/// (`BoxKind::Ghost`, only ever generated when the box tree is built with a
-/// real `BuildAnimationCtx`, see `build_ghosts` in `box_builder.rs`) are
-/// prepended before each principal in the flat child list, so a naive
-/// `children.iter().zip(boxes.iter())` would misalign as soon as any
-/// earlier sibling has `motion_blur`/`trail` — the same category of bug
-/// H3 fixed for raw JSON indices. `walk` never hits this (its box tree is
-/// always built with `anim: None`, so `build_child` never generates ghosts
-/// there — see its own module doc comment); `walk_anim` started building
-/// with a real `BuildAnimationCtx` for constats 2 & 9, so it must filter.
-/// Ghosts are paint-only trailing copies of the SAME component at an
-/// earlier local time and are not independently meaningful overflow
-/// targets — the principal's own per-sample check already covers the
-/// component's position.
 fn principal_boxes(boxes: &[BoxNode]) -> impl Iterator<Item = &BoxNode> {
     boxes
         .iter()
@@ -1459,9 +895,6 @@ fn walk_anim(
     path_indices: Option<&[usize]>,
     parent_clips: bool,
     camera: Option<&Camera>,
-    // `Some` when this sample belongs to a `SlideTransition`/`ViewTransition`
-    // frame task rather than an ordinary in-scene sample — see
-    // `sample_scene_geometry`'s doc.
     transition_label: Option<&str>,
     time: f64,
     scene_duration: f64,
@@ -1477,14 +910,6 @@ fn walk_anim(
             None => continue,
         };
 
-        // Visibility gate: identical to what `paint_node` checks before
-        // painting — a start_at/end_at window, already resolved (with
-        // stagger folded in) at box-tree build time. No manual re-timing:
-        // per PR #27, start_at/end_at gate paint visibility only, and the
-        // effects resolved below run at absolute scene time exactly like the
-        // renderer does. A node outside its window is not painted — subtree
-        // included — so we skip it (and its descendants) entirely, just like
-        // `paint_node` does; nothing invisible can overflow.
         let visible = box_node.window.as_ref().is_none_or(|w| w.contains(time));
         if !visible {
             continue;
@@ -1495,30 +920,12 @@ fn walk_anim(
             && !parent_clips
             && layout.width > 0.5
             && layout.height > 0.5
-            // Round 4 audit, constats 2 & 9: `box_node.css` was rebuilt at
-            // this sample's real time (see `validate_geometry_animated`),
-            // so `css.opacity` already reflects `apply_animated_props` —
-            // no separate `AnimatedProperties` re-derivation needed for
-            // the visibility short-circuit any more.
             && box_node.css.opacity.unwrap_or(1.0) > 0.001
         {
             let stagger_delay = stagger_delays
                 .get(box_node.id as usize)
                 .copied()
                 .unwrap_or(0.0);
-            // `time` above is *global* scene time; the renderer never
-            // resolves effects at that raw value once a `time_scale`/
-            // `time_offset`-bearing container is in the ancestor chain —
-            // `build_child` remaps it first (`box_builder.rs`:
-            // `t_local = scale * t_global + shift`), and it already used
-            // this same remap to build `box_node.css` above. `local_time`
-            // is only still needed here to independently re-derive
-            // `AnimatedProperties.char_animation` (char-level overshoot),
-            // which `apply_animated_props` deliberately does NOT bake into
-            // CSS (component-internal, painter-only property — see that
-            // function's doc comment) — `built.time_params` carries the
-            // exact same accumulated `(scale, shift)` the renderer used, so
-            // this stays in lockstep with it.
             let (scale, shift) = time_params
                 .get(box_node.id as usize)
                 .copied()
@@ -1529,20 +936,7 @@ fn walk_anim(
                 None => AnimatedProperties::default(),
             };
             let raw_bbox = bbox_of(layout);
-            // `apply_static_node_transform` — the SAME fold `walk` uses for
-            // a *static* `style.transform` — now does the whole job:
-            // `box_node.css.transform` already carries the resolved
-            // translate/scale/rotation (`apply_animated_props`, baked in at
-            // box-tree build time for this sample) composed with any
-            // static `style.transform` the component also declares, and
-            // the four-corner AABB it computes already accounts for
-            // rotation (constat 9) the same way it does for a static
-            // `transform: rotate(...)`.
             let mut transformed = apply_static_node_transform(&raw_bbox, &box_node.css, viewport_f);
-            // Char-level overshoot (e.g. `char_scale_in`'s default 1.08)
-            // is the one animated-transform contributor NOT baked into
-            // `css.transform` — fold it in as an extra uniform scale
-            // around the already-transformed box's own centre.
             if let Some(overshoot) = props
                 .char_animation
                 .as_ref()
@@ -1568,7 +962,6 @@ fn walk_anim(
                     (false, true) => Axis::Y,
                     _ => unreachable!(),
                 };
-                // Dedupe across samples: one violation per (view, scene, path).
                 let key = (vi, si, child_path.clone());
                 if seen.insert(key) {
                     let component_name = component_kind(&child.component).to_string();
@@ -1617,10 +1010,6 @@ fn walk_anim(
     }
 }
 
-/// Scale a bbox by `factor` around its OWN centre (as opposed to
-/// `apply_static_node_transform`'s pivot, which is `transform-origin`) —
-/// used only for the char-animation overshoot top-up in `walk_anim`, which
-/// is not a CSS transform and has no origin concept of its own.
 fn scale_bbox_from_own_center(bbox: &BBox, factor: f32) -> BBox {
     let cx = bbox.x + bbox.w / 2.0;
     let cy = bbox.y + bbox.h / 2.0;
@@ -1639,11 +1028,6 @@ fn hint_for_animated(
     props: &AnimatedProperties,
     time: f64,
     scene_duration: f64,
-    // `Some` when this violation came from `validate_geometry_transitions`
-    // rather than an ordinary `validate_geometry_animated` sample — see
-    // `sample_scene_geometry`'s doc. Prefixed onto the message so a
-    // `--report` reader can tell the two apart without cross-referencing
-    // paths by hand.
     transition_label: Option<&str>,
 ) -> String {
     let ratio = if scene_duration > 1e-6 {
@@ -1673,38 +1057,6 @@ fn hint_for_animated(
     }
 }
 
-// ─── Transition-frame sampling (#334) ──────────────────────────────────────
-//
-// `validate_geometry`/`validate_geometry_animated` both iterate `view.scenes`
-// and sample within `[0, scene_duration]`. Neither ever looks at a
-// `FrameTask::SlideTransition`/`FrameTask::ViewTransition` — the composite of
-// two already-rendered frame buffers `render_frame_task_scaled` builds
-// between two scenes (or two views) is unvalidated on `main`, which is this
-// engine's own copy of the blind spot issue #334 names: "the transitions, I
-// never saw them play."
-//
-// This is not just "sample more densely": under `timing: "v2"` (issue #336),
-// a transition entering scene `i+1` renders scene `i` an *additional*
-// `transition_frames(i+1)` frames PAST its own `[0, scene_duration]` window
-// instead of stealing from inside it (`build_slide_view_tasks_v2`, when the
-// outgoing scene's `tail` is `"continue"`) — so the scene being sampled
-// during a transition frame can be running at a local time
-// `anim_sample_times` never generates for it at all, not merely one it
-// happens to skip between two samples. `frame_a_idx`/`frame_in_transition`
-// (read straight off the `FrameTask`, matching `render_frame_task_scaled`'s
-// own arithmetic byte-for-byte) are the only reliable source for "what local
-// time is this scene actually rendered at right now."
-
-/// Mirrors `engine::render::scene`'s private `SceneTime::clamp` — a scene
-/// paints nothing past `freeze_at`, so a transition frame asking for a local
-/// time beyond it must clamp the same way an ordinary `Normal` frame already
-/// does. Duplicated rather than called: `SceneTime` is private to a file
-/// outside this workstream's owned perimeter (`geometry.rs`/`validate.rs`/
-/// `validation.rs`) — the same reasoning `fold_static_camera`'s doc comment
-/// gives for its own duplicated formula.
-///
-/// Called from [`validate_geometry_transitions`], itself wired into
-/// `validation.rs`'s `run_checks` under `--strict-anim`.
 fn clamp_to_scene_freeze(scene: &Scene, raw: f64) -> f64 {
     match scene.freeze_at {
         Some(freeze_at) if raw > freeze_at => freeze_at,
@@ -1712,42 +1064,6 @@ fn clamp_to_scene_freeze(scene: &Scene, raw: f64) -> f64 {
     }
 }
 
-// `TransitionType::CameraPan` `SlideTransition`s are deliberately NOT
-// sampled below (both sides skipped outright, like `ViewTransition`'s
-// `world`-view sides just below). `camera_pan_transition`
-// (`rustmotion_core::engine::transition`) genuinely translates each side's
-// foreground on screen by up to the full `Scene::world_position` delta
-// between the two scenes — commonly close to a full viewport width, since
-// the usual use is "the next scene over". Sliding fully off (and the
-// incoming scene fully on) is that mechanism working as designed, not a
-// defect a validator should ever name — unlike an ordinary pixel-composite
-// transition (fade/wipe/slide/…), where each side is rendered at its own
-// undisturbed layout and *that* is exactly what this checker validates.
-// Folding the pan's own translation in and then bounds-checking it would
-// false-positive on every such transition, at both of its ends, every time.
-
-/// Sample every `SlideTransition`/`ViewTransition` frame task
-/// [`rustmotion::encode::build_frame_tasks`] schedules, and report the same
-/// `AnimatedTextOverflow` violations [`validate_geometry_animated`] reports
-/// for an ordinary scene sample — reusing that exact `ViolationKind` (not a
-/// new one) so this stays inside the frozen `--report` JSON shape and every
-/// existing consumer of it (including `validate.rs`'s `apply_fixes`, whose
-/// match over `ViolationKind` lives outside this workstream's owned files)
-/// keeps compiling unchanged.
-///
-/// Only ever called under `--strict-anim`, exactly like
-/// `validate_geometry_animated` — see that call site in `validation.rs`'s
-/// `run_checks`: sampling every transition frame at full layout cost is the
-/// same trade this workstream already accepted for ordinary animated frames.
-///
-/// `ViewTransition` sides are only sampled when that side's own view is
-/// `ViewType::Slide` — a `world` view's boundary frame is a camera-composited
-/// blend of several scenes (`render_world_frame_scaled`), which no per-scene
-/// geometry walker in this file models (pre-existing limitation of
-/// `validate_geometry`/`validate_geometry_animated` too: neither folds the
-/// world camera's continuous pan into a scene's own bbox check). Sampling it
-/// as if it were an ordinary scene would be actively wrong, not merely
-/// incomplete, so it is skipped rather than guessed at.
 pub fn validate_geometry_transitions(scenario: &ResolvedScenario) -> Vec<GeometryViolation> {
     use rustmotion::encode::video::FrameTask;
 
@@ -1772,9 +1088,6 @@ pub fn validate_geometry_transitions(scenario: &ResolvedScenario) -> Vec<Geometr
                 transition_type,
                 ..
             } => {
-                // See the module-level comment right above this function for
-                // why `CameraPan` is skipped outright rather than folded in
-                // and bounds-checked.
                 if matches!(transition_type, TransitionType::CameraPan) {
                     continue;
                 }
@@ -1936,7 +1249,6 @@ pub fn validate_geometry_transitions(scenario: &ResolvedScenario) -> Vec<Geometr
     violations
 }
 
-/// Render a violation for human consumption (multi-line, color-free).
 pub fn format_violation(v: &GeometryViolation) -> String {
     let axis_str = match v.axis {
         Axis::X => "x",
@@ -1968,24 +1280,6 @@ pub fn format_violation(v: &GeometryViolation) -> String {
     )
 }
 
-/// Advisory check (issue #336): when `bpm` is set, warn about a scene whose
-/// resolved cut — the frame at which it actually starts appearing, once
-/// `at`/transitions/`timing` are all accounted for — doesn't land on the
-/// beat grid `beat_offset + n * 60 / bpm`.
-///
-/// Always a warning, never a blocking error (unlike `unresolved_beat_unit`
-/// in `validate_schema.rs`, which is about a cut that cannot be *computed*
-/// at all): an off-grid cut still renders exactly as declared, it just
-/// isn't rhythmic. `snap: "beat"` is the fix this points authors at.
-///
-/// Reuses `rustmotion::encode::build_frame_tasks` rather than re-deriving
-/// cut positions independently — that scheduler (a different workstream's
-/// file within this crate, read here, not edited) is the single source of
-/// truth for where a cut actually falls once transitions/gaps/`timing` are
-/// applied; a second implementation here could silently drift from it.
-/// Slide views only, matching that scheduler's own `timing: "v2"` scope —
-/// a `world` view's continuous camera pan has no "cut" this check's model
-/// applies to.
 pub fn check_off_grid_cuts(scenario: &ResolvedScenario) -> Vec<String> {
     use rustmotion::encode::video::FrameTask;
     use std::collections::HashMap;
@@ -1998,9 +1292,6 @@ pub fn check_off_grid_cuts(scenario: &ResolvedScenario) -> Vec<String> {
 
     let tasks = rustmotion::encode::build_frame_tasks(scenario);
 
-    // First frame at which each (view, scene) becomes the *entering* side
-    // of a cut: either the first frame of the transition blending it in,
-    // or — with no transition — its own first Normal frame.
     let mut cut_frame: HashMap<(usize, usize), u32> = HashMap::new();
     for task in &tasks {
         match task {
@@ -2031,7 +1322,6 @@ pub fn check_off_grid_cuts(scenario: &ResolvedScenario) -> Vec<String> {
 
     for (vi, view) in scenario.views.iter().enumerate() {
         for (si, scene) in view.scenes.iter().enumerate() {
-            // A view's first scene has nothing cutting *into* it.
             if si == 0 {
                 continue;
             }
@@ -2050,9 +1340,6 @@ pub fn check_off_grid_cuts(scenario: &ResolvedScenario) -> Vec<String> {
             let nearest_beat_n = ((time - beat_offset) / beat_len).round();
             let nearest_beat = beat_offset + nearest_beat_n * beat_len;
             let drift = (time - nearest_beat).abs();
-            // Half a frame is the unavoidable rounding a discrete frame
-            // grid imposes on a continuous beat position, not a drift an
-            // author could fix.
             let tolerance = 0.5 / fps as f64;
             if drift > tolerance {
                 warnings.push(format!(
@@ -2079,7 +1366,6 @@ mod tests {
 
     #[test]
     fn clean_scenario_has_no_violations() {
-        // 100×80 shape at (10, 10) in a 1920×1080 viewport — well inside.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -2102,24 +1388,6 @@ mod tests {
         );
     }
 
-    // ─── #334: transition-frame sampling ───────────────────────────────────
-    //
-    // The demonstration this workstream exists for: a `timing: "v2"` scene
-    // whose `tail` is `"continue"` keeps sliding for the whole transition
-    // overlap PAST its own `duration` — a local time window
-    // `validate_geometry_animated`'s `anim_sample_times` never generates
-    // (bounded by `scene_duration`), so the text is comfortably on-screen at
-    // every one of that function's own samples yet well off it by the time
-    // the transition it never looks at is halfway done.
-
-    /// video 640×360, text sliding from x=460 toward x=-440 (translate
-    /// 0 → -900px linearly over a 2.0s keyframe window) starting at the
-    /// scene's own t=0. At the scene's own last sample (t=1.0s, translate
-    /// -450px), the box's left edge sits at x=10 — inside the viewport with
-    /// room to spare. Scene 0's `tail: "continue"` lets it keep sliding
-    /// through the 0.5s (15-frame @30fps) transition into scene 1, reaching
-    /// t≈1.47s at the transition's last frame — translate ≈ -660px, left
-    /// edge ≈ -200px: off the left edge of the viewport.
     const V2_TAIL_CONTINUE_TRANSITION_JSON: &str = r##"{
         "video": { "width": 640, "height": 360, "fps": 30 },
         "timing": "v2",
@@ -2210,16 +1478,6 @@ mod tests {
         );
     }
 
-    /// A `CameraPan` `SlideTransition` genuinely translates each side's
-    /// foreground across the frame as part of compositing — up to the full
-    /// `world-position` delta between the two scenes, commonly close to a
-    /// full viewport width. Both shapes below are only ~270px from the
-    /// opposite edge of a 640px-wide frame — well inside the 500px pan this
-    /// transition declares — so a naive fold-then-bounds-check would flag
-    /// both of them as leaving the viewport, on every single `camera_pan`
-    /// transition, which is that mechanism working as designed, not a
-    /// defect. `validate_geometry_transitions` must report nothing at all
-    /// for a `CameraPan` side.
     #[test]
     fn camera_pan_slide_transition_sides_are_not_reported() {
         let json = r##"{
@@ -2255,29 +1513,8 @@ mod tests {
         );
     }
 
-    // ─── Round 4 audit, constat 4: a `world` scene without its own `layout`
-    // must be validated against the SAME centred-column root layout
-    // `render_world_frame_scaled` synthesizes, not the plain top-aligned
-    // slide default ─────────────────────────────────────────────────────
-
     #[test]
     fn layoutless_world_scene_uses_the_centred_root_not_the_slide_default() {
-        // A single in-flow (no `position`) 1000×100 shape, wider than the
-        // 800px-wide viewport, inside a `world` scene with no `layout` of
-        // its own. `render_world_frame_scaled` synthesizes a centred column
-        // (`align_items: center`) for exactly this case.
-        //
-        // Red-phase capture (root forced back to the slide default): bbox
-        // = {x: 0, y: 0, w: 1000, h: 100}, hint "current right edge is
-        // 1000" — `align_items` unset resolves start-aligned for an item
-        // with an explicit size, so the shape sits at x=0, right edge=1000.
-        //
-        // Under the CORRECT (world-default, centred) root, a 1000px item in
-        // an 800px-wide container centres at x=(800-1000)/2=-100: bbox
-        // x=[-100,900]. Still a single-axis (X) overflow — both edges are
-        // crossed, but `Axis::Both` means "X and Y both overflow", not "X
-        // overflows on both sides" — but the reported bbox.x is materially
-        // different (-100 vs 0) and, before this fix, wrong.
         let json = r##"{
             "video": { "width": 800, "height": 600 },
             "composition": [{
@@ -2310,8 +1547,6 @@ mod tests {
 
     #[test]
     fn shape_past_right_edge_triggers_x_overflow() {
-        // A 400×100 shape positioned at x=1700 in a 1920-wide viewport spills
-        // 180 px past the right edge.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -2353,8 +1588,6 @@ mod tests {
 
     #[test]
     fn unwrappable_text_in_narrow_card_is_flagged() {
-        // A card 200 px wide with a 96 px font-size unwrapped text. Natural
-        // width far exceeds 200, so we should get UnwrappableTextOverflow.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -2386,21 +1619,8 @@ mod tests {
         assert_eq!(v.axis, Axis::X);
     }
 
-    // ─── Round 4 audit, constat 3: unwrappable_text_overflow must respect a
-    // clipping ancestor exactly like check_viewport/check_content_overflows_box
-    // already do ───────────────────────────────────────────────────────────
-
     #[test]
     fn unwrappable_text_is_suppressed_under_a_clipping_ancestor_card() {
-        // Same headline fixture as `unwrappable_text_in_narrow_card_is_flagged`
-        // (a 200px card, 96px nowrap text, natural width far exceeding 200px)
-        // but the card now clips (`overflow: hidden`): the text genuinely
-        // gets cropped to the card's edge at paint time, so nothing overflows
-        // on screen — geometry-safety.md promises this is exempt ("A node is
-        // also exempt when it clips itself, or when any ancestor clips it"),
-        // and `check_viewport`/`check_content_overflows_box` already honour
-        // it. This is a CORRECT scenario (the clip makes the excess
-        // invisible) that the validator wrongly rejected before this fix.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -2430,10 +1650,6 @@ mod tests {
 
     #[test]
     fn unwrappable_text_still_fires_without_a_clipping_ancestor() {
-        // Regression guard: the exact pre-existing fixture from
-        // `unwrappable_text_in_narrow_card_is_flagged` (card overflow left
-        // at the default `visible`) must keep firing — the fix must only add
-        // a clip-aware exemption, not silence the check generally.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -2463,8 +1679,6 @@ mod tests {
 
     #[test]
     fn marquee_is_exempted_from_overflow() {
-        // A marquee that bleeds past the viewport: no violation should fire,
-        // marquee is by-design designed to scroll content past edges.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -2485,13 +1699,8 @@ mod tests {
         );
     }
 
-    // ─── C1: remediation hints must never name the nonexistent `wrap` field ──
-
     #[test]
     fn unwrappable_text_hint_does_not_recommend_the_nonexistent_wrap_field() {
-        // `wrap` is not a `CssStyle` field (the real property is
-        // `white-space`); recommending it in a hint is what used to drive
-        // the destructive `--fix` (C1).
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -2531,15 +1740,8 @@ mod tests {
         );
     }
 
-    // ─── H3: violation path must reference the RAW JSON index ────────────────
-
     #[test]
     fn violation_path_skips_the_raw_json_index_of_a_dropped_sibling() {
-        // Child #0 fails to deserialize (unknown component type) and is
-        // dropped. Without the H3 fix, the walker would re-enumerate the
-        // *filtered* vector and report this violation as `children[0]`,
-        // which in the raw JSON is the broken sibling, not the card that
-        // actually overflows.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -2571,8 +1773,6 @@ mod tests {
         );
     }
 
-    // ─── H4: overflow:hidden ancestor suppresses viewport checks, visible doesn't ──
-
     fn oversized_card_with_shape(overflow: &str) -> String {
         format!(
             r##"{{
@@ -2598,12 +1798,6 @@ mod tests {
 
     #[test]
     fn shape_overflow_suppressed_by_hidden_ancestor_but_not_by_visible_one() {
-        // Card at x=1700, width=400 → right edge 2100, past the 1920
-        // viewport: the card itself is still reported either way. The shape
-        // fills the card (100%/100%), so its own bbox tracks the card's.
-        // With `overflow: hidden` the shape is fully inside a clipping
-        // ancestor and must not ALSO be reported (H4). With the CSS default
-        // `overflow: visible`, nothing suppresses it.
         let hidden = parse(&oversized_card_with_shape("hidden"));
         let visible = parse(&oversized_card_with_shape("visible"));
 
@@ -2631,15 +1825,8 @@ mod tests {
         );
     }
 
-    // ─── H7: deliberate frame-bleeding typography inside a clipping plane ────
-
     #[test]
     fn oversized_type_inside_full_frame_hidden_plane_is_clean() {
-        // A full-viewport container with `overflow: hidden` — the
-        // reference "1600-style brutalist" pattern of bleeding huge type off
-        // frame. The text's own box spans from x=-100 to x=1300 in a
-        // 1080-wide viewport (bleeds on both edges) but is clipped by the
-        // plane, so it must not be reported.
         let json = r##"{
             "video": { "width": 1080, "height": 1920 },
             "scenes": [{
@@ -2666,14 +1853,8 @@ mod tests {
         );
     }
 
-    // ─── H5: static css.transform and scene.camera fold into the bbox ────────
-
     #[test]
     fn static_css_transform_is_folded_into_the_viewport_check() {
-        // Shape sits safely inside the viewport at rest (right edge 1800 <
-        // 1920), but a static `transform: translateX(200px)` pushes it out.
-        // Before H5 this was a silent false negative: geometry only looked
-        // at the taffy layout box, never at `css.transform`.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -2704,10 +1885,6 @@ mod tests {
 
     #[test]
     fn static_scene_camera_zoom_is_folded_into_the_viewport_check() {
-        // Shape sits safely inside the viewport at rest (right edge 1900 <
-        // 1920), but the scene's static 2x camera zoom (around the frame
-        // centre) pushes it out. Before H5, `scene.camera` was completely
-        // ignored by geometry.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -2736,11 +1913,6 @@ mod tests {
 
     #[test]
     fn camera_fold_is_skipped_when_scene_uses_per_plane_depth() {
-        // With a `style.depth` plane, the renderer applies a *different*,
-        // depth-scaled camera per plane instead of the single global
-        // transform `fold_static_camera` models. Applying the global formula
-        // there would be wrong, so geometry must not fold `scene.camera` in
-        // this mode.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -2765,14 +1937,8 @@ mod tests {
         );
     }
 
-    // ─── H6: --strict-anim reuses the renderer's effect resolution ───────────
-
     #[test]
     fn strict_anim_detects_slide_in_overflow() {
-        // slide_in_left eases position.x from -200 to 0; a shape resting at
-        // x=100 gets pushed to a strongly negative x during the first
-        // fraction of the preset, after opacity has started ramping up (its
-        // own keyframe window is only the first 30% of the duration).
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -2805,23 +1971,6 @@ mod tests {
 
     #[test]
     fn strict_anim_respects_a_containers_time_offset_remap() {
-        // Constat #3: `walk_anim` used to resolve effects at raw *global*
-        // scene time, ignoring any `time_scale`/`time_offset` remap
-        // accumulated from ancestor containers — even though the renderer
-        // (`box_builder::build_child`) always resolves at the *local*
-        // remapped time (`t_local = scale * t_global + shift`).
-        //
-        // Here the shape's `slide_in_left` (delay=0, duration=1.0) sits
-        // inside a `flex` with `time_offset: -5.0`, which (per
-        // `rustmotion/src/tests.rs`'s time-remap tests) shifts local time to
-        // `t_local = t_global + 5.0`. Every sample in this 2s scene
-        // (t_global in [0, 2]) therefore resolves at local time in [5, 7] —
-        // 5-7s past the 1s animation window, fully settled at rest (x=100,
-        // well inside the 1920px-wide viewport). A walker that ignores the
-        // remap instead resolves at raw t_global in [0, 2], still inside the
-        // animation's own [0, 1] window for the first half of the scene,
-        // and reports a slide-in overflow that never actually happens at
-        // render time.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -2860,17 +2009,6 @@ mod tests {
 
     #[test]
     fn strict_anim_start_at_and_effect_delay_do_not_double_shift_the_timeline() {
-        // A component with BOTH `start_at` (visibility gate) and a matching
-        // animation `delay` — a common authoring pattern ("appear and
-        // animate in at the same moment"). The old hand-rolled fork
-        // re-based time by subtracting start_at *again* before resolving
-        // the preset, which is already absolute-time-shifted by its own
-        // `delay`. That double shift pushed every sample right after
-        // start_at below the preset's first keyframe, resolving to the
-        // untouched opacity=0 state and silently discarding a genuine
-        // overflow through the opacity guard (H6). Reusing
-        // `resolve_props_for_effects` at raw (absolute) scene time — like
-        // the renderer does — must not reproduce that.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -2903,11 +2041,6 @@ mod tests {
 
     #[test]
     fn strict_anim_respects_start_at_gate_before_visibility() {
-        // A short slide-in (delay=0, duration=0.3s) settles well before
-        // start_at=1.5s makes the component visible in a 2s scene. Once
-        // visible, effects resolve at absolute time — by t=1.5 the preset
-        // finished at t=0.3, so props are already at rest. Nothing should
-        // be flagged.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -2935,32 +2068,8 @@ mod tests {
         );
     }
 
-    // ─── Round 4 audit, constat 2: --strict-anim must resolve `timeline`
-    // style states and audio-reactive transforms — both gated on
-    // `local_actx.is_some()` in `build_child`, which was always `None`
-    // here ────────────────────────────────────────────────────────────────
-
     #[test]
     fn strict_anim_catches_a_brief_excursion_a_40_sample_cap_would_miss() {
-        // A 100×100 shape resting safely at x=100 (box x=[100,200]) in a
-        // 20s scene, with `slide_in_left` (delay=9.85s, duration=1.0s):
-        // `position.x` eases from -200 to 0 via EaseOutCubic, so the box
-        // only crosses the left edge (x < -0.5) for the FIRST ~20% of the
-        // 1s window (t in [9.85, ~10.06]) — a ~206ms excursion, while
-        // opacity has already ramped past its own [9.85, 10.15] fade-in
-        // window's midpoint by then (so it isn't filtered as invisible).
-        //
-        // With the OLD `ANIM_MAX_SAMPLES=40` cap, this 20s scene sampled at
-        // step 20/39 ≈ 0.513s — grid points at k·0.513s land at
-        // t=9.744 (k=19) and t=10.256 (k=20), straddling the whole ~206ms
-        // excursion without a single sample landing inside it. Confirmed by
-        // temporarily reverting the cap to 40 during development: this
-        // fixture produced ZERO violations (`violations: []`) — the exact
-        // false negative constat 8 describes.
-        //
-        // With the new 480-sample cap (step ≈ 0.042s), a sample lands well
-        // inside the excursion — this run finds one at t=9.94s with
-        // bbox.x≈-52.16 (tx≈-152 relative to the resting x=100).
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -3001,19 +2110,6 @@ mod tests {
 
     #[test]
     fn strict_anim_detects_a_timeline_width_step_that_overflows_later_in_the_scene() {
-        // A 200×100 shape, safely inside a 1920×1080 viewport at rest
-        // (x=[100,300]). A `timeline` step at t=1.0s grows `style.width` to
-        // 1900px — box_builder's `apply_style_states` runs on the CSS
-        // *before* layout, so this is a genuine box-model change, not a
-        // paint-only transform: at t>=1.0s the real render lays out a
-        // 1900px-wide box at x=100, right edge 2000 — 80px past the
-        // 1920px-wide frame.
-        //
-        // The OLD `--strict-anim` walker built its box tree ONCE with
-        // `anim: None` (so `apply_style_states` only ever evaluated at
-        // t=0, before the step's `at`) and never rebuilt it per sample —
-        // every one of the 16 samples in this 2s scene measured the
-        // resting 200px-wide box, so this never got flagged.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -3045,19 +2141,6 @@ mod tests {
         assert_eq!(v.axis, Axis::X);
     }
 
-    // ─── Round 4 audit, constat 9: --strict-anim must model rotation (and
-    // any other transform `apply_animated_props` bakes into `css.transform`),
-    // not just translate_x/y and scale_x/y ─────────────────────────────────
-
-    /// Every render path now clamps at `scene.freeze_at` (#164, `SceneTime`),
-    /// so nothing past it is ever rendered. Sampling beyond it therefore
-    /// reports a violation the video cannot contain — a false positive that
-    /// blocks a correct scenario and sends a generator "fixing" something
-    /// that was never wrong.
-    ///
-    /// Same fixture as the spin test below, frozen at 0.05s: the square only
-    /// leaves the frame once the rotation has turned far enough, well after
-    /// the freeze.
     #[test]
     fn strict_anim_does_not_sample_past_freeze_at() {
         let json = r##"{
@@ -3088,25 +2171,8 @@ mod tests {
         );
     }
 
-    /// The mirror: without the freeze, the very same fixture must still be
-    /// caught. Otherwise the bound above would be silencing real overflow
-    /// rather than removing an unreachable sample.
     #[test]
     fn strict_anim_detects_a_spin_animation_pushing_a_square_off_screen() {
-        // Same headline numbers as the static-transform regression
-        // `static_rotation_is_folded_into_the_viewport_check`: a 100×100
-        // square at (1810, 490) in a 1920×1080 viewport — resting box
-        // x=[1810,1910], 10px inside the right edge. `spin` animates
-        // `rotation` linearly 0deg->360deg over the 2s scene; ANY sampled
-        // angle away from a multiple of 90deg grows the AABB half-width
-        // beyond 50px * (|cos|+|sin|) > 50px, pushing the right edge past
-        // 1920 (e.g. at 20deg: half-width ~64.1px, right edge ~1924).
-        //
-        // The OLD `transform_bbox` only read `translate_x/y`/`scale_x/y`
-        // from `AnimatedProperties` — a pure-rotation preset leaves both at
-        // their identity values (0 and 1), so every sample folded to
-        // exactly the resting bbox and this never fired, at any sample,
-        // for the whole 2s sweep through 360 degrees.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -3166,12 +2232,6 @@ mod tests {
 
     #[test]
     fn anim_sample_times_keeps_the_8_per_second_cadence_up_to_60s() {
-        // Round 4 audit, constat 8: with the old ANIM_MAX_SAMPLES=40 cap,
-        // the step between samples grew linearly past a 5s scene —
-        // 20s/39 ≈ 0.513s at 20s, 40s/39 ≈ 1.026s at 40s, 60s/39 ≈ 1.538s
-        // at 60s (the exact numbers the audit cited). With the raised cap
-        // (480), the step stays pinned near the promised 1/8s = 0.125s
-        // resolution across the same range.
         for duration in [20.0, 40.0, 60.0] {
             let samples = anim_sample_times(duration);
             let step = duration / (samples.len() - 1) as f64;
@@ -3198,7 +2258,7 @@ mod tests {
                 i
             ));
         }
-        children.pop(); // trailing comma
+        children.pop();
         let json = format!(
             r##"{{"video":{{"width":1920,"height":1080}},
                 "scenes":[{{"duration":60.0,"children":[{children}]}}]}}"##
@@ -3217,33 +2277,8 @@ mod tests {
         );
     }
 
-    // ─── H4 (second half): content larger than its own content box ───────────
-    //
-    // The first half of H4 (already fixed above) suppresses a *viewport*
-    // check when a clipping ancestor is in the way. This half is a different
-    // bug: a box can sit entirely inside the viewport and still have content
-    // that paints outside *itself*, because text painters never clip their
-    // own overflow and `overflow: visible` (the CSS default) applies no clip
-    // in the paint pass. `check_viewport` alone never sees this.
-
     #[test]
     fn wrapped_text_taller_than_its_fixed_height_card_is_flagged() {
-        // Exact repro from the audit: a card comfortably inside a 960x540
-        // frame (x=330,y=100,w=300,h=80 -> right/bottom edges 630/180, both
-        // well inside frame) with a paragraph that, wrapped at the card's
-        // ~300px content width, needs ~343px of height — but the card is
-        // fixed at 80px.
-        //
-        // `y=100` (not the card's own bottom edge) leaves headroom for the
-        // text's own post-layout box, which — since `fix(css): default
-        // flex-direction to column when unset` — grows to that full ~343px
-        // instead of being clamped to the card's 80px: at `y=100` its
-        // bottom (~443) still lands well inside the 540px frame, so
-        // `check_viewport` stays quiet and this exercises `ContentOverflowsBox`
-        // in isolation. A shallower `y` would make the grown box cross the
-        // frame edge for real and pull `ViewportOverflow` into this fixture
-        // too — see `spilling_past_a_visible_card_is_still_caught_when_it_
-        // leaves_the_viewport` for that (intentional) case.
         let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
  "scenes":[{"duration":1.0,"children":[
    {"type":"card","position":"absolute","x":330,"y":100,
@@ -3253,9 +2288,6 @@ mod tests {
       "style":{"font-size":44,"color":"#ffffff"}}]}]}]}"##;
         let scenario = parse(json);
 
-        // Sanity check: this scenario must NOT already fail some other way
-        // (e.g. viewport overflow) — the whole point is that it looks clean
-        // to every other check.
         let viewport_violations: Vec<_> = validate_geometry(&scenario)
             .into_iter()
             .filter(|v| v.kind == ViolationKind::ViewportOverflow)
@@ -3292,25 +2324,6 @@ mod tests {
 
     #[test]
     fn unbreakable_long_token_wider_than_its_box_is_flagged_even_with_wrap_on() {
-        // A single unbroken run with no whitespace or punctuation break
-        // opportunities (a long hash/id, not a URL — cosmic-text's wrapper
-        // treats `/`/`-` as break points, which would defeat the test)
-        // can't be broken by word-wrap, so even with the CSS default
-        // `white-space: normal`, it paints wider than a too-narrow box.
-        //
-        // Note the explicit `width: 150px` directly on the *text*, not just
-        // the card: empirically, an auto-sized flex child's cross-axis width
-        // floors at its min-content size (the widest unbreakable run) and
-        // simply escapes a non-clipping parent instead of being clamped —
-        // correct CSS flex behavior (`min-width: auto` on flex items), and
-        // not a bug this check is meant to catch (an element escaping a
-        // *non-clipping* intermediate container, while staying inside the
-        // viewport, is ordinary CSS — check_viewport is the check for hard
-        // frame-edge violations). An *explicit* size is a hard author
-        // constraint that IS supposed to be honored exactly regardless of
-        // content — cosmic-text still overflows it, which is the real bug.
-        // Card is tall enough that height is not the issue — only width
-        // should fire.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -3349,10 +2362,6 @@ mod tests {
 
     #[test]
     fn wrapped_text_that_fits_its_box_is_not_flagged() {
-        // Passing-case guard: same paragraph as the failing test above, but
-        // the card is tall enough (400px) to hold the ~343px wrapped
-        // content — must NOT fire. Proves the check compares against the
-        // actual resolved box, not some fixed threshold.
         let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
  "scenes":[{"duration":1.0,"children":[
    {"type":"card","position":"absolute","x":330,"y":80,
@@ -3371,19 +2380,6 @@ mod tests {
         );
     }
 
-    /// RM-34 regression: the exact repro that surfaced the hole opened by
-    /// `fix(css): default flex-direction to column when unset` (8afc4c1).
-    /// Before that commit, `align-items: stretch` clamped this lone child's
-    /// CROSS axis (height, under the old row default) to the card's
-    /// declared 80px, so `check_content_overflows_box`'s self-vs-self
-    /// comparison caught the mismatch as a side effect. After 8afc4c1 the
-    /// child's MAIN axis (height, under the new column default) isn't
-    /// clamped by `stretch` at all — its own post-layout box grows to match
-    /// its content exactly (343px), making the self-comparison vacuous and
-    /// this fixture validate clean. Distinct from
-    /// `wrapped_text_taller_than_its_fixed_height_card_is_flagged` only in
-    /// using the audit's own numbers (1920x1080, not 960x540) — kept
-    /// alongside it as the fixture actually quoted in the audit report.
     #[test]
     fn in_flow_text_grown_past_its_cards_declared_height_is_flagged() {
         let json = r##"{"video":{"width":1920,"height":1080,"fps":30,"background":"#0A0A12"},
@@ -3422,11 +2418,6 @@ mod tests {
 
     #[test]
     fn content_overflow_is_suppressed_under_a_clipping_ancestor() {
-        // Same overflowing paragraph/80px-card fixture, but the card clips
-        // via `overflow: hidden` — the paragraph genuinely gets clipped at
-        // paint time, so reporting it would be a false positive, consistent
-        // with the parent_clips suppression already applied to
-        // check_viewport.
         let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
  "scenes":[{"duration":1.0,"children":[
    {"type":"card","position":"absolute","x":330,"y":200,
@@ -3447,11 +2438,6 @@ mod tests {
 
     #[test]
     fn content_overflow_is_suppressed_when_the_node_clips_itself() {
-        // Same fixture, but this time the TEXT node itself (not the card)
-        // declares `overflow: hidden`. paint_pass applies a node's own
-        // overflow clip before painting its own content (step 4, before
-        // step 8's component-specific paint) — self-clipping is real, so
-        // this must not be flagged either.
         let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
  "scenes":[{"duration":1.0,"children":[
    {"type":"card","position":"absolute","x":330,"y":200,
@@ -3472,11 +2458,6 @@ mod tests {
 
     #[test]
     fn nowrap_text_is_not_double_reported_by_content_overflows_box() {
-        // The nowrap/pre case belongs entirely to check_unwrappable_text;
-        // this check must defer to it rather than also firing (which would
-        // both double-report the same real bug AND compute a height number
-        // that doesn't correspond to what nowrap actually paints — a single
-        // line, not a wrapped block).
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -3507,18 +2488,8 @@ mod tests {
             .any(|v| v.kind == ViolationKind::UnwrappableTextOverflow));
     }
 
-    // ─── #128 item 3: rotation/skew fold into the bbox ────────────────────────
-
     #[test]
     fn static_rotation_is_folded_into_the_viewport_check() {
-        // 100×100 shape at (1810, 490) in a 1920×1080 viewport: at rest the
-        // box spans x=[1810,1910], comfortably inside (10px margin). A
-        // static 45° rotation about the box centre grows the AABB to a
-        // half-diagonal of 100/√2*√2 ≈ 70.7px on every side (a square
-        // rotated 45° has an AABB side of w·√2), pushing the right edge to
-        // ~1930.7 — past the 1920 frame. Before #128 item 3, Rotate/RotateZ
-        // were silently dropped by `apply_static_node_transform`, so this
-        // validated clean.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -3552,12 +2523,6 @@ mod tests {
 
     #[test]
     fn static_skew_is_folded_into_the_viewport_check() {
-        // 50×200 shape at (1850, 400): at rest x=[1850,1900], well inside
-        // 1920. `skew-x: 45deg` (tan 45° = 1) shifts each corner's x by its
-        // y-offset-from-centre: the bottom-right corner (x-offset +25,
-        // y-offset +100) moves to +125, landing at world x = 1875+125 = 2000
-        // — past the frame. Before #128 item 3, Skew/SkewX/SkewY were
-        // silently dropped, so this validated clean.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -3589,23 +2554,8 @@ mod tests {
         assert_eq!(v.axis, Axis::X, "only the x-axis should overflow: {:?}", v);
     }
 
-    // ─── Round 4 audit, constat 5: `transform-origin` must pivot the static
-    // transform fold, not always the box centre ─────────────────────────────
-
     #[test]
     fn transform_origin_right_edge_keeps_a_scaled_shape_inside_the_viewport() {
-        // 100×100 shape at (880, 450) in a 1000×1000 viewport: at rest,
-        // x=[880,980] — comfortably inside, 20px margin. `scale(x: 3)`
-        // pivoted at `transform-origin: { x: "right" }` (the box's own right
-        // edge, 100%) grows the box purely leftward from that fixed edge:
-        // left corner offset from pivot (980) is -100, ×3 = -300 -> new x =
-        // 680; right corner offset is 0 -> stays at 980. Correct AABB:
-        // x=[680,980], fully inside [0,1000] — this scenario is CORRECT.
-        //
-        // Before this fix, `apply_static_node_transform` always pivoted at
-        // the box centre (930): left corner offset -50×3=-150 -> x=780;
-        // right corner offset +50×3=+150 -> x=1080 — 80px past the 1000-wide
-        // frame, a false positive (captured in the red-phase run below).
         let json = r##"{
             "video": { "width": 1000, "height": 1000 },
             "scenes": [{
@@ -3638,10 +2588,6 @@ mod tests {
 
     #[test]
     fn transform_origin_50pct_is_identical_to_the_default_centre_pivot() {
-        // Sanity/regression guard: an *explicit* `transform-origin: 50% 50%`
-        // must fold to exactly the same AABB as no `transform-origin` at all
-        // — same fixture and expectation as
-        // `static_rotation_is_folded_into_the_viewport_check`.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -3681,10 +2627,6 @@ mod tests {
 
     #[test]
     fn unrotated_transform_folding_is_unchanged_by_the_corner_based_rewrite() {
-        // Regression guard for the H5 rewrite: a translate-only transform
-        // (no rotation/skew involved) must still behave exactly like the
-        // old translate/scale-only formula — same fixture as
-        // `static_css_transform_is_folded_into_the_viewport_check`.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -3713,14 +2655,8 @@ mod tests {
         );
     }
 
-    // ─── #128 item 1: content-overflows-box generalized beyond `text` ────────
-
     #[test]
     fn gradient_text_taller_than_its_fixed_height_card_is_flagged() {
-        // Same exact repro as `wrapped_text_taller_than_its_fixed_height_card_is_flagged`
-        // but for `gradient_text` — proves `check_content_overflows_box` no
-        // longer only matches `Component::Text` (#128 item 1: "content
-        // overflow is checked for text only").
         let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
  "scenes":[{"duration":1.0,"children":[
    {"type":"card","position":"absolute","x":330,"y":200,
@@ -3743,32 +2679,8 @@ mod tests {
         assert_eq!(v.axis, Axis::Y);
     }
 
-    // ─── Round 4 audit, constat 7: `ContentOverflowsCard` (#128 item 2) is
-    // retired — a component escaping a non-clipping (`overflow: visible`,
-    // the default) card is the exact "badge sticking out of a card is
-    // legal" pattern CLAUDE.md / geometry-safety.md document as fine, so the
-    // validator must accept it, not report it. See the module doc comment's
-    // "Deliberately NOT in scope" note and `walk`'s retired call site for
-    // the full reasoning. These fixtures are the same ones that used to
-    // assert the (wrong) opposite — kept, with flipped assertions, as
-    // regression coverage across component types (text/table/nested
-    // card/bleed) now that the check is gone. ────────────────────────────
-
     #[test]
     fn absolutely_positioned_text_spilling_past_a_visible_card_is_legal() {
-        // The audit's original headline repro for #128 item 2: a text with
-        // no fixed height, inside a card, grows to its natural (unclamped)
-        // size because it's taken out of flex flow (`position: absolute`)
-        // — its OWN box already matches its OWN content exactly (so
-        // `ContentOverflowsBox` must NOT fire), and that box spills past
-        // the 80px-tall card it lives in. The card's `overflow` is
-        // `visible` (the documented default that permits exactly this) —
-        // per constat 7, `ContentOverflowsCard` must no longer fire here.
-        //
-        // Red-phase (before this fix): validate_geometry reported one
-        // ContentOverflowsCard violation for this fixture (component:
-        // "text", axis: Y, hint mentioning "extends past its containing
-        // card") — captured when this test asserted the opposite.
         let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
  "scenes":[{"duration":1.0,"children":[
    {"type":"card","position":"absolute","x":330,"y":100,
@@ -3802,13 +2714,6 @@ mod tests {
         );
     }
 
-    /// The guarantee that makes retiring `ContentOverflowsCard` safe rather
-    /// than merely defensible: escaping a visible card is legal, but
-    /// escaping the *device* never is, and that is `check_viewport`'s job —
-    /// not the retired check's. Same fixture as
-    /// `absolutely_positioned_text_spilling_past_a_visible_card_is_legal`,
-    /// moved down the frame so the overspill leaves the viewport. If this
-    /// ever stops firing, the removal has opened a real blind spot.
     #[test]
     fn spilling_past_a_visible_card_is_still_caught_when_it_leaves_the_viewport() {
         let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
@@ -3833,13 +2738,6 @@ mod tests {
 
     #[test]
     fn in_flow_table_taller_than_its_card_is_flagged_via_content_overflows_box() {
-        // #128 item 1's third repro: a table with enough rows that its
-        // natural (header + rows) height exceeds a small fixed-height card.
-        // As an ordinary in-flow flex child, taffy shrinks the table's own
-        // assigned box down to the card's 60px (same shrink-to-fit behaviour
-        // already established for `text`), so this surfaces via the
-        // generalized `ContentOverflowsBox` (own box too small for own
-        // content).
         let rows: String = (1..=15)
             .map(|i| format!(r#"["{i}a","{i}b","{i}c"]"#))
             .collect::<Vec<_>>()
@@ -3879,10 +2777,6 @@ mod tests {
 
     #[test]
     fn absolutely_positioned_table_spilling_past_a_visible_card_is_legal() {
-        // Same table, but taken out of flex flow (`position: absolute`) so
-        // its own box isn't shrunk to fit the card — the card's `overflow`
-        // is `visible` (the default), so per constat 7 this must validate
-        // clean.
         let rows: String = (1..=15)
             .map(|i| format!(r#"["{i}a","{i}b","{i}c"]"#))
             .collect::<Vec<_>>()
@@ -3921,10 +2815,6 @@ mod tests {
 
     #[test]
     fn nested_card_bigger_than_its_visible_outer_card_is_legal() {
-        // A card nested inside another (default/`visible`-overflow) card,
-        // itself bigger than the outer one it lives in — per constat 7 this
-        // is the same "sticking out on purpose" pattern, now legal for any
-        // component type, cards included.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -3955,15 +2845,6 @@ mod tests {
 
     #[test]
     fn content_overflowing_a_clipping_card_is_also_not_flagged() {
-        // Same headline repro, but the card clips (`overflow: hidden`) —
-        // the text genuinely gets clipped at paint time, so
-        // ContentOverflowsCard must not fire either, consistent with the
-        // `parent_clips` suppression already applied to
-        // check_viewport/check_content_overflows_box. Distinct from the
-        // `visible` fixtures above: this is the OTHER half of the "no
-        // configuration where it's both reachable and correct to fire"
-        // argument (constat 7) — a clipping card suppresses it for an
-        // unrelated reason (parent_clips), not because of the retirement.
         let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
  "scenes":[{"duration":1.0,"children":[
    {"type":"card","position":"absolute","x":330,"y":100,
@@ -3984,8 +2865,6 @@ mod tests {
 
     #[test]
     fn component_that_fits_its_card_is_not_flagged() {
-        // Passing-case guard: a component small enough for its card — must
-        // not fire.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -4013,13 +2892,7 @@ mod tests {
         );
     }
 
-    // ─── #120: opt-in `bleed: true` exempts viewport/animated overflow only ──
-
     fn bleeding_shape_json(bleed: bool) -> String {
-        // Identical to `shape_past_right_edge_triggers_x_overflow`'s fixture
-        // (a 400×100 shape at x=1700, spilling 180px past the 1920-wide
-        // viewport) plus the top-level `bleed` field under test — mirrors
-        // the reference films' radial-glow base layer.
         format!(
             r##"{{
                 "video": {{ "width": 1920, "height": 1080 }},
@@ -4052,10 +2925,6 @@ mod tests {
 
     #[test]
     fn identical_fixture_without_bleed_still_errors() {
-        // Same fixture, `bleed` omitted (defaults to false) — proves the
-        // default doesn't change existing behaviour and that the exemption
-        // above is actually driven by the field, not something else in the
-        // fixture.
         let scenario = parse(&bleeding_shape_json(false));
         let violations = validate_geometry(&scenario);
         assert!(
@@ -4069,12 +2938,6 @@ mod tests {
 
     #[test]
     fn bleed_true_does_not_exempt_content_overflows_box() {
-        // Exact fixture from `wrapped_text_taller_than_its_fixed_height_card_is_flagged`
-        // (a card comfortably inside frame, wrapping a paragraph that needs
-        // ~343px but the card is fixed at 80px tall) with `bleed: true`
-        // added to the text — content larger than its own box is a
-        // different defect than crossing the viewport edge, and must stay
-        // reported regardless of `bleed` (per #120's explicit non-goal).
         let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
  "scenes":[{"duration":1.0,"children":[
    {"type":"card","position":"absolute","x":330,"y":200,
@@ -4095,13 +2958,6 @@ mod tests {
 
     #[test]
     fn bleed_on_a_parent_does_not_suppress_a_childs_viewport_overflow() {
-        // A container declares `bleed: true` and sits entirely inside the
-        // frame itself (x=50,y=50, 200×200 — no overflow of its own). Its
-        // child shape is absolutely positioned far enough (relative to the
-        // container's own box) to spill past the 1920-wide viewport on its
-        // own merits. `bleed` lives on the child's own `ChildComponent`, one
-        // per component instance — the parent's `bleed: true` must not reach
-        // down into the child's, which was never set.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -4141,11 +2997,6 @@ mod tests {
 
     #[test]
     fn bleed_true_exempts_animated_text_overflow_too() {
-        // Same animation-overflow fixture as `strict_anim_detects_slide_in_overflow`
-        // (slide_in_left pushes a resting shape at x=100 strongly negative
-        // during the first fraction of the preset) with `bleed: true` added
-        // — `--strict-anim`'s AnimatedTextOverflow must be exempted exactly
-        // like the resting-layout ViewportOverflow check.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -4175,22 +3026,8 @@ mod tests {
         );
     }
 
-    // ─── text-autofit: Vérification point 4 ─────────────────────────────
-    //
-    // "Un scénario qui déborde aujourd'hui doit valider après, avec
-    // l'ajustement déclaré — et un scénario sans ajustement doit continuer
-    // à déborder et à être signalé." These reuse the exact same fixtures as
-    // the pre-existing `ContentOverflowsBox`/`UnwrappableTextOverflow`
-    // tests above (`wrapped_text_taller_than_its_fixed_height_card_is_flagged`,
-    // `unwrappable_text_in_narrow_card_is_flagged`), adding only
-    // `text-autofit: true`, so the "before"/"after" pair is a controlled
-    // comparison rather than two unrelated fixtures.
-
     #[test]
     fn text_autofit_resolves_a_content_overflow_that_would_otherwise_fire() {
-        // Same fixture as `wrapped_text_taller_than_its_fixed_height_card_is_flagged`
-        // (a paragraph that needs ~343px of height inside an 80px-tall
-        // card), with `text-autofit: true` added.
         let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
  "scenes":[{"duration":1.0,"children":[
    {"type":"card","position":"absolute","x":330,"y":200,
@@ -4212,9 +3049,6 @@ mod tests {
 
     #[test]
     fn without_text_autofit_the_same_fixture_still_overflows() {
-        // Control for the test above: identical fixture, no `text-autofit`
-        // — must still report `ContentOverflowsBox` exactly like
-        // `wrapped_text_taller_than_its_fixed_height_card_is_flagged`.
         let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
  "scenes":[{"duration":1.0,"children":[
    {"type":"card","position":"absolute","x":330,"y":200,
@@ -4235,12 +3069,6 @@ mod tests {
 
     #[test]
     fn text_autofit_does_not_silence_an_overflow_the_floor_cannot_fix() {
-        // The floor stops the shrink before it can ever make this fit: the
-        // same paragraph crammed into an 8px-tall card. `text-autofit`
-        // narrows the overflow class, it does not eliminate every
-        // overflow — this must stay reported, per the brief's explicit
-        // requirement that a still-too-small box remains a signalled
-        // violation, not a silence.
         let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
  "scenes":[{"duration":1.0,"children":[
    {"type":"card","position":"absolute","x":330,"y":200,
@@ -4261,10 +3089,6 @@ mod tests {
 
     #[test]
     fn text_autofit_resolves_an_unwrappable_nowrap_overflow() {
-        // Same fixture as `unwrappable_text_in_narrow_card_is_flagged` (a
-        // 96px nowrap line in a 200px-wide card), with `text-autofit: true`
-        // added — this is `check_unwrappable_text`'s territory, not
-        // `check_content_overflows_box`'s.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -4294,7 +3118,6 @@ mod tests {
     }
 }
 
-/// M4 (issue #110 / #102): legibility floor tests.
 #[cfg(test)]
 mod legibility_tests {
     use super::*;
@@ -4306,8 +3129,6 @@ mod legibility_tests {
 
     #[test]
     fn tiny_font_on_1080p_warns() {
-        // 11px on a 1080p frame is the audit's own worked example of
-        // unreadable text (~1.0% of height, well under the 1.2% floor).
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -4330,12 +3151,6 @@ mod legibility_tests {
         );
     }
 
-    /// `text-autofit`'s shrink floor is pinned to a 1080-tall reference so
-    /// measure and paint agree on it; this legibility floor is relative to
-    /// the real frame. On a taller canvas the two diverge, and a declared
-    /// size well above the floor can still render illegibly. Without this
-    /// warning that case passes in silence — the exact failure mode autofit
-    /// is supposed to remove, not relocate.
     #[test]
     fn autofit_on_a_taller_than_1080_canvas_warns_that_it_may_shrink_below_legibility() {
         let json = r##"{
@@ -4360,16 +3175,10 @@ mod legibility_tests {
             "got: {}",
             warnings[0]
         );
-        // Both numbers must be named: what it can shrink to, and the floor
-        // it would fall under. A warning that says neither is unactionable.
         assert!(warnings[0].contains("13px"), "got: {}", warnings[0]);
         assert!(warnings[0].contains("26px"), "got: {}", warnings[0]);
     }
 
-    /// The mirror case, and the reason the warning is conditional rather
-    /// than unconditional: at 1080 the pinned floor already sits at the
-    /// legibility threshold, so there is nothing to warn about and doing so
-    /// would be noise on every autofitting text in the common canvas.
     #[test]
     fn autofit_on_a_1080_canvas_does_not_warn() {
         let json = r##"{
@@ -4393,8 +3202,6 @@ mod legibility_tests {
         );
     }
 
-    /// A component whose painter ignores `text-autofit` must never draw the
-    /// warning: it cannot shrink, so the shrink cannot make it illegible.
     #[test]
     fn autofit_declared_on_a_component_that_ignores_it_does_not_warn() {
         let json = r##"{
@@ -4417,8 +3224,6 @@ mod legibility_tests {
 
     #[test]
     fn default_sized_text_on_1080p_has_no_legibility_warning() {
-        // No style.font-size override: falls back to text's own 48px
-        // default, comfortably above the floor.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -4437,8 +3242,6 @@ mod legibility_tests {
 
     #[test]
     fn default_table_on_1080p_does_not_warn() {
-        // 14px default must clear the floor so this check doesn't spam
-        // every scenario that never touched style.font-size.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -4455,9 +3258,6 @@ mod legibility_tests {
 
     #[test]
     fn same_absolute_px_warns_more_readily_on_a_taller_frame() {
-        // The floor is a fraction of output height, so the same 20px text
-        // that's fine on 1080p (1.85%) should warn on a much taller canvas
-        // where 20px is proportionally tiny.
         let json = r##"{
             "video": { "width": 1080, "height": 4000 },
             "scenes": [{
@@ -4543,8 +3343,6 @@ mod legibility_tests {
     }
 }
 
-/// Issue #336: `off_grid_cut` — an advisory warning when `bpm` is set and a
-/// resolved cut does not land on the beat grid.
 #[cfg(test)]
 mod off_grid_cut_tests {
     use super::*;
@@ -4556,8 +3354,6 @@ mod off_grid_cut_tests {
 
     #[test]
     fn no_bpm_means_no_warnings_regardless_of_cut_placement() {
-        // 0.62s is deliberately off any plausible grid — but with no `bpm`
-        // declared, there is no grid to be off of.
         let json = r##"{
             "video": {"width": 64, "height": 64, "fps": 20},
             "scenes": [
@@ -4570,8 +3366,6 @@ mod off_grid_cut_tests {
 
     #[test]
     fn cut_exactly_on_the_beat_does_not_warn() {
-        // bpm=120 -> 0.5s/beat. Scene 0 is exactly 1.0s (two beats), so the
-        // cut into scene 1 lands exactly on beat 2.
         let json = r##"{
             "video": {"width": 64, "height": 64, "fps": 20},
             "bpm": 120,
@@ -4588,8 +3382,6 @@ mod off_grid_cut_tests {
 
     #[test]
     fn off_grid_cut_is_named_and_located() {
-        // bpm=120 -> 0.5s/beat. Scene 0 is 0.62s, so the cut into scene 1
-        // lands at 0.62s — 0.12s off the nearest beat (0.5s).
         let json = r##"{
             "video": {"width": 64, "height": 64, "fps": 20},
             "bpm": 120,
@@ -4610,11 +3402,6 @@ mod off_grid_cut_tests {
 
     #[test]
     fn snap_beat_on_an_explicit_at_silences_the_warning() {
-        // Same off-grid 0.62s target as the test above, but expressed as an
-        // explicit `at` under `timing: "v2"` with `snap: "beat"` — the
-        // scheduler itself rounds it onto the grid, so the *resolved* cut
-        // (what this check reads) is on-grid even though the declared value
-        // was not.
         let json = r##"{
             "video": {"width": 64, "height": 64, "fps": 20},
             "timing": "v2",
@@ -4633,7 +3420,6 @@ mod off_grid_cut_tests {
 
     #[test]
     fn a_views_first_scene_never_warns() {
-        // No cut *into* the first scene of a view — nothing to check.
         let json = r##"{
             "video": {"width": 64, "height": 64, "fps": 20},
             "bpm": 120,

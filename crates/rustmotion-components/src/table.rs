@@ -24,7 +24,6 @@ pub enum ColumnAlign {
 }
 
 pub(crate) const DEFAULT_FONT_SIZE: f32 = 14.0;
-/// row_height = DEFAULT_FONT_SIZE * 2.5
 pub(crate) const DEFAULT_ROW_HEIGHT_RATIO: f32 = 2.5;
 pub(crate) const DEFAULT_CELL_PADDING: f32 = 12.0;
 
@@ -84,12 +83,6 @@ rustmotion_core::impl_traits!(Table {
 });
 
 impl Table {
-    /// `font_size` is resolved once by the caller (`paint`, against a real
-    /// `LengthContext`) and passed in — this used to be a zero-argument
-    /// method independently re-deriving the value via the context-free
-    /// `font_size_px_or` at every call site (`row_height`, `make_font`,
-    /// `paint` itself), which is exactly the kind of duplicate computation
-    /// that let a relative unit silently diverge (lot B, wave S).
     fn row_height(&self, font_size: f32) -> f32 {
         font_size * 2.5
     }
@@ -106,18 +99,10 @@ impl Table {
         Some(skia_safe::Font::from_typeface(typeface, font_size))
     }
 
-    /// Resolve column widths: explicit widths if provided (padded with an
-    /// equal share for any column left unspecified); otherwise
-    /// [`Self::natural_column_widths`] scaled proportionally so the columns
-    /// still sum to exactly `total_w`, whatever that box actually laid out
-    /// at (which — since taffy's intrinsic measurement and this painted
-    /// width can diverge, e.g. a `card` giving the table less room than its
-    /// natural size — is not always identical to the natural total).
     fn resolve_column_widths(&self, total_w: f32, font_size: f32) -> Vec<f32> {
         let col_count = self.headers.len().max(1);
         if let Some(widths) = &self.column_widths {
             let mut result: Vec<f32> = widths.to_vec();
-            // Pad with equal-share for missing columns
             while result.len() < col_count {
                 let remaining = total_w - result.iter().sum::<f32>();
                 let remaining_cols = col_count - result.len();
@@ -135,14 +120,6 @@ impl Table {
         natural.into_iter().map(|w| w * scale).collect()
     }
 
-    /// Per-column natural width: each column's own header/cell text
-    /// (measured with the bold header font, matching `paint`'s header row)
-    /// plus `2 × cell_padding`, indexed like `headers`. Shared by
-    /// `TableIntrinsic::from_table` (which sums this for the box's natural
-    /// total width) and `resolve_column_widths` above (which scales it to
-    /// whatever width the box actually laid out at) — a single source for
-    /// the per-column distribution keeps the two from drifting apart the
-    /// way an even split and a content-fitted sum used to.
     pub(crate) fn natural_column_widths(&self, font_size: f32) -> Vec<f32> {
         let col_count = self.headers.len().max(1);
         let font_style = skia_safe::FontStyle::bold();
@@ -172,7 +149,6 @@ impl Table {
         col_widths
     }
 
-    /// Get alignment for a specific column.
     fn get_align(&self, col: usize) -> &ColumnAlign {
         self.column_align
             .as_ref()
@@ -180,7 +156,6 @@ impl Table {
             .unwrap_or(&ColumnAlign::Left)
     }
 
-    /// Compute the x position for text given alignment, cell x, cell width, text width, and padding.
     fn align_text_x(&self, col: usize, cell_x: f32, cell_w: f32, text_w: f32) -> f32 {
         let pad = self.cell_padding;
         match self.get_align(col) {
@@ -194,10 +169,6 @@ impl Table {
 impl Table {
     fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, ctx: &PaintCtx) {
         let w = layout_w;
-        // Resolved once, against the real per-frame viewport (`rem`/`vw`/
-        // `vh` on `font-size` now resolve instead of silently dropping to
-        // 0px — lot B, wave S) and threaded through every call below that
-        // used to independently re-derive it via `font_size_px_or`.
         let font_size = self.style.font_size_px_ctx(
             &crate::intrinsic::font_size_ctx(
                 ctx.video_width as f32,
@@ -215,17 +186,12 @@ impl Table {
         let text_color = self.style.color_str_or("#FFFFFF");
         let header_text_color = self.header_text_color.as_deref().unwrap_or("#FFFFFF");
         let default_row_colors = vec!["#1F2937".to_string(), "#111827".to_string()];
-        // `"row_colors": []` deserializes to Some(vec![]), not None — a generator
-        // writes it to mean "no striping". Row painting indexes this slice, so an
-        // empty one has to fall back rather than reach the painter.
         let row_colors = self
             .row_colors
             .as_ref()
             .filter(|c| !c.is_empty())
             .unwrap_or(&default_row_colors);
 
-        // Resolve fonts before the optional clip below so an early return on
-        // font failure keeps canvas save/restore balanced.
         let Some(header_font) = self.make_font(true, font_size) else {
             return;
         };
@@ -233,7 +199,6 @@ impl Table {
             return;
         };
 
-        // Clip to rounded rect if border-radius is set
         let radius_px = self.style.border_radius_px_or(0.0);
         let has_radius = radius_px > 0.0;
         if has_radius {
@@ -243,7 +208,6 @@ impl Table {
             canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
         }
 
-        // Header row
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let (_, header_metrics) = header_font.metrics();
         let header_ascent = -header_metrics.ascent;
@@ -275,7 +239,6 @@ impl Table {
             col_x += cw;
         }
 
-        // Data rows
         let (_, body_metrics) = body_font.metrics();
         let body_ascent = -body_metrics.ascent;
 
@@ -285,14 +248,12 @@ impl Table {
         for (row_idx, row) in self.rows.iter().enumerate() {
             let y_base = (row_idx + 1) as f32 * row_h;
 
-            // Row background
             let row_color_idx = row_idx % row_colors.len().max(1);
             let row_bg_color = &row_colors[row_color_idx];
             let mut row_bg = paint_from_hex(row_bg_color);
             row_bg.set_style(PaintStyle::Fill);
             canvas.draw_rect(Rect::from_xywh(0.0, y_base, w, row_h), &row_bg);
 
-            // Cell text
             let mut cx = 0.0_f32;
             for (col_idx, cell) in row.iter().enumerate() {
                 if col_idx >= col_count {
@@ -317,7 +278,6 @@ impl Table {
             }
         }
 
-        // Grid lines (only if show_borders is true)
         if self.show_borders {
             let mut border_paint = paint_from_hex(border_color);
             border_paint.set_style(PaintStyle::Stroke);
@@ -325,13 +285,11 @@ impl Table {
 
             let total_h = (1 + self.rows.len()) as f32 * row_h;
 
-            // Horizontal lines
             for i in 0..=(self.rows.len() + 1) {
                 let y = i as f32 * row_h;
                 canvas.draw_line((0.0, y), (w, y), &border_paint);
             }
 
-            // Vertical lines
             let mut vx = 0.0_f32;
             for i in 0..=col_count {
                 canvas.draw_line((vx, 0.0), (vx, total_h), &border_paint);
@@ -364,12 +322,8 @@ mod tests {
     use super::*;
     use rustmotion_core::css::Length;
 
-    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
-
     #[test]
     fn rem_font_size_paints_visible_ink() {
-        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
-        // context-free `font_size_px_or`.
         let table = Table {
             headers: vec!["A".to_string(), "B".to_string()],
             rows: vec![vec!["1".to_string(), "2".to_string()]],
@@ -422,9 +376,6 @@ mod tests {
             skia_safe::image::CachingHint::Disallow,
         );
         assert!(ok, "pixel read should succeed");
-        // Header text is white (#FFFFFF) on a #374151 header background —
-        // probe specifically for near-white text ink rather than any lit
-        // pixel (the header/row backgrounds paint regardless of font-size).
         let text_ink = buf
             .as_chunks::<4>()
             .0

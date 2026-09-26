@@ -101,15 +101,6 @@ impl Stat {
             return;
         }
 
-        // Hard containment: whatever the math below computes, nothing gets
-        // to paint past the box the layout gave this component (issue
-        // #127). `stat` used to walk a `y_cursor` from a hardcoded
-        // `pad = 20.0` — label, then value, then a sparkline with a forced
-        // `.max(20.0)` minimum height — never once consulting `h`. A short
-        // box (the audit measured 512×48) still got the same ~120px stack
-        // every time, overflowing 70+px onto the next flex sibling. The
-        // clip below is the backstop; the scaling further down is what
-        // keeps it from ever needing to bite in practice.
         canvas.save();
         canvas.clip_rect(
             Rect::from_xywh(0.0, 0.0, w, h),
@@ -117,7 +108,6 @@ impl Stat {
             true,
         );
 
-        // Background if set
         if let Some(bg) = self.style.background_color_str() {
             let mut bg_paint = paint_from_hex(bg);
             bg_paint.set_style(PaintStyle::Fill);
@@ -128,12 +118,6 @@ impl Stat {
             canvas.draw_rrect(rrect, &bg_paint);
         }
 
-        // `pad` scales down with the box instead of a fixed 20px, and the
-        // label/value font sizes are scaled by `content_scale` so the
-        // label+value stack actually fits in the room `h` gives them. Both
-        // stay at their authored size (pad=20, scale=1) whenever the box is
-        // tall enough — which is every existing example — and only shrink
-        // for a box shorter than the natural stack (like #127's 512×48).
         let pad = (h * 0.15).clamp(2.0, 20.0).min(w * 0.15).max(2.0);
         let content_h = (h - pad * 2.0).max(0.0);
 
@@ -155,7 +139,6 @@ impl Stat {
 
         let mut y_cursor = pad;
 
-        // Label (top)
         if let Some(label) = &self.label {
             let font_style = skia_safe::FontStyle::normal();
             let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
@@ -184,7 +167,6 @@ impl Stat {
             y_cursor += eff_label_fs * 1.5;
         }
 
-        // Value (large)
         {
             let font_style = skia_safe::FontStyle::bold();
             let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
@@ -211,7 +193,6 @@ impl Stat {
                 &val_paint,
             );
 
-            // Trend inline after value
             if let Some(trend) = &self.trend {
                 let val_w = measure_text_with_fallback(&self.value, &font, &emoji_font, 0.0);
                 let trend_fs = eff_value_fs * 0.4;
@@ -237,7 +218,6 @@ impl Stat {
                 let mut tx = pad + val_w + 12.0;
                 let ty = vy - eff_value_fs * 0.15 + trend_metrics.ascent * 0.2;
 
-                // Draw trend arrow icon
                 let icon_id = match trend.direction {
                     TrendDirection::Up => Some("lucide:trending-up"),
                     TrendDirection::Down => Some("lucide:trending-down"),
@@ -318,14 +298,6 @@ impl Stat {
             y_cursor += eff_value_fs * 1.2;
         }
 
-        // Sparkline (bottom) — only drawn if room is actually left. The
-        // previous `.max(20.0)` forced a sparkline into existence even when
-        // the label+value stack had already consumed the whole box, which
-        // is exactly what pushed ink onto the next flex sibling. `spark_y`
-        // itself eats 4px of gap below the value line, so that has to come
-        // out of the room budget too — the original formula measured room
-        // from `y_cursor`, not from `spark_y`, which let the sparkline's
-        // own bottom edge land 4px past `h - pad`.
         let spark_y = y_cursor + 4.0;
         let spark_room = (h - pad) - spark_y;
         if self.sparkline_data.len() >= 2 && spark_room >= 8.0 {
@@ -334,10 +306,6 @@ impl Stat {
 
             let max_v = self.sparkline_data.iter().fold(f64::MIN, |a, &b| a.max(b));
             let min_v = self.sparkline_data.iter().fold(f64::MAX, |a, &b| a.min(b));
-            // A flat series has no span. Flooring the divisor instead normalises
-            // every point to 0, which glues the line to the bottom edge and reads
-            // as "collapsed to zero" rather than "unchanged" — centre it instead,
-            // matching `chart::line`'s handling of the same case.
             let span = max_v - min_v;
             let flat = span.abs() < f64::EPSILON;
             let n = self.sparkline_data.len();
@@ -364,7 +332,6 @@ impl Stat {
             fill_path.line_to((pad + spark_w, spark_y + spark_h));
             fill_path.close();
 
-            // Gradient fill
             let (r, g, b, _) = parse_hex_color(spark_color);
             let top_color = Color::from_argb(50, r, g, b);
             let bottom_color = Color::from_argb(0, r, g, b);
@@ -435,9 +402,6 @@ mod tests {
         }
     }
 
-    /// Bounding box (min_x, max_x, min_y, max_y) of every non-transparent
-    /// pixel on the surface, or `None` if nothing was painted. Mirrors the
-    /// helper `caption.rs` already uses for the same kind of proof.
     fn ink_bounds(
         surface: &mut skia_safe::Surface,
         w: i32,
@@ -475,12 +439,6 @@ mod tests {
 
     #[test]
     fn ink_stays_within_a_tiny_assigned_box() {
-        // #127's exact repro: a 512×48 box (the measured "assigned box" for
-        // this component in a 560×300 card) used to take ~120px of ink —
-        // label + value + a forced-minimum sparkline — 72px onto whatever
-        // sits below it in the flex column. With a solid background (the
-        // same way the audit made the assigned box visible), the painted
-        // background rect *is* the box, so no ink should land outside it.
         let stat = full_stat();
         const W: i32 = 512;
         const H: i32 = 48;
@@ -503,8 +461,6 @@ mod tests {
 
     #[test]
     fn ink_stays_within_box_even_without_a_background() {
-        // Same box, no `style.background` — the clip still has to hold
-        // even when there's no filled rect to visually anchor it to.
         let mut stat = full_stat();
         stat.style = CssStyle::default();
         const W: i32 = 512;
@@ -521,10 +477,6 @@ mod tests {
 
     #[test]
     fn generous_box_keeps_the_original_full_size_layout() {
-        // A box as tall as the existing examples use (e.g. mega-showcase's
-        // 380×220 stat cards) must not be affected by the new scaling —
-        // `content_scale` should resolve to 1.0 and the value should still
-        // render at its authored `value_font_size`.
         let stat = full_stat();
         const W: i32 = 380;
         const H: i32 = 220;

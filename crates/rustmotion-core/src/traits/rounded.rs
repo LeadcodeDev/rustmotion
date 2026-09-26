@@ -1,14 +1,11 @@
-/// Trait for components that support rounded corners.
 pub trait Rounded {
     fn corner_radius(&self) -> f32;
 }
 
-/// Mutable access to corner radius — needed by builder traits.
 pub trait RoundedMut: Rounded {
     fn set_corner_radius(&mut self, radius: f32);
 }
 
-/// Builder API for corner radius.
 pub trait RoundedExt: RoundedMut + Sized {
     fn rounded(mut self, radius: f32) -> Self {
         self.set_corner_radius(radius);

@@ -9,41 +9,18 @@ use rustmotion_core::engine::renderer::{
 };
 use rustmotion_core::traits::{Styled, Timed};
 
-/// Total bytes `VIDEO_FRAME_CACHE` may hold across every distinct
-/// `(src, width, height)` entry combined. `preextract_video_frames` refuses
-/// to add an entry that would push the cache past this ceiling rather than
-/// caching it anyway — a video past the budget renders blank for the
-/// affected frames, the same degraded outcome an ffmpeg failure already
-/// produces on this path, instead of the process exhausting memory (a single
-/// 1080p 30s embed alone reaches ~7.5 GB of raw decoded RGBA held in memory
-/// forever, with no eviction).
 pub const VIDEO_FRAME_CACHE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
 
-/// Bytes one raw RGBA frame at `width`×`height` occupies, computed in `u64`
-/// and saturating rather than the plain `u32` multiplication this used to be:
-/// `width * height * 4` in `u32` wraps for a large-enough declared size
-/// (65536×16384 wraps to 0), which downstream turned into a division by
-/// zero. Saturating instead of panicking means an absurd declared size still
-/// fails the budget check below rather than crashing the preload pass.
 pub fn video_frame_byte_size(width: u32, height: u32) -> u64 {
     u64::from(width)
         .saturating_mul(u64::from(height))
         .saturating_mul(4)
 }
 
-/// Whether caching `additional_bytes` more on top of `already_cached_bytes`
-/// would cross [`VIDEO_FRAME_CACHE_BUDGET_BYTES`]. Saturating so a caller
-/// that already (somehow) exceeds the budget, or an `additional_bytes` at
-/// `u64::MAX` from a saturated [`video_frame_byte_size`], still reports
-/// "over budget" instead of wrapping back under it.
 pub fn would_exceed_cache_budget(already_cached_bytes: u64, additional_bytes: u64) -> bool {
     already_cached_bytes.saturating_add(additional_bytes) > VIDEO_FRAME_CACHE_BUDGET_BYTES
 }
 
-/// Bytes currently held across every entry of the process-global video-frame
-/// cache. `VIDEO_FRAME_CACHE` has no eviction (see `assets.rs`), so this is a
-/// running total the caller checks before adding to it, not a size taken
-/// from any single-entry accounting the map itself keeps.
 fn video_frame_cache_bytes() -> u64 {
     video_frame_cache()
         .iter()
@@ -57,8 +34,6 @@ fn video_frame_cache_bytes() -> u64 {
         .sum()
 }
 
-/// Pre-fetch and cache all icon components before rendering.
-/// Call this before the render loop to avoid HTTP requests during parallel rendering.
 pub fn prefetch_icons(scenes: &[Scene]) {
     use std::collections::HashSet;
 
@@ -70,7 +45,6 @@ pub fn prefetch_icons(scenes: &[Scene]) {
     ) {
         match &child.component {
             Component::Icon(icon) => {
-                // Size now comes from CSS style; at preload time we use a reasonable default.
                 use rustmotion_core::css::style::Size as CSize;
                 use rustmotion_core::css::units::LengthPercentage;
                 let w = match &icon.style.width {
@@ -109,18 +83,8 @@ pub fn prefetch_icons(scenes: &[Scene]) {
     }
 
     let cache = asset_cache();
-    // Issue #166: icons that genuinely cannot be resolved (checked both the
-    // disk cache and the network, inside `fetch_icon_svg`) are collected
-    // instead of merely logged — a scene that silently renders without an
-    // icon is exactly the "valid but wrong" outcome this project treats as
-    // worse than a hard failure. Parse/rasterize errors (a malformed SVG
-    // response, not a missing icon) stay warnings: they are not what "icon
-    // remains unresolvable" means here, and are rare enough downstream
-    // provider bugs that they don't warrant aborting the whole render.
     let mut unresolved: Vec<String> = Vec::new();
     for (icon, color, w, h) in &seen {
-        // Same formula the painter (`icon.rs`) uses at paint time — see
-        // `icon_cache_key`'s doc for why these used to disagree (issue #166).
         let (render_w, render_h, cache_key) = icon_cache_key(icon, color, *w, *h);
         if cache.contains_key(&cache_key) {
             continue;
@@ -176,26 +140,6 @@ pub fn prefetch_icons(scenes: &[Scene]) {
     }
 }
 
-/// Pre-extract all needed frames from video sources in a single ffmpeg pass.
-/// Called before the render loop to populate the video frame cache.
-///
-/// Item 3 (issue #167): this used to fail in total silence — `ffmpeg`
-/// missing, or a single extraction failing, both fell into `_ => {}` with no
-/// trace anywhere, leaving affected `video` components entirely blank.
-/// Replicates the `ffmpeg_available()` + one-time-warning discipline PR #151
-/// already established for embedded-video *audio* extraction
-/// (`encode::video_audio::collect_video_audio_tracks`), which this frame
-/// path never inherited.
-///
-/// ffmpeg's rawvideo stdout is read directly off the pipe in
-/// `frame_byte_size` chunks (`Read::read_exact`) rather than buffered whole
-/// via `Command::output` and then copied frame-by-frame out of that buffer —
-/// the old shape held the full decode in memory twice at its peak. A byte
-/// budget (`would_exceed_cache_budget`) is checked before ffmpeg is even
-/// spawned, and the read loop itself stops at `expected_frames` regardless,
-/// so a source that would blow the budget is refused up front and one that
-/// somehow outputs more frames than the requested time range implies cannot
-/// grow the cache past what was budgeted for it.
 pub fn preextract_video_frames(scenes: &[Scene], fps: u32) {
     if !ffmpeg_available() {
         eprintln!(
@@ -209,7 +153,6 @@ pub fn preextract_video_frames(scenes: &[Scene], fps: u32) {
         if let Component::Video(video) = &child.component {
             use rustmotion_core::css::style::Size as CSize;
             use rustmotion_core::css::units::LengthPercentage;
-            // Size now comes from CSS style; skip preload if not set as fixed px.
             let width = match &video.style.width {
                 Some(CSize::Length(LengthPercentage::Px(v))) => (*v as u32).max(1),
                 _ => return,
@@ -378,7 +321,6 @@ pub fn preextract_video_frames(scenes: &[Scene], fps: u32) {
             }
         }
 
-        // Recurse into containers
         if let Some(children) = match &child.component {
             Component::Container(c) => Some(&c.children),
             _ => None,
@@ -408,11 +350,6 @@ mod tests {
 
     #[test]
     fn an_unresolvable_icon_must_fail_the_preload_not_be_swallowed() {
-        // `fetch_icon_svg` fails deterministically (no network needed) for
-        // an icon id with no ':' — `InvalidIconFormat`. Pre-fix,
-        // `prefetch_icons` catches this in its `Err(e) => eprintln!(...)`
-        // arm and returns normally: the render proceeds as if nothing were
-        // wrong, and the icon silently never paints.
         let scene: Scene = serde_json::from_value(serde_json::json!({
             "duration": 1.0,
             "children": [

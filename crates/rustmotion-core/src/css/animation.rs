@@ -1,40 +1,9 @@
-//! Bridge from the legacy `AnimatedProperties` (Flutter-style) to CSS-style
-//! overrides on `CssStyle`. Used by the new pipeline so animations resolved
-//! through `animator::resolve_props_for_effects` flow into `transform`,
-//! `opacity`, `filter`, etc. before layout/paint.
-//!
-//! This is a transitional module: once all animation surfaces are CSS-native,
-//! the animator can produce `CssStyle` overrides directly and this bridge
-//! disappears.
-//!
-//! # A second caller (issue #338)
-//!
-//! [`apply_animated_props`] has exactly one caller-shape requirement: an
-//! [`AnimatedProperties`] whose non-default fields are the ones to apply.
-//! `crate::css::computed::ComputedStyle::resolve` produces exactly that
-//! shape from a node's per-frame expressions, so `box_builder.rs` calls this
-//! same function a second time per node — once for a resolved animation,
-//! once for resolved expressions — rather than this module growing a
-//! parallel "apply an expression override" path. See that module's doc for
-//! why an expression is "a second source of the same kind of override," and
-//! `box_builder.rs` for the resulting precedence (expressions apply after
-//! animations, so they compose the same way animations already compose with
-//! a literal `CssStyle` value).
-
 use crate::css::style::CssStyle;
 use crate::css::style::{FilterFn, Size, TransformFn};
 use crate::css::units::{Length, LengthPercentage};
 use crate::engine::animator::AnimatedProperties;
 
-/// Apply the resolved animation properties as a partial CSS override on top
-/// of an existing `CssStyle`. Only properties that the animator actually
-/// touched (vs. their `Default` sentinels) are written.
-///
-/// Order matters: the resulting `transform` list mirrors the legacy paint
-/// order (translate → scale → rotate → 3D rotate). Matching `transform-origin`
-/// is the box centre, which the paint pass already defaults to.
 pub fn apply_animated_props(css: &mut CssStyle, props: &AnimatedProperties) {
-    // ---- transform list ----
     let mut tx: Vec<TransformFn> = Vec::new();
     if props.translate_x != 0.0 || props.translate_y != 0.0 {
         tx.push(TransformFn::Translate {
@@ -63,23 +32,17 @@ pub fn apply_animated_props(css: &mut CssStyle, props: &AnimatedProperties) {
         });
     }
     if !tx.is_empty() {
-        // Append rather than replace so a CSS-defined transform composes with
-        // the animation-derived one (CSS transforms are post-multiplied).
         match css.transform.as_mut() {
             Some(existing) => existing.extend(tx),
             None => css.transform = Some(tx),
         }
     }
 
-    // ---- opacity ----
-    // Only write if it differs from the default (1.0). The animator sets
-    // `opacity = 1.0` as default, so any other value is meaningful.
     if (props.opacity - 1.0).abs() > 1e-4 {
         let base = css.opacity.unwrap_or(1.0);
         css.opacity = Some(base * props.opacity);
     }
 
-    // ---- filter (blur + glow) ----
     let mut filters: Vec<FilterFn> = Vec::new();
     if props.blur > 0.0 {
         filters.push(FilterFn::Blur {
@@ -101,31 +64,16 @@ pub fn apply_animated_props(css: &mut CssStyle, props: &AnimatedProperties) {
         }
     }
 
-    // ---- perspective ----
     if props.perspective > 0.0 {
         css.perspective = Some(Length::Px(props.perspective));
     }
 
-    // ---- box size ----
-    // An animated `width`/`height` has to reach taffy, not just the painter:
-    // resizing a card is a *layout* change (its children reflow inside the new
-    // box), which is what separates it from a `scale` transform stretching the
-    // pixels it already had. The animator's sentinel for "never animated" is
-    // -1.0 (see `AnimatedProperties::default`), so a 0 is a real, authored 0.
-    // The layout pass runs per frame, so writing here is enough.
     if props.width >= 0.0 {
         css.width = Some(Size::Length(LengthPercentage::Px(props.width)));
     }
     if props.height >= 0.0 {
         css.height = Some(Size::Length(LengthPercentage::Px(props.height)));
     }
-
-    // Note: `border_radius`, `font_size`, `gap`, `padding`, `stroke_width`,
-    // `shadow_blur`, `draw_progress`, `motion_progress`, `visible_chars*`,
-    // `char_animation`, `color` are NOT translated to CSS here. Those are
-    // component-internal animations and remain accessible through the legacy
-    // props on the dispatcher path. They will move into CSS once each
-    // component's painter is migrated.
 }
 
 #[cfg(test)]
@@ -178,16 +126,6 @@ mod tests {
         assert!(css.perspective.is_none());
     }
 
-    /// `motion_path` (`engine::animator::apply_motion_paths`) writes its
-    /// resolved position into `translate_x`/`translate_y` and its
-    /// tangent-derived orientation into `rotation` — the exact same fields
-    /// `orbit`/presets already write. This is the unit-level half of the
-    /// proof that a `motion_path` excursion reaches `css.transform` (and
-    /// therefore `--strict-anim`'s viewport check, which folds
-    /// `css.transform`): shape an `AnimatedProperties` the way that effect
-    /// would, at a moment where it has both moved *and* turned, and confirm
-    /// both land in the transform list in the documented translate→rotate
-    /// order — no new bridge, no separate channel.
     #[test]
     fn motion_path_shaped_translate_and_rotation_compose_into_one_transform_list() {
         let mut css = CssStyle::default();

@@ -56,7 +56,6 @@ impl Line {
         paint.set_anti_alias(true);
         paint.set_stroke_cap(skia_safe::PaintCap::Round);
 
-        // Apply dashed style
         if let Some(ref intervals) = self.dashed {
             if intervals.len() >= 2 {
                 if let Some(dash) = skia_safe::PathEffect::dash(intervals, 0.0) {
@@ -65,7 +64,6 @@ impl Line {
             }
         }
 
-        // Apply draw_progress
         if props.draw_progress >= 0.0 && props.draw_progress < 1.0 {
             let dx = self.x2 - self.x1;
             let dy = self.y2 - self.y1;

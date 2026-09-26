@@ -1,24 +1,3 @@
-//! The closed set of functions an expression can call.
-//!
-//! There is no user-defined function and no recursion (see the module doc on
-//! [`crate::expr`] for why that is a deliberate ceiling, not a missing
-//! feature): every callable name an expression can use is one of the
-//! variants below, resolved by name at *parse* time in
-//! [`super::parser`] — not looked up in a [`super::Scope`] at eval time the
-//! way a `$name` variable is. That is what lets a typo like `sni(x)` fail
-//! immediately, at the same place `TooDeep`/`Arity` already fail, instead of
-//! surfacing only once a frame happens to hit it.
-//!
-//! [`Builtin::call`] is a pure function of its arguments — no thread-local,
-//! no global counter, no clock read — for [`Builtin::Rand`] and
-//! [`Builtin::Noise`] included. That purity is load-bearing: two renders of
-//! the same file must produce identical frames, and a render can evaluate
-//! the same node's expression many times (once per sampled frame plus once
-//! more during static folding for the parts that turn out foldable), so
-//! anything but a pure function of the arguments would make the output
-//! depend on evaluation order.
-
-/// A builtin function name, resolved once at parse time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Builtin {
     Sin,
@@ -44,9 +23,6 @@ pub(crate) enum Builtin {
 }
 
 impl Builtin {
-    /// Case-sensitive lookup by the identifier the lexer read. `None` means
-    /// "not a builtin" — the parser still has [`constant`] and the special
-    /// `node(...)` form to try before giving up with `UnknownIdent`.
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "sin" => Self::Sin,
@@ -73,8 +49,6 @@ impl Builtin {
         })
     }
 
-    /// The name this variant was parsed from — used to build `ExprError`
-    /// messages (`Arity`) that name the function the way the author wrote it.
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Sin => "sin",
@@ -100,8 +74,6 @@ impl Builtin {
         }
     }
 
-    /// Fixed arity, checked at parse time against the argument list the
-    /// parser collected — no builtin is variadic.
     pub(crate) fn arity(self) -> usize {
         match self {
             Self::Sin
@@ -121,9 +93,6 @@ impl Builtin {
         }
     }
 
-    /// Evaluate. `args.len()` is guaranteed to equal [`Builtin::arity`] by
-    /// the parser (which checks it once, at parse time) — the stack machine
-    /// in [`super::eval`] never calls this with a mismatched slice.
     pub(crate) fn call(self, args: &[f64]) -> f64 {
         match self {
             Self::Sin => args[0].sin(),
@@ -159,10 +128,6 @@ impl Builtin {
 }
 
 fn clamp(x: f64, lo: f64, hi: f64) -> f64 {
-    // `f64::clamp` panics when `lo > hi`; an author-supplied bound pair is
-    // not a Rust invariant violation, it is bad data, so fall back to a
-    // saturating order-independent clamp instead of propagating a panic out
-    // of an evaluator that is meant to be hang/crash-proof by construction.
     let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
     x.max(lo).min(hi)
 }
@@ -184,8 +149,6 @@ fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Named constant lookup for bare (non-`$`) identifiers that are not a
-/// function call — the other half of what a bare `Ident` token can mean.
 pub(crate) fn constant(name: &str) -> Option<f64> {
     match name {
         "PI" => Some(std::f64::consts::PI),
@@ -195,10 +158,6 @@ pub(crate) fn constant(name: &str) -> Option<f64> {
     }
 }
 
-/// `splitmix64`: a small, well-known bit-mixer, chosen only because it is
-/// cheap and has no dependency — not because the noise needs to be
-/// cryptographically strong. It is deterministic in `x` alone, which is the
-/// whole point: no seeding from the clock, no `static` counter.
 fn splitmix64(x: u64) -> u64 {
     let x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut z = x;
@@ -207,14 +166,10 @@ fn splitmix64(x: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Map a mixed 64-bit word to `[0, 1)` using its top 53 bits — the standard
-/// trick for producing a `f64` with uniform mantissa coverage.
 fn unit_interval(bits: u64) -> f64 {
     (bits >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
 }
 
-/// `rand(seed)` — deterministic, pure hash of `seed`'s bit pattern into
-/// `[0, 1)`. Same `seed` in, same value out, on this render or the next one.
 fn rand(seed: f64) -> f64 {
     unit_interval(splitmix64(seed.to_bits()))
 }
@@ -228,10 +183,6 @@ fn smootherstep(t: f64) -> f64 {
     t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
 }
 
-/// `noise(x, seed)` — 1D value noise: smoothly interpolates between
-/// deterministic per-integer lattice values around `x`, both lattice points
-/// seeded by `seed`. Same inputs, same curve, every time — no incremental
-/// state to carry between calls, unlike a typical streaming noise generator.
 fn noise(x: f64, seed: f64) -> f64 {
     let i0 = x.floor() as i64;
     let i1 = i0 + 1;
@@ -270,8 +221,6 @@ mod tests {
 
     #[test]
     fn noise_is_continuous_at_lattice_points() {
-        // At an integer x, noise(x, seed) must equal the lattice value there
-        // (smootherstep(0) == 0), so neighbouring samples don't jump.
         let seed = 11.0;
         assert_eq!(noise(4.0, seed), lattice(4, seed));
     }

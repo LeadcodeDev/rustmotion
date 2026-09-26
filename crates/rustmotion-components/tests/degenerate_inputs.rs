@@ -1,14 +1,3 @@
-//! A painter must never panic — nor hang — on input the schema accepts.
-//!
-//! `rustmotion validate` is the documented gate before delivery, and it answers
-//! "Valid scenario" for every component below. Each one was observed aborting or
-//! wedging the renderer mid-frame, which kills the whole encode: the scenarios
-//! here are the reproductions, verbatim, kept as a regression floor.
-//!
-//! Every case routes through the real pipeline — serde, box_builder, run_layout,
-//! paint_tree — so a fix that only guards the painter while leaving the component
-//! undeserialisable would still fail.
-
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -22,8 +11,6 @@ use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
 const W: u32 = 400;
 const H: u32 = 300;
 
-/// Deserialize one component and paint it at `time`. Panics propagate — that is
-/// the point of the test.
 fn paint(json: serde_json::Value, time: f64) {
     let component: Component = serde_json::from_value(json).expect("component is schema-valid");
     let children = vec![ChildComponent {
@@ -70,9 +57,6 @@ fn paint(json: serde_json::Value, time: f64) {
     paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
 }
 
-/// Paint on a worker so a runaway loop fails the test instead of wedging the
-/// suite. `dot_spacing: 0` used to spin for billions of iterations; a plain
-/// `paint()` call would hang CI rather than report.
 fn paint_within(json: serde_json::Value, time: f64, budget: Duration, what: &str) {
     let (tx, rx) = mpsc::channel();
     let worker = std::thread::spawn(move || {
@@ -87,8 +71,6 @@ fn paint_within(json: serde_json::Value, time: f64, budget: Duration, what: &str
 
 #[test]
 fn shape_survives_a_gradient_whose_stops_do_not_match_its_colors() {
-    // skia asserts pos.len() == colors.len() inside the gradient shader, so a
-    // mismatched `stops` aborted the process rather than returning an error.
     for gradient_type in ["linear", "radial"] {
         paint(
             serde_json::json!({
@@ -108,8 +90,6 @@ fn shape_survives_a_gradient_whose_stops_do_not_match_its_colors() {
 
 #[test]
 fn table_survives_an_empty_row_colors_list() {
-    // `row_colors: []` deserializes to Some(vec![]), so the default palette was
-    // never substituted and the modulo guard still indexed an empty slice.
     paint(
         serde_json::json!({
             "type": "table",
@@ -124,8 +104,6 @@ fn table_survives_an_empty_row_colors_list() {
 
 #[test]
 fn tag_cloud_survives_an_empty_colors_list() {
-    // palette() returned the caller's empty vec, and the painter took
-    // `index % palette.len()` on it.
     paint(
         serde_json::json!({
             "type": "tag_cloud",
@@ -139,9 +117,6 @@ fn tag_cloud_survives_an_empty_colors_list() {
 
 #[test]
 fn dot_map_terminates_on_a_zero_dot_spacing() {
-    // (w - 0) / 0 is +inf, and `inf as u32` saturates to u32::MAX in Rust, so the
-    // nested loop was scheduled for ~1.8e19 iterations. The geometry pass catches
-    // dot_spacing: 0.01 but not 0.
     paint_within(
         serde_json::json!({
             "type": "dot_map",

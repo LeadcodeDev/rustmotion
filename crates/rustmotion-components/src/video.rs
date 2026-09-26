@@ -46,9 +46,6 @@ rustmotion_core::impl_traits!(Video {
     Styled => style,
 });
 
-/// The rectangle an `img_w`×`img_h` source draws into to honour `fit` inside
-/// a `target_w`×`target_h` box — the same three CSS `object-fit` semantics
-/// `image.rs`'s painter already implements for the `image` component.
 fn fit_rect(fit: &ImageFit, img_w: f32, img_h: f32, target_w: f32, target_h: f32) -> Rect {
     match fit {
         ImageFit::Fill => Rect::from_xywh(0.0, 0.0, target_w, target_h),
@@ -67,8 +64,6 @@ fn fit_rect(fit: &ImageFit, img_w: f32, img_h: f32, target_w: f32, target_h: f32
     }
 }
 
-/// Draws `img` into `layout`'s box according to `fit`, clipping to the box
-/// for `Cover` (the only mode whose fitted rectangle can extend past it).
 fn draw_fitted(canvas: &Canvas, img: skia_safe::Image, fit: &ImageFit, layout: &BoxLayout) {
     let dst = fit_rect(
         fit,
@@ -92,13 +87,6 @@ fn draw_fitted(canvas: &Canvas, img: skia_safe::Image, fit: &ImageFit, layout: &
     }
 }
 
-/// The source clip's own duration, probed via `ffprobe` and memoized per
-/// `src` for the life of the process — `effective_source_time` below is
-/// called once per painted frame, and re-probing on every one of them would
-/// mean one subprocess spawn per frame for any looping video with no
-/// explicit `trim_end`. `None` on a probe failure (no ffprobe on `PATH`, or
-/// the source can't be read) is memoized too, so a broken source fails fast
-/// on every subsequent frame instead of retrying the same failing probe.
 fn video_duration_secs(src: &str) -> Option<f64> {
     static CACHE: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<String, Option<f64>>>,
@@ -121,16 +109,6 @@ fn video_duration_secs(src: &str) -> Option<f64> {
 }
 
 impl Video {
-    /// The timestamp to sample from the source clip for a given scene time.
-    ///
-    /// Honours `trim_end` on the picture the same way the audio track
-    /// already does: past `trim_end`, playback holds on the last in-window
-    /// frame instead of continuing to draw whatever the source contains
-    /// beyond the intended trim point. When `loop_video` is set, playback
-    /// wraps within `[trim_start, trim_end)` instead of clamping — falling
-    /// back to the source's own probed duration as the loop window only
-    /// when `trim_end` is absent, since that is the only case where the
-    /// window cannot otherwise be known at all.
     fn effective_source_time(&self, ctx_time: f64) -> f64 {
         let rate = self.playback_rate.unwrap_or(1.0);
         let trim_start = self.trim_start.unwrap_or(0.0);
@@ -191,14 +169,6 @@ impl Painter for Video {
         let frame_data = match extract_video_frame(&self.src, source_time, width, height) {
             Ok(data) => data,
             Err(e) => {
-                // Item 3 (issue #167): decoding failures (ffmpeg missing, or
-                // this specific frame failing) used to be a silent `return`
-                // — a video component would render entirely blank with no
-                // trace anywhere. `paint_content` runs once per frame, so
-                // the warning is deduplicated per `src` via `warn_once_for`
-                // (the same guard `lib.rs` already uses for exactly this
-                // per-frame-call-site problem) instead of printing the same
-                // line a thousand times over a render.
                 if crate::warn_once_for(&format!("video-frame:{}", self.src)) {
                     eprintln!(
                         "Warning: video '{}' could not be decoded: {e}. This component will \
@@ -236,11 +206,6 @@ mod tests {
         }
     }
 
-    /// A failed frame extraction (bad src, or no ffmpeg) must be reported,
-    /// not swallowed. Pre-fix, `paint_content` never calls `warn_once_for`
-    /// on this path at all, so the slot for this exact src stays unclaimed
-    /// ("first sighting" == true) forever — this is the observable half of
-    /// total silence we can assert on without capturing stderr.
     #[test]
     fn a_failed_frame_extraction_must_claim_its_warn_once_slot() {
         let missing_src = std::env::temp_dir().join(format!(

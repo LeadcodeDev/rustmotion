@@ -5,8 +5,6 @@ use skia_safe::Path as SkiaPath;
 use super::animation::{Animation, AnimationPreset, EasingType, PresetConfig, SpringConfig};
 use super::style::{FontWeight, TextAlign, VerticalAlign};
 
-// --- Animation effects (nested inside CssStyle as typed array) ---
-
 /// A single animation effect. Discriminated by `"type"` in JSON.
 /// Each preset name is a valid type, plus special types: glow, wiggle, keyframes, motion_blur.
 ///
@@ -19,7 +17,6 @@ use super::style::{FontWeight, TextAlign, VerticalAlign};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "name", rename_all = "snake_case")]
 pub enum AnimationEffect {
-    // --- Entrance presets ---
     FadeIn(AnimationTiming),
     FadeInUp(AnimationTiming),
     FadeInDown(AnimationTiming),
@@ -40,7 +37,6 @@ pub enum AnimationEffect {
     /// element. `AnimationTiming.overshoot` sets the pulse amplitude
     /// (default 0.18 = 118%); 0 reduces it to a plain back-out scale-in.
     PopIn(AnimationTiming),
-    // --- Exit presets ---
     FadeOut(AnimationTiming),
     FadeOutUp(AnimationTiming),
     FadeOutDown(AnimationTiming),
@@ -52,28 +48,22 @@ pub enum AnimationEffect {
     BounceOut(AnimationTiming),
     BlurOut(AnimationTiming),
     RotateOut(AnimationTiming),
-    // --- Continuous presets ---
     Pulse(AnimationTiming),
     Float(AnimationTiming),
     Shake(AnimationTiming),
     Spin(AnimationTiming),
-    // --- 3D presets ---
     FlipInX(AnimationTiming),
     FlipInY(AnimationTiming),
     FlipOutX(AnimationTiming),
     FlipOutY(AnimationTiming),
     TiltIn(TiltInConfig),
-    // --- Stroke presets ---
     DrawIn(AnimationTiming),
     StrokeReveal(AnimationTiming),
-    // --- Special presets ---
     Typewriter(AnimationTiming),
     WipeLeft(AnimationTiming),
     WipeRight(AnimationTiming),
-    // --- Floating/orbit presets ---
     #[serde(alias = "float_3d")]
     Float3d(AnimationTiming),
-    // --- Char animation presets ---
     CharScaleIn(CharAnimationTiming),
     CharFadeIn(CharAnimationTiming),
     CharWave(CharAnimationTiming),
@@ -94,7 +84,6 @@ pub enum AnimationEffect {
     /// used to be read directly off `style.animation` inside
     /// `rustmotion_components::text::Text::paint` and therefore missed both.)
     CharBlurIn(CharAnimationTiming),
-    // --- Non-preset effects ---
     Glow(GlowConfig),
     /// A band of light sweeping across the element's own painted pixels.
     /// See [`ShimmerConfig`].
@@ -115,10 +104,6 @@ pub enum AnimationEffect {
 }
 
 impl AnimationEffect {
-    /// Shift the effect's start delay by `by` seconds. Used by `timeline`
-    /// steps, whose animations run relative to the step's `at`. Continuous
-    /// effects without a delay concept (glow, wiggle, orbit, motion blur)
-    /// are unaffected.
     pub fn shift_delay(&mut self, by: f64) {
         use AnimationEffect::*;
         match self {
@@ -140,7 +125,6 @@ impl AnimationEffect {
         }
     }
 
-    /// If this is a preset variant, return the corresponding AnimationPreset and timing.
     pub fn as_preset(&self) -> Option<(AnimationPreset, &AnimationTiming)> {
         match self {
             Self::FadeIn(t) => Some((AnimationPreset::FadeIn, t)),
@@ -190,15 +174,6 @@ impl AnimationEffect {
 }
 
 /// Timing configuration for preset animations.
-// `deny_unknown_fields` (constat #8): this is the `AnimationTiming` payload
-// of an internally-tagged `AnimationEffect` variant (`#[serde(tag = "name")]`
-// on the enum). Serde's tagged-enum deserializer buffers the object and
-// re-drives it through the variant's own `Deserialize` impl *without* the
-// `name` tag key, so `deny_unknown_fields` here rejects a typo'd field (e.g.
-// `duratoin`) without ever seeing/rejecting `name` itself — verified with a
-// minimal repro before relying on it. Without this, `validate_attrs.rs`
-// never sees inside `style.animation[*]` (it only walks component-level
-// keys), so a typo silently no-ops instead of erroring.
 #[derive(Debug, Clone, JsonSchema, PartialEq)]
 pub struct AnimationTiming {
     /// Delay before animation starts (seconds).
@@ -265,13 +240,6 @@ fn default_animation_duration() -> f64 {
     0.8
 }
 
-/// The `"loop"` field as written in JSON: a bare boolean — `true` loops
-/// forever, `false` (the default) plays once, exactly as before this type
-/// widened — or a positive integer naming an exact play count. Only ever
-/// used as the wire shape [`AnimationTimingWire`] folds into
-/// [`AnimationTiming::repeat`]/[`AnimationTiming::repeat_count`] (and back,
-/// for `Serialize` — see [`RepeatSpec::from_parts`]); nothing downstream
-/// matches on this type directly.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 enum RepeatSpec {
@@ -286,9 +254,6 @@ impl Default for RepeatSpec {
 }
 
 impl RepeatSpec {
-    /// Splits the wire value into `AnimationTiming`'s two fields. `0`/`1`
-    /// fold back to the boolean form: a count only starts meaning anything
-    /// once there's a second play to differ from the first.
     fn into_parts(self) -> (bool, Option<u32>) {
         match self {
             RepeatSpec::Loop(b) => (b, None),
@@ -297,11 +262,6 @@ impl RepeatSpec {
         }
     }
 
-    /// Inverse of [`Self::into_parts`]: reconstructs the wire value that
-    /// would have produced this `(repeat, repeat_count)` pair, so
-    /// `AnimationTiming`'s hand-written `Serialize` impl round-trips
-    /// through the same single `"loop"` key its `Deserialize` impl reads —
-    /// never a separate `repeat_count` key alongside it.
     fn from_parts(repeat: bool, repeat_count: Option<u32>) -> Self {
         match repeat_count {
             Some(n) => RepeatSpec::Count(n),
@@ -310,16 +270,6 @@ impl RepeatSpec {
     }
 }
 
-/// The wire shape of [`AnimationTiming`] — identical field-for-field except
-/// `"loop"`, which is [`RepeatSpec`] here instead of the plain `bool`
-/// [`AnimationTiming::repeat`] exposes. Exists only to give
-/// `AnimationTiming` hand-written `Serialize`/`Deserialize` impls that can
-/// split one JSON key into two Rust fields (`repeat`/`repeat_count`) and
-/// merge them back — a derive can't express that. Kept private: nothing
-/// outside this module should ever construct or see one directly. Carries
-/// its own `deny_unknown_fields` so a typo'd field is still rejected
-/// exactly as it was before this type existed (constat #8's guarantee,
-/// preserved).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AnimationTimingWire {
@@ -502,8 +452,6 @@ pub struct CharAnimationTiming {
 }
 
 impl Default for CharAnimationTiming {
-    /// Mirrors the serde defaults exactly, so `CharAnimationTiming::default()`
-    /// and `serde_json::from_value(json!({}))` describe the same animation.
     fn default() -> Self {
         Self {
             delay: 0.0,
@@ -591,8 +539,6 @@ pub enum TextAnimDirection {
 }
 
 impl TextAnimDirection {
-    /// The `(x, y)` offset, in px, a unit sits at when its animation has not
-    /// started yet. `travel` is the distance the unit covers.
     pub fn offset(self, travel: f32) -> (f32, f32) {
         match self {
             Self::Up => (0.0, travel),
@@ -639,7 +585,6 @@ fn default_char_duration() -> f32 {
 }
 
 impl AnimationTiming {
-    /// Convert to PresetConfig for compatibility with resolve_animations.
     pub fn to_preset_config(&self) -> PresetConfig {
         PresetConfig {
             amplitude: self.amplitude,
@@ -655,24 +600,6 @@ impl AnimationTiming {
     }
 }
 
-/// Constat #4: every `property` name `engine::animator::{apply_property,
-/// get_property_value}` (read-only for this workstream — the solver logic
-/// itself stays there) actually recognises for `wiggle`/`keyframes`
-/// animations. Anything outside this set has always been a silent no-op in
-/// the solver (`_ => {}` / `_ => 0.0`): the animation plays as if the
-/// property doesn't exist, with no error and no visual signal that
-/// something is wrong. `WiggleConfig.property` and `Animation.property`
-/// (the latter via `KeyframesConfig.keyframes`'s `deserialize_with`, since
-/// `Animation` itself lives in `schema/animation.rs`, which this workstream
-/// may only touch for `deny_unknown_fields`) are validated against this set
-/// at parse time instead — turning the silent no-op into a named error, so
-/// a mixed-convention typo (`"translateX"`, `"positionX"`, `"Rotation"`) or
-/// a wholesale unsupported name is caught immediately.
-///
-/// `"color"` is included because `resolve_animations` special-cases
-/// `anim.property == "color"` outside `apply_property`/`get_property_value`
-/// — it is a real, solver-recognised value for `Animation`, just resolved on
-/// a different path than the numeric properties.
 const KNOWN_MOTION_PROPERTIES: &[&str] = &[
     "opacity",
     "position.x",
@@ -704,13 +631,6 @@ const KNOWN_MOTION_PROPERTIES: &[&str] = &[
     "color",
 ];
 
-/// Reject a `property` value the solver doesn't recognise, with a
-/// "did-you-mean" nudge when the only mismatch is casing/separator
-/// convention (`translateX` / `translate-x` vs `translate_x`) — the exact
-/// trap constat #4 names: this project mixes kebab-case (CSS-style, most of
-/// `CssStyle`) and snake_case (these property names) conventions, and an
-/// author reasoning from the former naturally reaches for the latter's
-/// kebab or camelCase spelling.
 fn validate_motion_property<E: serde::de::Error>(value: &str) -> Result<(), E> {
     if KNOWN_MOTION_PROPERTIES.contains(&value) {
         return Ok(());
@@ -741,11 +661,6 @@ where
     Ok(s)
 }
 
-/// Validates every keyframe's `property` the same way
-/// [`deserialize_motion_property`] does for `WiggleConfig` — `Animation`
-/// itself lives in `schema/animation.rs`, out of reach for anything beyond
-/// `deny_unknown_fields` in this workstream, so the check is applied here,
-/// at the one field that actually consumes `Vec<Animation>` in this file.
 fn deserialize_validated_keyframes<'de, D>(deserializer: D) -> Result<Vec<Animation>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -836,8 +751,6 @@ fn default_trail_falloff() -> f32 {
     0.6
 }
 
-// --- Orbit Config ---
-
 /// Configuration for a 3D orbit/floating animation effect.
 /// Creates circular or elliptical motion with pseudo-depth (scale + opacity modulation).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -879,8 +792,6 @@ fn default_orbit_depth() -> f64 {
     0.15
 }
 
-// --- Wiggle Config ---
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct WiggleConfig {
@@ -906,8 +817,6 @@ pub struct WiggleConfig {
     #[serde(default)]
     pub mode: Option<String>,
 }
-
-// --- Motion Path Config ---
 
 /// Configuration for the `motion_path` animation effect: moves — and,
 /// optionally, orients — a component along an SVG path.
@@ -993,19 +902,6 @@ pub struct MotionPathConfig {
     pub easing: EasingType,
 }
 
-/// Reject `motion_path.path` values that cannot produce at least one
-/// drawable point — the JSON-authoring analogue of "empty path" from the
-/// workstream brief. Unlike [`deserialize_motion_property`], there is no
-/// finite alphabet to suggest a correction from: any syntactically valid
-/// (even visually nonsensical) SVG path `d` string is accepted, exactly as
-/// `shape`'s `ShapeType::Path { data }` already accepts it via the same
-/// `skia_safe::Path::from_svg` call — this does not invent a second path
-/// grammar.
-///
-/// A path that parses but has zero measured *length* (e.g. `"M50,50"`) is
-/// deliberately NOT rejected here — see `MotionPathConfig`'s "Degenerate
-/// paths" doc section for why, and where that case is instead surfaced (a
-/// `validate_schema.rs` warning, not a parse-time error).
 fn deserialize_motion_path_data<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -1023,8 +919,6 @@ where
         ))),
     }
 }
-
-// --- Supporting types ---
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1139,8 +1033,6 @@ pub enum ImageFit {
     Fill,
 }
 
-// --- Shape Text ---
-
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ShapeText {
     pub content: String,
@@ -1236,8 +1128,6 @@ pub struct TextBackground {
     #[serde(default)]
     pub corner_radius: f32,
 }
-
-// --- Visual Effect Types ---
 
 /// Glow effect (colored luminous halo around the element)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -1431,8 +1321,6 @@ fn default_glow_intensity() -> f32 {
     1.0
 }
 
-// --- Default functions ---
-
 fn default_font_size() -> f32 {
     48.0
 }
@@ -1478,10 +1366,6 @@ mod motion_property_tests {
     use super::*;
     use serde_json::json;
 
-    // ---- constat #4: `WiggleConfig.property` / `Animation.property` (via
-    // `KeyframesConfig.keyframes`) are free strings the solver silently
-    // no-ops on when unrecognised (RED first). ----
-
     #[test]
     fn wiggle_known_property_still_works() {
         let json = json!({
@@ -1499,9 +1383,6 @@ mod motion_property_tests {
 
     #[test]
     fn wiggle_unknown_property_is_a_named_error_not_a_silent_no_op() {
-        // A wholly unsupported name — the animation would otherwise play,
-        // resolve every frame, and simply never touch any rendered
-        // property: no error, no visible effect, no signal at all.
         let json = json!({
             "name": "wiggle",
             "property": "skew",
@@ -1515,11 +1396,6 @@ mod motion_property_tests {
 
     #[test]
     fn wiggle_kebab_case_property_gets_a_did_you_mean() {
-        // The exact trap named in constat #4: this project mixes kebab-case
-        // (CSS-style, most of `CssStyle`) and snake_case (these property
-        // names) conventions across files, so an author reasoning in
-        // kebab-case naturally writes `translate-x` instead of the
-        // solver's `translate_x` — silently inert before this fix.
         let json = json!({
             "name": "wiggle",
             "property": "translate-x",
@@ -1573,9 +1449,6 @@ mod motion_property_tests {
 
     #[test]
     fn keyframes_animation_color_property_still_works() {
-        // "color" is solver-recognised (special-cased in
-        // `resolve_animations`, outside `apply_property`), not a numeric
-        // motion property — must not be rejected.
         let json = json!({
             "name": "keyframes",
             "keyframes": [
@@ -1639,9 +1512,6 @@ mod motion_path_schema_tests {
         }
     }
 
-    // ---- brief's "empty path" degenerate case: rejected at parse time,
-    // not left to silently produce a no-op or a NaN downstream. ----
-
     #[test]
     fn motion_path_rejects_an_empty_path_string() {
         let json = json!({ "name": "motion_path", "path": "" });
@@ -1661,11 +1531,6 @@ mod motion_path_schema_tests {
         );
     }
 
-    // A single-point ("zero measured length") path is syntactically valid
-    // and must NOT be rejected at parse time — see MotionPathConfig's
-    // "Degenerate paths" doc section; the render-time-defined behaviour is
-    // covered in `engine::animator`'s tests, and the advisory warning in
-    // `validate_schema.rs`'s.
     #[test]
     fn motion_path_accepts_a_single_point_path() {
         let json = json!({ "name": "motion_path", "path": "M50,50" });
@@ -1706,12 +1571,6 @@ mod animation_timing_repeat_widening_tests {
     use super::*;
     use serde_json::json;
 
-    // ---- issue #330: `"loop"` widens from a bare bool to bool-or-integer.
-    // Every test in this module that only sets `"loop": true`/`false` (or
-    // omits it) must produce byte-identical `AnimationTiming` values to
-    // what the old plain-bool deserializer produced — that's the
-    // acceptance criterion that matters most here. ----
-
     #[test]
     fn loop_true_is_unchanged_infinite_repeat() {
         let json = json!({ "name": "pulse", "loop": true });
@@ -1745,8 +1604,6 @@ mod animation_timing_repeat_widening_tests {
 
     #[test]
     fn loop_as_a_positive_integer_sets_repeat_and_the_count() {
-        // GSAP's `repeat: 11` means 11 *re*plays — 12 plays total. This
-        // field counts total plays, so the JSON author writes 12.
         let t: AnimationTiming = serde_json::from_value(json!({ "loop": 12 })).unwrap();
         assert!(t.repeat, "a finite count still loops — see the field doc");
         assert_eq!(t.repeat_count, Some(12));
@@ -1807,14 +1664,6 @@ mod animation_timing_repeat_widening_tests {
 
     #[test]
     fn a_finite_repeat_count_round_trips_through_a_single_loop_key() {
-        // Regression: `AnimationTiming` used to derive `Serialize`
-        // directly off its own fields, which emitted a *separate*
-        // `"repeat_count"` key alongside `"loop"` — a shape
-        // `AnimationTimingWire`'s `deny_unknown_fields` (rightly) never
-        // accepted on the way back in, so a scenario that had merely been
-        // parsed and re-serialized (e.g. by tooling, or `--fix`) failed to
-        // parse again. `AnimationTiming` now hand-writes `Serialize` to
-        // fold back onto one `"loop"` key, matching `Deserialize` exactly.
         let t: AnimationTiming = serde_json::from_value(json!({ "loop": 12 })).unwrap();
         let json = serde_json::to_value(&t).unwrap();
         assert!(

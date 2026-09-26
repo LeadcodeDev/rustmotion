@@ -1,10 +1,3 @@
-//! [`render`]: the single entry point that turns a [`Score`] into a
-//! finished, mixed, mastered stereo buffer — the "small, boring synth"
-//! deliverable's top-level orchestration. Everything else in this module
-//! (`dsp`, `voices`, `score`) is a building block this function assembles;
-//! nothing outside `rustmotion-core::audio` needs to call anything but
-//! this.
-
 use std::collections::HashMap;
 
 use crate::schema::time::TimeCtx;
@@ -12,28 +5,8 @@ use crate::schema::time::TimeCtx;
 use super::dsp;
 use super::score::{Score, ScoreError};
 
-/// Sample rate the synth renders at, per deliverable #2 ("rendered offline
-/// to an f32 buffer at 48 kHz"). The file-based [`crate::schema::AudioTrack`]
-/// mixer downstream (`rustmotion`'s `encode` crate) declares a different,
-/// fixed rate for its own muxed PCM — the exact same resampling path an
-/// ordinary 48kHz source file already goes through there carries this
-/// buffer down to that rate, so nothing in this crate needs to duplicate
-/// it.
 pub const SYNTH_SAMPLE_RATE: u32 = 48_000;
 
-/// Renders `score` into an interleaved stereo `f32` buffer, `duration_secs`
-/// long at [`SYNTH_SAMPLE_RATE`] (mono voices, duplicated to both
-/// channels — this synth has no panning model). `ctx` is the scenario's own
-/// [`TimeCtx`] (real `bpm`/`beat_offset`, `scene_start: 0.0` — a score is
-/// never nested inside a scene): every `TimePoint` in `score.score` resolves
-/// against it, which is what puts a kick on the same instant as a beat-grid
-/// scene cut.
-///
-/// Deterministic: same `score` + `ctx` + `duration_secs` always produces
-/// the same bytes (no wall-clock or thread-seeded randomness anywhere in
-/// this crate's synth — see [`dsp::Xorshift32`]'s doc). That is the
-/// property `rustmotion`'s `--frames a-b` slicing and the "two renders are
-/// byte-identical" acceptance criterion both depend on.
 pub fn render(score: &Score, ctx: TimeCtx, duration_secs: f64) -> Result<Vec<f32>, ScoreError> {
     let duration_secs = duration_secs.max(0.0);
     let num_samples = (duration_secs * SYNTH_SAMPLE_RATE as f64).ceil() as usize;
@@ -41,19 +14,9 @@ pub fn render(score: &Score, ctx: TimeCtx, duration_secs: f64) -> Result<Vec<f32
 
     let hits = score.resolve_hits(&ctx, duration_secs)?;
 
-    // Iterated in a fixed (sorted) order, not `HashMap`'s own — std's
-    // hasher is randomized per process, and mixing three or more voices'
-    // grains into the *same* sample index is a floating-point sum whose
-    // bit pattern can depend on accumulation order. Without this sort,
-    // "two renders are byte-identical" (this module's whole determinism
-    // promise, and an explicit acceptance criterion) would hold almost
-    // always and occasionally not, which is worse than never.
     let mut voice_names: Vec<&String> = hits.keys().collect();
     voice_names.sort();
 
-    // Every trigger of a given voice renders to the identical grain (see
-    // `Voice::render_grain`'s doc) — render each voice once and stamp it
-    // onto the timeline per hit, rather than re-synthesizing per hit.
     let mut grains: HashMap<&str, Vec<f32>> = HashMap::new();
     for name in &voice_names {
         if let Some(voice) = score.voices.get(*name) {

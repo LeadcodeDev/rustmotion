@@ -1,24 +1,3 @@
-//! Paint dispatcher for the new `paint_tree` pipeline. Bridges from the
-//! taffy-laid-out `BoxNode` tree back to component-typed `Painter` impls.
-//!
-//! Naming kept as "legacy" for now to avoid churn in callers; this is the
-//! sole dispatcher in use since every component implements `Painter`.
-//!
-//! The container component (`Component::Container` — tagged `div`, aliased
-//! `container`/`card`/`flex`/`grid`/`positioned`) is intentionally skipped:
-//! paint_pass already paints its box decorations and recurses into
-//! children — so calling the container's own `paint_content` would do nothing
-//! anyway, and we save a no-op call.
-//!
-//! `dispatch` receives the node's cascaded `CssStyle` (`css` below) from
-//! `paint_pass`, but `Painter::paint_content` has no `CssStyle` parameter —
-//! its signature is frozen — and every painter reads typography off its own
-//! `self.style` instead. `Component::with_cascaded_style` rebuilds the
-//! subset of components that read inherited typography off their own style
-//! with `css` folded in before painting, the same call
-//! `box_builder::component_intrinsic` makes for the intrinsic measurers so
-//! measure and paint agree.
-
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
 use rustmotion_core::engine::box_tree::NodeId;
@@ -29,19 +8,9 @@ use skia_safe::Canvas;
 
 use crate::{ChildComponent, Component};
 
-/// Maps NodeIds to `ChildComponent`s and dispatches paint to their
-/// `Painter::paint_content` impls.
 pub struct LegacyPaintDispatcher<'a> {
-    /// `components[id as usize]` is the component for `id`. Slot 0 is the
-    /// synthetic root and is always `None`.
     components: &'a [Option<&'a ChildComponent>],
-    /// Per-node animation delay — ancestor-stagger plus the node's own
-    /// `start_at` (indexed like `components`); empty when the caller doesn't
-    /// carry that information.
     stagger_delays: &'a [f64],
-    /// Per-node accumulated affine time remap `(scale, shift)` from ancestor
-    /// containers' `time_scale`/`time_offset` (indexed like `components`);
-    /// `t_local = scale * t_global + shift`. Empty → identity everywhere.
     time_params: &'a [(f64, f64)],
 }
 
@@ -54,11 +23,6 @@ impl<'a> LegacyPaintDispatcher<'a> {
         }
     }
 
-    /// Build from a [`BuiltScene`], carrying its per-node animation delays
-    /// (stagger plus `start_at`) so internal animations shift by the same
-    /// amount as the CSS overrides, and its per-node time remaps so internal
-    /// animations (counter, draw_in, typewriter…) advance at the same local
-    /// time as the CSS overrides.
     pub fn for_scene(built: &'a crate::box_builder::BuiltScene<'a>) -> Self {
         Self {
             components: &built.components,
@@ -89,31 +53,15 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
             return;
         };
 
-        // Containers paint nothing of their own here — children are handled
-        // recursively by paint_tree, and decorations were already painted.
         if is_container(&child.component) {
             return;
         }
 
-        // Resolve animations for this leaf. Outer transforms (translate /
-        // scale / rotate / opacity / blur) are applied by `paint_pass` via
-        // the CSS overrides injected at box-tree build time, so we don't
-        // wrap the canvas here. `props` is still needed for internal-only
-        // fields like `draw_progress`, `stroke_width`, `visible_chars*`,
-        // and `char_animation`. Timeline steps and the node's accumulated
-        // delay (ancestor stagger plus its own `start_at`) are folded in so
-        // those internal animations shift exactly like the CSS overrides do.
         let stagger_delay = self
             .stagger_delays
             .get(*node_id as usize)
             .copied()
             .unwrap_or(0.0);
-        // Ancestor `time_scale`/`time_offset` remap the time seen by this
-        // node's whole animation surface: internal effect resolution below
-        // AND `PaintCtx.time` (a counter or a typewriter inside a slowed
-        // container must advance at local time). `scene_duration` stays
-        // GLOBAL — it describes the physical scene window, not the remapped
-        // timeline, so duration-relative effects keep their real-time span.
         let (t_scale, t_shift) = self
             .time_params
             .get(*node_id as usize)
@@ -138,14 +86,6 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
             return;
         };
 
-        // The `Painter` contract (traits/painter.rs, rules/paint-context.md)
-        // promises the canvas is already translated to the CONTENT-box
-        // origin, with `layout` describing the content box — padding
-        // reserved by taffy is consumed here, not left for the painter to
-        // rediscover. `Codeblock` used to be a deliberate, documented
-        // exception (it painted from the untranslated BORDER-box origin);
-        // it has been deleted, so every remaining `Painter` now honors the
-        // general contract uniformly.
         canvas.save();
         let (cx, cy, cw, ch) = layout.content_box();
         canvas.translate((cx, cy));
@@ -218,16 +158,6 @@ mod tests {
 
     #[test]
     fn leaf_painter_content_is_inset_by_padding() {
-        // A 100x80 red shape at (0,0) with `padding: 20`. The Painter
-        // contract (traits/painter.rs, rules/paint-context.md) promises the
-        // canvas is already translated to the CONTENT-box origin — so the
-        // shape's own fill (which just paints (0,0)..(layout.width,
-        // layout.height)) should only cover the 60x40 content box (20,20)
-        // to (80,60), leaving the 20px padding ring showing the (empty/
-        // background) canvas underneath. Bug: the dispatcher translated to
-        // the BORDER-box origin and handed the painter the full border-box
-        // dimensions, so the fill ignored padding entirely and covered the
-        // whole (0,0)-(100,80) box.
         use rustmotion_core::css::style::Edges;
 
         let mut scene = vec![shape_child(100.0, 80.0, 0.0, 0.0)];
@@ -278,14 +208,12 @@ mod tests {
             buf
         };
 
-        // Inside the padding ring (5,5): must NOT be red after the fix.
         let padding_zone = read(5, 5);
         assert!(
             !(padding_zone[0] > 200 && padding_zone[1] < 50 && padding_zone[2] < 50),
             "padding ring must not be painted by the leaf's own fill, got {:?}",
             padding_zone
         );
-        // Deep inside the content box (50,40): must be red either way.
         let content_zone = read(50, 40);
         assert!(
             content_zone[0] > 200 && content_zone[1] < 50 && content_zone[2] < 50,
@@ -300,12 +228,9 @@ mod tests {
         let built = build_scene(&scene, (200.0, 200.0));
         let layout = run_layout(&built.root, (200.0, 200.0), &ConversionContext::default());
 
-        // Sanity: the only component slot at idx 1 points to the shape.
         assert!(built.components[0].is_none());
         assert!(built.components[1].is_some());
 
-        // Build a Skia raster surface and run a paint pass against the
-        // dispatcher — this just exercises the dispatcher hook end-to-end.
         let mut surface =
             skia_safe::surfaces::raster_n32_premul((200, 200)).expect("raster surface");
         let canvas = surface.canvas();
@@ -328,8 +253,6 @@ mod tests {
             &dispatcher,
         );
 
-        // Read back the pixel at the centre of the shape (10+25, 20+15)=(35,35)
-        // and assert it's red-ish — confirms paint_content painted.
         let snapshot = surface.image_snapshot();
         let mut buf = [0u8; 4];
         let info = skia_safe::ImageInfo::new(
@@ -346,7 +269,6 @@ mod tests {
             skia_safe::image::CachingHint::Disallow,
         );
         assert!(read_ok, "pixel read should succeed");
-        // Red channel should dominate (#ff0000).
         assert!(buf[0] > 200, "expected red, got rgba {:?}", buf);
         assert!(buf[1] < 50, "green should be low, got rgba {:?}", buf);
         assert!(buf[2] < 50, "blue should be low, got rgba {:?}", buf);
@@ -354,8 +276,6 @@ mod tests {
 
     #[test]
     fn card_background_painted_with_red_shape_inside() {
-        // Card 100×80 at (40,30), green background, contains a red 30×20 shape
-        // absolutely positioned at (10,10) inside the card.
         use crate::container::ContainerComponent;
 
         use rustmotion_core::css::style::{Background, Color};
@@ -451,14 +371,10 @@ mod tests {
             buf
         };
 
-        // Card background area: bottom-right corner of the card (well away
-        // from the red shape at (10,10)+(30,20)). Card spans x∈[40,140],
-        // y∈[30,110]. Pick (130, 100) — green.
         let bg = read(130, 100);
         assert!(bg[1] > 200, "expected green card bg, got {:?}", bg);
         assert!(bg[0] < 50, "red should be low at bg, got {:?}", bg);
 
-        // Red shape area: shape spans (50,40)→(80,60). Pick centre (65, 50).
         let fg = read(65, 50);
         assert!(fg[0] > 200, "expected red shape, got {:?}", fg);
         assert!(fg[1] < 50, "green should be low at shape, got {:?}", fg);
@@ -466,11 +382,6 @@ mod tests {
 
     #[test]
     fn fade_in_preset_drives_alpha_through_dispatcher() {
-        // A red shape with a `FadeIn` preset over 0.5s, sampled at two points:
-        //   t=0.05s — early in the curve, opacity should be near zero
-        //   t=0.5s  — at the end of the curve, opacity should be ~1
-        // The dispatcher must wire animator output into the canvas alpha,
-        // otherwise both samples render fully opaque and the test fails.
         use crate::shape::Shape;
         use rustmotion_core::schema::{AnimationEffect, AnimationTiming, ShapeType};
 
@@ -506,9 +417,6 @@ mod tests {
 
         let sample_red_at = |time: f64| -> u8 {
             let scene = make_scene();
-            // Build the box tree with an animation context so the FadeIn
-            // preset is resolved into CSS overrides (transform/opacity) on
-            // each box. paint_pass then applies those during painting.
             let built = crate::box_builder::build_scene_with_anim(
                 &scene,
                 (200.0, 200.0),
@@ -604,11 +512,8 @@ mod tests {
             scene_duration: 1.0,
             camera: None,
         };
-        // Wrong payload type — must not panic.
         let bogus: Arc<dyn std::any::Any + Send + Sync> = Arc::new(42i64);
-        // Reach into the dispatcher trait method.
-        // (BoxKind::Component is just a marker here; we drive dispatch directly.)
         dispatcher.dispatch(canvas, bogus.as_ref(), &css, &layout, &frame);
-        let _ = BoxKind::Container; // touch import
+        let _ = BoxKind::Container;
     }
 }

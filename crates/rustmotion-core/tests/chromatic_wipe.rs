@@ -1,20 +1,9 @@
-//! `chromatic_wipe`: a fast slide whose reveal edge splits into red and cyan
-//! at the peak and recombines as it lands.
-//!
-//! The two properties worth pinning are that `aberration: 0` degrades to a
-//! plain slide (so the knob genuinely goes to zero rather than to "a bit
-//! less"), and that the split is *gone* by the time the transition ends —
-//! a residual channel offset on the last frame would bleed a coloured fringe
-//! into the scene that follows.
-
 use rustmotion_core::engine::transition::{apply_transition, TransitionOptions};
 use rustmotion_core::schema::{TransitionDirection, TransitionType};
 
 const W: u32 = 64;
 const H: u32 = 48;
 
-/// Two flat frames, so any channel offset shows up as a colour that is in
-/// neither of them.
 fn frames() -> (Vec<u8>, Vec<u8>) {
     let a: Vec<u8> = (0..W * H).flat_map(|_| [200u8, 200, 200, 255]).collect();
     let b: Vec<u8> = (0..W * H).flat_map(|_| [40u8, 40, 40, 255]).collect();
@@ -62,8 +51,6 @@ fn aberration_zero_is_a_plain_slide() {
 #[test]
 fn the_split_peaks_in_the_middle_and_is_gone_at_both_ends() {
     let o = opts(1.0, TransitionDirection::Left);
-    // At the ends the frames are whole, so the composite matches a plain
-    // slide exactly.
     assert_eq!(
         composite(0.0, &o),
         slide(0.0),
@@ -74,7 +61,6 @@ fn the_split_peaks_in_the_middle_and_is_gone_at_both_ends() {
         slide(1.0),
         "no split on the last frame — a residual fringe would bleed into the next scene"
     );
-    // In the middle, the seam between the two frames has to differ.
     assert_ne!(
         composite(0.5, &o),
         slide(0.5),
@@ -89,7 +75,6 @@ fn a_bigger_aberration_splits_further() {
     let loud = composite(mid, &opts(2.0, TransitionDirection::Left));
     let plain = slide(mid);
 
-    // Distance from the un-split composite: more aberration, more difference.
     let distance = |x: &[u8]| -> u64 {
         x.iter()
             .zip(plain.iter())
@@ -106,9 +91,6 @@ fn a_bigger_aberration_splits_further() {
 
 #[test]
 fn every_direction_lands_on_the_incoming_frame() {
-    // Whichever way it travels, the transition has to *finish*: a direction
-    // whose arithmetic left the incoming frame off-screen at progress 1
-    // would end the cut on the wrong scene.
     let (_, b) = frames();
     for direction in [
         TransitionDirection::Left,

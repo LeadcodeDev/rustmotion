@@ -1,32 +1,3 @@
-//! cosmic-text → Skia bridge.
-//!
-//! Provides:
-//! - a global [`FontSystem`] (lazy, system + bundled fonts)
-//! - `measure_text(...)` for taffy's `measure_fn`
-//! - `paint_text(...)` to draw a laid-out buffer onto a Skia canvas via
-//!   per-glyph rasterization through `SwashCache`
-//!
-//! Shaping & line-breaking are delegated to cosmic-text. Paint is done by
-//! rasterizing each glyph to an alpha mask, tinting it with the requested
-//! color, and blitting it as a small `Image` into Skia.
-//!
-//! **Not currently wired into the real render path (audit #10).** Every
-//! component's actual measure/paint goes through `skia_safe::Font::
-//! measure_str` / `TextBlob::new` in `engine::renderer::text` +
-//! `rustmotion-components::intrinsic::TextIntrinsic`, not through this
-//! module — `measure_text`/`paint_text` below have no callers outside their
-//! own tests (`grep -rn "engine::text\|text::cosmic" crates/` confirms
-//! this). If you're chasing a text overflow/measure-vs-paint bug, look in
-//! `engine::renderer::text.rs` and `rustmotion-components::intrinsic`
-//! instead — the shaping/bidi/glyph-fallback behaviour cosmic-text would
-//! provide here is not what actually renders today. Kept building (and the
-//! `cosmic-text` dependency kept) as a candidate landing spot for a future
-//! real shaping engine; not deleted unilaterally by this fix since that
-//! call — wire it in for real vs. remove the module and its dependency —
-//! is bigger than any single finding in this pass. See
-//! `rustmotion-components::intrinsic` module doc for the other side of this
-//! (it also used to claim a cosmic-text backing it doesn't have).
-
 use std::sync::{Mutex, OnceLock};
 
 use cosmic_text::{
@@ -38,24 +9,20 @@ use skia_safe::{images, Canvas, Color, ColorType, Data, ImageInfo, Paint, Point}
 static FONT_SYSTEM: OnceLock<Mutex<FontSystem>> = OnceLock::new();
 static SWASH_CACHE: OnceLock<Mutex<SwashCache>> = OnceLock::new();
 
-/// Borrow the global FontSystem. Created on first use with system fonts.
 pub fn font_system() -> &'static Mutex<FontSystem> {
     FONT_SYSTEM.get_or_init(|| Mutex::new(FontSystem::new()))
 }
 
-/// Borrow the global SwashCache (for glyph rasterization).
 pub fn swash_cache() -> &'static Mutex<SwashCache> {
     SWASH_CACHE.get_or_init(|| Mutex::new(SwashCache::new()))
 }
 
-/// Result of measuring a text run.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TextMetrics {
     pub width: f32,
     pub height: f32,
 }
 
-/// Configuration for laying out a single text run.
 #[derive(Debug, Clone)]
 pub struct TextStyle<'a> {
     pub font_family: Option<&'a str>,
@@ -73,7 +40,7 @@ impl<'a> Default for TextStyle<'a> {
         Self {
             font_family: None,
             font_size: 16.0,
-            line_height: 0.0, // 0 → derived from font_size * 1.2
+            line_height: 0.0,
             weight: 400,
             italic: false,
             max_width: None,
@@ -105,7 +72,6 @@ fn attrs_for<'a>(style: &'a TextStyle) -> Attrs<'a> {
     a
 }
 
-/// Measure a text string given font + line constraints.
 pub fn measure_text(text: &str, style: &TextStyle) -> TextMetrics {
     if text.is_empty() {
         return TextMetrics {
@@ -113,10 +79,6 @@ pub fn measure_text(text: &str, style: &TextStyle) -> TextMetrics {
             height: metrics_for(style).line_height,
         };
     }
-    // Poison-tolerant: a panic on another render thread (e.g. a Skia panic
-    // caught by a preview worker's panic fence) must not poison text shaping
-    // for every subsequent frame — the FontSystem stays usable, each shape
-    // call builds its own Buffer.
     let mut fs = font_system().lock().unwrap_or_else(|e| e.into_inner());
     let metrics = metrics_for(style);
     let mut buf = Buffer::new(&mut fs, metrics);
@@ -138,7 +100,6 @@ pub fn measure_text(text: &str, style: &TextStyle) -> TextMetrics {
     }
 }
 
-/// Paint a text string onto a Skia canvas at `origin` (top-left).
 pub fn paint_text(
     canvas: &Canvas,
     text: &str,
@@ -149,7 +110,6 @@ pub fn paint_text(
     if text.is_empty() {
         return;
     }
-    // Poison-tolerant for the same reason as in `measure_text`.
     let mut fs = font_system().lock().unwrap_or_else(|e| e.into_inner());
     let metrics = metrics_for(style);
     let mut buf = Buffer::new(&mut fs, metrics);
@@ -207,11 +167,8 @@ fn blit_glyph(
     }
     let mut rgba: Vec<u8> = Vec::with_capacity((w * h * 4) as usize);
     if is_color {
-        // SwashContent::Color : data is already RGBA premultiplied per glyph.
-        // Layout matches what Skia expects with ColorType::RGBA8888 & Premul.
         rgba.extend_from_slice(data);
     } else {
-        // Mask: alpha-only. Tint with `tint` and premultiply.
         let tr = tint.r() as u32;
         let tg = tint.g() as u32;
         let tb = tint.b() as u32;
@@ -247,7 +204,7 @@ mod tests {
     fn measure_empty_returns_zero_width() {
         let m = measure_text("", &TextStyle::default());
         assert_eq!(m.width, 0.0);
-        assert!(m.height > 0.0); // one empty line of line_height
+        assert!(m.height > 0.0);
     }
 
     #[test]
@@ -287,10 +244,6 @@ mod tests {
         assert!(m.height < 16.0 * 1.2 * 2.0, "should be one line");
     }
 
-    /// A panic on another thread while it holds the font mutex (e.g. a Skia
-    /// panic caught by a preview worker's panic fence) poisons the lock.
-    /// Shaping must survive that — otherwise one panic turns every subsequent
-    /// text render on every thread into a panic cascade.
     #[test]
     fn measure_survives_poisoned_font_mutex() {
         let _ = std::thread::spawn(|| {

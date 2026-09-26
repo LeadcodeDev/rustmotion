@@ -1,62 +1,12 @@
-//! `CssStyle` — typed mirror of the CSS properties supported by the engine.
-//!
-//! Scope: Remotion-equivalent (Flex, Grid, Block, transforms 2D/3D, filters,
-//! gradients, position absolute/relative, box-shadow, border-radius, opacity,
-//! clip-path). Excludes: inline boxes, floats, tables, position sticky/fixed.
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::computed;
 use super::units::{Length, LengthContext, LengthPercentage, ParsedLength};
-// `GradientBorder` / `InnerShadow` are reused from the schema layer rather
-// than mirrored: same crate, same serde/JsonSchema derives, identical JSON
-// shape either way — a css-local mirror would only duplicate the struct.
 use crate::schema::{deserialize_animation_effects, AnimationEffect, GradientBorder, InnerShadow};
 
-// ─── Legibility floor (relocated from `rustmotion/src/cli/commands/
-// geometry.rs`'s `check_legibility`, issue #110/#102 — moved here, not
-// duplicated, so `text-autofit` below can shrink down to the exact same
-// calibrated threshold instead of inventing a second one; `rustmotion`
-// depends on `rustmotion-core`, never the other way around, so the shared
-// value has to live on this side of that boundary) ─────────────────────────
-//
-// Threshold justification (rendered evidence, not a guess): a 1920×1080
-// scenario was rendered with the same sample line at 8/10/11/12/13/14/16/18/
-// 20/22/24/28px, then the frame was scaled down 50% (a realistic "not
-// full-native" viewing size) to inspect. 8–13px degraded to an illegible
-// grey smear at that scale; 14px was the first size that stayed readable.
-// 0.012 (1.2% of output height) sits between those two bands — it equals
-// ~13px on a 1080p frame — and clears every built-in component default
-// already shipped (table/terminal/codeblock/pill_nav = 14px, badge `md` =
-// 14px, kbd = 14px, tooltip = 13px), so it does not fire on scenarios that
-// already validate clean today. Expressing it as a fraction of output
-// height (rather than an absolute px count) makes the same *visual* size
-// get flagged on a 4K or vertical-format canvas too.
 pub const MIN_LEGIBLE_FONT_RATIO: f32 = 0.012;
 
-/// [`MIN_LEGIBLE_FONT_RATIO`] evaluated at a fixed 1920×1080 reference
-/// canvas (≈12.96px) — `text-autofit`'s shrink floor.
-///
-/// This is deliberately **not** `MIN_LEGIBLE_FONT_RATIO * scenario.video.
-/// height`, unlike `check_legibility`'s own per-scenario check. Reason:
-/// `text-autofit` must resolve to the *identical* px value wherever it's
-/// computed (`TextIntrinsic::measure`, which runs pre-layout inside
-/// `box_builder.rs`, and `Text`/`GradientText`'s painters, which run
-/// post-layout with a real `PaintCtx`) — see the measure/paint parity
-/// argument on `CssStyle::text_autofit`. `box_builder.rs` does not thread
-/// the real `VideoConfig` down to where `TextIntrinsic` is constructed (out
-/// of this workstream's file scope), so the painter side cannot be allowed
-/// to use the real, more accurate `ctx.video_height` either — doing so would
-/// silently reintroduce exactly the measure-vs-paint divergence this
-/// workstream exists to prevent, just relocated from "the box" to "the
-/// floor". Pinning both sides to the same fixed reference trades per-canvas
-/// precision (a vertical 1080×2256 scenario's *true* 1.2%-of-height floor is
-/// larger than this) for the non-negotiable guarantee that they agree. This
-/// does not weaken `check_legibility` itself: that check still runs
-/// independently, against the real canvas, on whatever `font-size` was
-/// authored — it has no visibility into `text-autofit`'s runtime output
-/// either way (see the workstream report's "non traité" list).
 pub const TEXT_AUTOFIT_MIN_FONT_PX: f32 = MIN_LEGIBLE_FONT_RATIO * 1080.0;
 
 /// Top-level CSS style block. All fields are optional; `None` means "not set"
@@ -78,7 +28,6 @@ pub const TEXT_AUTOFIT_MIN_FONT_PX: f32 = MIN_LEGIBLE_FONT_RATIO * 1080.0;
 #[derive(Debug, Clone, Default, PartialEq, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct CssStyle {
-    // ---- Layout / box ----
     pub display: Option<Display>,
     pub position: Option<Position>,
     pub top: Option<LengthPercentage>,
@@ -99,7 +48,6 @@ pub struct CssStyle {
     pub box_sizing: Option<BoxSizing>,
     pub aspect_ratio: Option<f32>,
 
-    // ---- Flex ----
     pub flex_direction: Option<FlexDirection>,
     pub flex_wrap: Option<FlexWrap>,
     pub justify_content: Option<JustifyContent>,
@@ -112,7 +60,6 @@ pub struct CssStyle {
     pub flex_basis: Option<Size>,
     pub order: Option<i32>,
 
-    // ---- Grid ----
     pub grid_template_columns: Option<Vec<GridTrack>>,
     pub grid_template_rows: Option<Vec<GridTrack>>,
     pub grid_column: Option<GridLine>,
@@ -121,7 +68,6 @@ pub struct CssStyle {
     pub justify_items: Option<JustifyItems>,
     pub justify_self: Option<JustifySelf>,
 
-    // ---- Typography (most are inherited) ----
     pub font_family: Option<String>,
     pub font_size: Option<Length>,
     pub font_weight: Option<FontWeight>,
@@ -180,7 +126,6 @@ pub struct CssStyle {
     /// silence it.
     pub text_autofit: Option<bool>,
 
-    // ---- Visual ----
     pub background: Option<Background>,
     pub border_radius: Option<BorderRadius>,
     pub box_shadow: Option<Vec<BoxShadow>>,
@@ -193,23 +138,19 @@ pub struct CssStyle {
     /// convention as `background` linear gradients.
     pub gradient_border: Option<GradientBorder>,
 
-    // ---- Legacy compat (accepted, never rendered — validator warns) ----
     /// Deprecated: use `backdrop-filter: [{ "fn": "blur", "radius": N }]`.
     pub backdrop_blur: Option<f32>,
     /// Deprecated: use `box-shadow` with `"inset": true`.
     pub inner_shadow: Option<InnerShadow>,
 
-    // ---- Filters / effects ----
     pub filter: Option<Vec<FilterFn>>,
     pub backdrop_filter: Option<Vec<FilterFn>>,
 
-    // ---- Transform ----
     pub transform: Option<Vec<TransformFn>>,
     pub transform_origin: Option<TransformOrigin>,
     pub perspective: Option<Length>,
     pub perspective_origin: Option<TransformOrigin>,
 
-    // ---- Scene-camera parallax ----
     /// Parallax plane depth for the scene camera (issue #90). 0 = locked
     /// plane (the camera does not affect it), 1 = normal plane (default),
     /// above 1 = amplified foreground. v1: effective on direct children of
@@ -217,14 +158,12 @@ pub struct CssStyle {
     /// governs its whole subtree). Not inherited via cascade.
     pub depth: Option<f32>,
 
-    // ---- Overflow / stacking ----
     pub overflow: Option<Overflow>,
     pub overflow_x: Option<Overflow>,
     pub overflow_y: Option<Overflow>,
     pub z_index: Option<i32>,
     pub visibility: Option<Visibility>,
 
-    // ---- Animation ----
     #[serde(default, deserialize_with = "deserialize_animation_effects")]
     pub animation: Vec<AnimationEffect>,
     /// Smoothing for `timeline` style-state changes. Supported properties:
@@ -239,11 +178,9 @@ pub struct CssStyle {
     /// which property and why whenever it would otherwise snap silently.
     pub transition: Option<StyleTransition>,
 
-    // ---- Audio reactive binding ----
     #[serde(default)]
     pub audio_reactive: Option<AudioReactive>,
 
-    // ---- Per-frame expression overrides (issue #338) ----
     /// The `"= ..."` expressions [`computed::extract`] pulled off this
     /// node's `opacity`/`width`/`height`/covered `transform` leaves at
     /// deserialize time — never part of the wire format (`#[serde(skip)]`:
@@ -255,15 +192,6 @@ pub struct CssStyle {
     pub expr: computed::ComputedStyle,
 }
 
-/// Field-for-field mirror of [`CssStyle`], used only as a `#[serde(remote)]`
-/// deserialization target — see [`CssStyle`]'s own doc, "`Deserialize` is
-/// hand-written, not derived". Never constructed directly; the derive macro
-/// generates `CssStyleWire::deserialize(d) -> Result<CssStyle, D::Error>` as
-/// an inherent function, which is all [`CssStyle`]'s hand-written impl below
-/// calls. Keep this in sync with [`CssStyle`]'s own field list — a field
-/// added to one and not the other fails to compile (a `remote` mismatch is a
-/// type error, never a silent divergence), so drift cannot survive `cargo
-/// check`.
 #[derive(Deserialize, Default)]
 #[serde(
     remote = "CssStyle",
@@ -366,15 +294,6 @@ struct CssStyleWire {
 }
 
 impl<'de> Deserialize<'de> for CssStyle {
-    /// Two steps, in order: (1) [`computed::extract`] peels any `"= ..."`
-    /// expression off `opacity`/`width`/`height`/a covered `transform` leaf,
-    /// mutating a `serde_json::Value` in place so the fields it touched are
-    /// left either absent or holding a neutral literal; (2) the cleaned
-    /// `Value` goes through [`CssStyleWire`]'s derived (ordinary,
-    /// `deny_unknown_fields`) logic for everything else. A style object that
-    /// isn't even a JSON object (malformed input) skips step 1 — there is
-    /// nothing to extract from — and step 2 then fails exactly as the old
-    /// derived impl would have.
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -406,8 +325,6 @@ pub enum StyleTransition {
 fn default_transition_easing() -> crate::schema::EasingType {
     crate::schema::EasingType::EaseInOut
 }
-
-// ---- Audio reactive binding ----
 
 /// Bind a CSS property to audio analysis data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -472,24 +389,15 @@ impl StyleTransition {
     }
 }
 
-// ---- Painter convenience accessors ----
-//
-// These resolve raw CssStyle values to the simple primitives that component
-// painters deal with: f32 px, &str hex colors, etc. They drop unsupported
-// units (em/rem/% with no parent context). Painters that need full
-// resolution should use `Length::resolve(&LengthContext)` directly.
 impl CssStyle {
-    /// `font-size` in px, falling back to `default` when unset.
     pub fn font_size_px_or(&self, default: f32) -> f32 {
         self.font_size.as_ref().map(|l| l.px()).unwrap_or(default)
     }
 
-    /// `font-size` in px if set as a length.
     pub fn font_size_px(&self) -> Option<f32> {
         self.font_size.as_ref().map(|l| l.px())
     }
 
-    /// `color` as a hex string (only `Color::String` returns Some).
     pub fn color_str(&self) -> Option<&str> {
         match &self.color {
             Some(Color::String(s)) => Some(s.as_str()),
@@ -497,29 +405,22 @@ impl CssStyle {
         }
     }
 
-    /// `color` as a hex string with default fallback.
     pub fn color_str_or<'a>(&'a self, default: &'a str) -> &'a str {
         self.color_str().unwrap_or(default)
     }
 
-    /// `font-family` string.
     pub fn font_family_str(&self) -> Option<&str> {
         self.font_family.as_deref()
     }
 
-    /// `font-family` string with default fallback.
     pub fn font_family_or<'a>(&'a self, default: &'a str) -> &'a str {
         self.font_family.as_deref().unwrap_or(default)
     }
 
-    /// `letter-spacing` in px, defaulting to 0.
     pub fn letter_spacing_px(&self) -> f32 {
         self.letter_spacing.as_ref().map(|l| l.px()).unwrap_or(0.0)
     }
 
-    /// `line-height` resolution. For `Number` (unitless) returns
-    /// `n * font_size`; for `Length(px)` returns the px value; otherwise
-    /// returns `1.3 * font_size`.
     pub fn line_height_for(&self, font_size: f32) -> f32 {
         match &self.line_height {
             Some(LineHeight::Number(n)) => n * font_size,
@@ -528,61 +429,6 @@ impl CssStyle {
         }
     }
 
-    // ---- Context-aware typography resolution (issue #125 §2) ----
-    //
-    // `font_size_px_or`/`letter_spacing_px`/`line_height_for` above are the
-    // context-free accessors ~50+ call sites across the engine use; they go
-    // through `Length::px()`, which cannot resolve `%`/`em`/`rem`/`vw`/`vh`
-    // (no `LengthContext` reaches them) and — as of this fix — warns loudly
-    // instead of silently dropping to `0px` when the value actually is one
-    // of those units (see `units::px_or_warn`). That is the "fail loudly"
-    // half of issue #125 §2.
-    //
-    // The methods below are the "or work" half: given a `LengthContext`,
-    // they resolve `%`/`em`/`rem`/`vw`/`vh` correctly for these three
-    // properties specifically, honouring the CSS rule that `em` means two
-    // different things depending on which property it's on:
-    //   - on `font-size` itself, `em` is relative to the *parent's* computed
-    //     font-size — i.e. `ctx.font_size` going in.
-    //   - on `letter-spacing` / `line-height`, `em` is relative to the
-    //     element's *own* (just-computed) font-size, not the parent's.
-    // `typography_px_ctx` below resolves all three together and gets this
-    // right by re-deriving the context between steps; the three individual
-    // methods are the building blocks for callers that need only one value,
-    // or that already have the right `ctx.font_size` for what they're
-    // resolving.
-    //
-    // What is NOT fixed by this, and is explicitly out of scope for this
-    // workstream (file allowlist: renderer/text.rs, css/units.rs,
-    // css/style.rs — not css/cascade.rs): `cascade::inherit_from` copies an
-    // inherited `font-size` down the tree as the raw, unresolved `Length` —
-    // not a resolved px value. So today nothing walks the tree computing
-    // "the actual parent font-size in px" to feed as `ctx.font_size` when
-    // resolving a child's `em` font-size; a caller that plugs in some other
-    // value (a default, the root font-size, whatever's convenient) gets a
-    // *technically* resolved but *semantically wrong* base for that one
-    // case. `rem` (always relative to a single scenario-wide root, not a
-    // per-ancestor chain) and `vw`/`vh` (relative to the real viewport) do
-    // NOT have this problem — they are fully correct via `ctx.root_font_size`
-    // / `ctx.viewport_*` regardless of cascade. `%` on `line-height` is
-    // special-cased below against the *own* font-size per CSS, not
-    // `ctx.parent_size`, so it isn't affected either. In short: `em`/`%` on
-    // `font-size` need a cascade.rs fix to be fully correct end-to-end;
-    // everything else these methods resolve is correct today.
-    //
-    // These are additive — nothing above changes signature, and nothing
-    // currently in the engine calls these yet, since every existing call
-    // site (`rustmotion-components/**`) is outside this workstream's file
-    // scope. Wiring a real `LengthContext` (viewport dims from `PaintCtx`,
-    // parent font-size from a resolved-cascade) into those call sites is the
-    // integration step a sibling workstream (or a follow-up PR) needs to do
-    // for relative units on type to actually reach rendered output.
-
-    /// `font-size` resolved against `ctx`, correctly handling
-    /// `%`/`em`/`rem`/`vw`/`vh` — unlike [`Self::font_size_px_or`]. `em`/`%`
-    /// resolve against `ctx.font_size`, which the caller should set to the
-    /// parent's *actual computed* font-size in px for correctness (see the
-    /// module note above on why nothing does that yet).
     pub fn font_size_px_ctx(&self, ctx: &LengthContext, default: f32) -> f32 {
         self.font_size
             .as_ref()
@@ -590,13 +436,6 @@ impl CssStyle {
             .unwrap_or(default)
     }
 
-    /// `letter-spacing` resolved against `ctx`, correctly handling
-    /// `%`/`em`/`rem`/`vw`/`vh` — unlike [`Self::letter_spacing_px`]. Per
-    /// CSS, `em` here means the element's *own* font-size, so pass a `ctx`
-    /// whose `font_size` is the already-resolved own font-size (e.g. via
-    /// [`Self::font_size_px_ctx`]), not the parent's — see
-    /// [`Self::typography_px_ctx`] for a helper that gets this right
-    /// automatically.
     pub fn letter_spacing_px_ctx(&self, ctx: &LengthContext) -> f32 {
         self.letter_spacing
             .as_ref()
@@ -604,16 +443,6 @@ impl CssStyle {
             .unwrap_or(0.0)
     }
 
-    /// `line-height` resolved against `ctx`, correctly handling
-    /// `%`/`em`/`rem`/`vw`/`vh` — unlike [`Self::line_height_for`].
-    /// `LineHeight::Number` (unitless, e.g. `1.5`) is unaffected — it always
-    /// means `n * font_size` regardless of any context. For
-    /// `LineHeight::Length`, `%` is special-cased to CSS's actual rule for
-    /// this property (relative to the element's *own* font-size, not
-    /// `ctx.parent_size` like `%` normally means): a generic
-    /// `ParsedLength::resolve` would silently resolve it against the wrong
-    /// base otherwise. Same own-vs-parent `em` caveat as
-    /// [`Self::letter_spacing_px_ctx`] applies.
     pub fn line_height_for_ctx(&self, font_size: f32, ctx: &LengthContext) -> f32 {
         match &self.line_height {
             Some(LineHeight::Number(n)) => n * font_size,
@@ -625,13 +454,6 @@ impl CssStyle {
         }
     }
 
-    /// Resolve `font-size`, `letter-spacing`, and `line-height` together in
-    /// one call, honouring CSS's two different `em` bases (see the module
-    /// note above `font_size_px_ctx`): `font-size`'s own `em` resolves
-    /// against `ctx.font_size` (conventionally the parent's font-size),
-    /// while `letter-spacing`'s and `line-height`'s `em` resolve against the
-    /// just-computed *own* font-size, not `ctx.font_size` again. Returns
-    /// `(font_size_px, letter_spacing_px, line_height_px)`.
     pub fn typography_px_ctx(
         &self,
         ctx: &LengthContext,
@@ -644,12 +466,10 @@ impl CssStyle {
         (font_size, letter_spacing, line_height)
     }
 
-    /// `opacity` with default 1.0.
     pub fn opacity_or(&self, default: f32) -> f32 {
         self.opacity.unwrap_or(default)
     }
 
-    /// `border-radius` resolved as a single uniform px value (drops per-corner).
     pub fn border_radius_px(&self) -> Option<f32> {
         match &self.border_radius {
             Some(BorderRadius::Uniform(lp)) => Some(lp.px()),
@@ -658,22 +478,18 @@ impl CssStyle {
         }
     }
 
-    /// `border-radius` as px, defaulting to `default`.
     pub fn border_radius_px_or(&self, default: f32) -> f32 {
         self.border_radius_px().unwrap_or(default)
     }
 
-    /// Resolved padding tuple `(top, right, bottom, left)` in px.
     pub fn padding_px(&self) -> (f32, f32, f32, f32) {
         edges_px(self.padding.as_ref())
     }
 
-    /// Resolved margin tuple `(top, right, bottom, left)` in px.
     pub fn margin_px(&self) -> (f32, f32, f32, f32) {
         edges_px(self.margin.as_ref())
     }
 
-    /// `background` as a hex/keyword string when set as a plain color.
     pub fn background_color_str(&self) -> Option<&str> {
         match &self.background {
             Some(Background::Color(Color::String(s))) => Some(s.as_str()),
@@ -697,8 +513,6 @@ fn edges_px(e: Option<&Edges>) -> (f32, f32, f32, f32) {
         None => (0.0, 0.0, 0.0, 0.0),
     }
 }
-
-// ---- Layout enums ----
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -891,18 +705,6 @@ pub enum BorderRadius {
 }
 
 impl BorderRadius {
-    /// The single uniform radius as an absolute pixel value, or `None` when
-    /// this isn't a shape a context-free (pre-layout) resolver can safely
-    /// interpolate: per-corner radii (which corner "wins" a 2-point
-    /// interpolation is undefined), or a unit that needs a
-    /// [`crate::css::units::LengthContext`] the caller doesn't have yet
-    /// (`%`/`em`/`rem`/`vw`/`vh` — see the "unités mixtes" decision in
-    /// `box_builder.rs`'s `resolve_transition_overrides`: resolved only
-    /// where both endpoints are unambiguous, refused otherwise rather than
-    /// guessed). Used by `box_builder.rs` (`style.transition` smoothing) and
-    /// `validate_schema.rs` (the matching diagnostic) — both must agree on
-    /// exactly which shapes are interpolable, which is why this lives here
-    /// once instead of being reimplemented on each side.
     pub fn absolute_px(&self) -> Option<f32> {
         match self {
             BorderRadius::Uniform(lp) => match lp.try_parse() {
@@ -913,8 +715,6 @@ impl BorderRadius {
         }
     }
 }
-
-// ---- Flex ----
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -996,8 +796,6 @@ pub enum Gap {
     },
 }
 
-// ---- Grid ----
-
 /// A single grid track (column or row) sizing function.
 ///
 /// Variant order matters here: this is `#[serde(untagged)]`, and serde tries
@@ -1077,8 +875,6 @@ pub enum JustifySelf {
     End,
     Center,
 }
-
-// ---- Typography ----
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
@@ -1192,8 +988,6 @@ pub enum TextDecorationStyle {
     Wavy,
 }
 
-// ---- Color ----
-
 /// Typed color. Strings are parsed lazily ("#rgb", "rgba(..)", named colors).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
@@ -1213,7 +1007,6 @@ fn one_f32() -> f32 {
 }
 
 impl Color {
-    /// CSS-string form: pass strings through, format rgba as `#rrggbb[aa]`.
     pub fn to_css_string(&self) -> String {
         match self {
             Color::String(s) => s.clone(),
@@ -1229,8 +1022,6 @@ impl Color {
     }
 }
 
-// ---- Background ----
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Background {
@@ -1240,13 +1031,6 @@ pub enum Background {
 }
 
 impl Background {
-    /// The background's hex/rgba string when it's a plain solid colour, or
-    /// `None` for anything else (gradients, image layers, multi-layer
-    /// stacks) — those need real paint-time compositing to interpolate
-    /// correctly, which is out of reach for a pre-layout `CssStyle` value.
-    /// Same shared-predicate rationale as [`BorderRadius::absolute_px`]:
-    /// `box_builder.rs`'s smoothing and `validate_schema.rs`'s diagnostic
-    /// both call this so they can never disagree about what's interpolable.
     pub fn solid_hex(&self) -> Option<String> {
         match self {
             Background::Color(c) => Some(c.to_css_string()),
@@ -1337,8 +1121,6 @@ pub enum BackgroundRepeat {
     Space,
 }
 
-// ---- Shadows ----
-
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct BoxShadow {
@@ -1360,7 +1142,6 @@ pub struct TextShadow {
 }
 
 impl TextShadow {
-    /// Resolve into the legacy schema shadow consumed by the text painters.
     pub fn to_schema(&self, ctx: &crate::css::units::LengthContext) -> crate::schema::TextShadow {
         crate::schema::TextShadow {
             color: self
@@ -1374,8 +1155,6 @@ impl TextShadow {
         }
     }
 }
-
-// ---- Transform ----
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "fn", rename_all = "kebab-case")]
@@ -1466,8 +1245,6 @@ pub struct TransformOrigin {
     pub z: Option<Length>,
 }
 
-// ---- Filters ----
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "fn", rename_all = "kebab-case")]
 pub enum FilterFn {
@@ -1526,8 +1303,6 @@ fn default_noise_seed() -> u64 {
     42
 }
 
-// ---- Blend ----
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum BlendMode {
@@ -1549,8 +1324,6 @@ pub enum BlendMode {
     Luminosity,
     PlusLighter,
 }
-
-// ---- Clip-path ----
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -1606,8 +1379,6 @@ pub enum ClipPath {
         id: String,
     },
 }
-
-// ---- Tests ----
 
 #[cfg(test)]
 mod tests {
@@ -1681,12 +1452,6 @@ mod tests {
         assert_eq!(parsed.z_index, Some(10));
     }
 
-    // ---- Grid track deserialization (issue #105) ----
-    //
-    // `GridTrack` is `#[serde(untagged)]`; these lock in which variant a
-    // given JSON shape resolves to, since that resolution previously
-    // silently swallowed both `Fr` and `Keyword` into `Length`.
-
     #[test]
     fn grid_track_bare_number_is_fr() {
         let json = r#"{ "grid-template-columns": [1, 1, 1] }"#;
@@ -1755,8 +1520,6 @@ mod tests {
         }
     }
 
-    // ---- issue #125 §2: context-aware typography resolution ----
-
     fn style_with(font_size: &str, letter_spacing: &str, line_height: &str) -> CssStyle {
         let json = format!(
             r#"{{ "font-size": {font_size}, "letter-spacing": {letter_spacing}, "line-height": {line_height} }}"#
@@ -1771,12 +1534,7 @@ mod tests {
             viewport_width: 1920.0,
             ..Default::default()
         };
-        // The exact regression from issue #125 §2: `font-size: "15.6vw"`
-        // used to resolve to 0 via `.px()` (rendering nothing / a black
-        // frame). Through a LengthContext it resolves correctly.
         assert_eq!(s.font_size_px_ctx(&ctx, 48.0), 15.6 / 100.0 * 1920.0);
-        // The context-free accessor still can't do this — proving the two
-        // are genuinely different code paths, not the same thing renamed.
         assert_eq!(s.font_size_px_or(48.0), 0.0);
     }
 
@@ -1787,9 +1545,6 @@ mod tests {
             root_font_size: 20.0,
             ..Default::default()
         };
-        // rem is relative to a single scenario-wide root font-size, not a
-        // per-ancestor chain — no cascade.rs involvement needed for this to
-        // be correct.
         assert_eq!(s.font_size_px_ctx(&ctx, 48.0), 40.0);
     }
 
@@ -1801,31 +1556,20 @@ mod tests {
 
     #[test]
     fn letter_spacing_px_ctx_resolves_own_em_not_parent_em() {
-        // letter-spacing's `em` is relative to the *element's own*
-        // font-size, not whatever `ctx.font_size` happened to be for
-        // resolving font-size itself.
         let s = style_with("300", r#""-0.03em""#, "1");
         let own_ctx = LengthContext {
-            font_size: 300.0, // the element's own resolved font-size
+            font_size: 300.0,
             ..Default::default()
         };
         assert!((s.letter_spacing_px_ctx(&own_ctx) - (-9.0)).abs() < 1e-4);
-        // Context-free path can't resolve this at all (issue #125 §2): it
-        // silently (now loudly, but still numerically) drops to 0, which is
-        // byte-identical to a deliberate zero tracking.
         assert_eq!(s.letter_spacing_px(), 0.0);
     }
 
     #[test]
     fn line_height_percent_resolves_against_own_font_size_not_parent_size() {
-        // CSS special case: `line-height: 50%` means 50% of the element's
-        // own font-size, NOT 50% of `ctx.parent_size` like `%` means for
-        // most other properties (width, padding, etc).
         let s = style_with("100", r#""50%""#, r#""50%""#);
         let ctx = LengthContext {
-            parent_size: 1000.0, // deliberately different from font_size,
-            // to prove `%` here does NOT fall through to the generic
-            // percent-of-parent resolution.
+            parent_size: 1000.0,
             ..Default::default()
         };
         assert_eq!(s.line_height_for_ctx(100.0, &ctx), 50.0);
@@ -1842,18 +1586,9 @@ mod tests {
 
     #[test]
     fn typography_px_ctx_resolves_all_three_with_correct_em_bases() {
-        // font-size: 1.5em against a 200px parent font-size -> 300px own
-        // font-size. letter-spacing/line-height's em must then use that
-        // 300px *own* size, not the 200px parent size passed in via ctx.
-        // line-height as a bare JSON number (unitless, `LineHeight::Number`)
-        // — a quoted `"0.85"` would instead deserialize as a `Length`
-        // string, which parses a bare numeric string as *pixels*
-        // (`ParsedLength::Px`), not as the unitless multiplier CSS means;
-        // that's an existing quirk of `LineHeight`'s untagged variants,
-        // unrelated to this fix.
         let s = style_with(r#""1.5em""#, r#""-0.03em""#, "0.85");
         let ctx = LengthContext {
-            font_size: 200.0, // parent's font-size, for font-size's own em
+            font_size: 200.0,
             ..Default::default()
         };
         let (font_size, letter_spacing, line_height) = s.typography_px_ctx(&ctx, 48.0);
@@ -1865,19 +1600,8 @@ mod tests {
         assert_eq!(line_height, 300.0 * 0.85);
     }
 
-    // ---- constat #1: border-radius per-corner kebab-case (RED first) ----
-
     #[test]
     fn border_radius_corners_accepts_kebab_case() {
-        // This is the shape every sibling composite in this file uses
-        // (box-shadow -> offset-x/offset-y, transform-origin -> x/y, etc.)
-        // and the shape `rules/component-field-placement.md` teaches. Before
-        // the fix, `BorderRadius::Corners`'s fields are literally
-        // `top_left`/`top_right`/... with no kebab alias, so this kebab
-        // object fails to match `Corners` (unknown fields) and, being all
-        // `#[serde(default)]`, matches it anyway with every corner at 0 —
-        // the untagged enum never reports an error, it just silently
-        // produces radius 0.
         let json = r#"{ "border-radius": { "top-left": "12px", "top-right": "12px", "bottom-right": "4px", "bottom-left": "4px" } }"#;
         let s: CssStyle = serde_json::from_str(json).unwrap();
         match s.border_radius {
@@ -1898,8 +1622,6 @@ mod tests {
 
     #[test]
     fn border_radius_corners_still_accepts_legacy_snake_case() {
-        // Back-compat: any scenario already written with the old
-        // snake_case field names must keep working identically.
         let json = r#"{ "border-radius": { "top_left": "8px", "top_right": "8px", "bottom_right": "8px", "bottom_left": "8px" } }"#;
         let s: CssStyle = serde_json::from_str(json).unwrap();
         assert_eq!(s.border_radius_px(), Some(8.0));
@@ -1907,8 +1629,6 @@ mod tests {
 
     #[test]
     fn border_radius_corners_typo_is_a_named_error_not_a_silent_zero() {
-        // A misspelled key must not silently resolve to Corners{0,0,0,0} —
-        // it must be reported.
         let json = r#"{ "border-radius": { "topleft": "12px" } }"#;
         let err = serde_json::from_str::<CssStyle>(json).expect_err("typo must be rejected");
         let msg = err.to_string();
@@ -1920,16 +1640,8 @@ mod tests {
         );
     }
 
-    // ---- constat #2: `Edges` (padding/margin) rejects unknown shapes (RED first) ----
-
     #[test]
     fn edges_rejects_unknown_object_shape_instead_of_defaulting_to_zero() {
-        // `rules/margin-left-hack.md`-adjacent trap: an LLM reasoning in CSS
-        // terms writes `{"horizontal": 20}` instead of the supported
-        // `{"top":.., "right":.., "bottom":.., "left":..}` shape. Before the
-        // fix, `Edges::Sides`'s four fields are all `#[serde(default)]` with
-        // no `deny_unknown_fields`, so this object matches `Sides` anyway
-        // with every side at 0 — silent, wrong padding instead of an error.
         let json = r#"{ "padding": { "horizontal": 20 } }"#;
         let err = serde_json::from_str::<CssStyle>(json)
             .expect_err("an unrecognised padding shape must be rejected, not silently zeroed");
@@ -1954,16 +1666,8 @@ mod tests {
         assert_eq!(s.padding_px(), (24.0, 24.0, 24.0, 24.0));
     }
 
-    // ---- constat #6: `Size` untagged variant order (RED first) ----
-
     #[test]
     fn size_keyword_max_content_is_reachable() {
-        // `Size` is `#[serde(untagged)]`: Auto, Length, Keyword in that
-        // declared order (before the fix). `Length(LengthPercentage)`'s
-        // `String` fallback variant accepts *any* string, so it is tried
-        // (and succeeds) before `Keyword` is ever reached — `max-content` /
-        // `min-content` / `fit-content` are dead schema. After the fix,
-        // `Keyword` must be tried before the `Length` catch-all.
         for (kw, expected) in [
             ("max-content", SizeKeyword::MaxContent),
             ("min-content", SizeKeyword::MinContent),
@@ -1991,10 +1695,6 @@ mod tests {
         assert!(matches!(s.width, Some(Size::Length(_))));
     }
 
-    // ---- extra: `LineHeight` has the same catch-all-before-specific shape
-    // as constat #6's `Size`, found while auditing this file for the same
-    // bug class. Fixed alongside it (see the doc comment on `LineHeight`).
-
     #[test]
     fn line_height_keyword_normal_is_reachable() {
         let s: CssStyle = serde_json::from_str(r#"{ "line-height": "normal" }"#).unwrap();
@@ -2012,8 +1712,6 @@ mod tests {
         let s: CssStyle = serde_json::from_str(r#"{ "line-height": "24px" }"#).unwrap();
         assert!(matches!(s.line_height, Some(LineHeight::Length(_))));
     }
-
-    // ---- border-radius: kebab-case is the canonical wire form on output ----
 
     #[test]
     fn border_radius_corners_serializes_as_kebab_case() {

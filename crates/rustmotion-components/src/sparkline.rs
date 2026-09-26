@@ -69,13 +69,6 @@ rustmotion_core::impl_traits!(Sparkline {
     Styled => style,
 });
 
-/// `(min, max, normalize)` for a min-max scaled series, matching
-/// `chart::line::series_scale`'s flat-series handling: a constant series is
-/// centred (`0.5`) instead of collapsing to the bottom edge. Dividing by a
-/// `max(0.001)` floor mapped a constant series to 0, so a flat series read
-/// as "all zero" instead of "constant at some value". Duplicated locally —
-/// `chart::line::series_scale` is `pub(super)` to the `chart` module, not
-/// reachable from here.
 fn series_scale(values: impl Iterator<Item = f64> + Clone) -> (f64, f64, impl Fn(f64) -> f32) {
     let min_val = values.clone().fold(f64::INFINITY, f64::min);
     let max_val = values.fold(f64::NEG_INFINITY, f64::max);
@@ -101,10 +94,6 @@ impl Sparkline {
         if !self.animated {
             return 1.0;
         }
-        // Ramp measured from `start_at`, not from scene time zero — matches
-        // `Counter::ramp_progress`. A sparkline delayed with `start_at` used
-        // to read raw scene time, so it was already fully revealed on the
-        // very first frame it became visible.
         let start = self.timing.start_at.unwrap_or(0.0);
         let elapsed = (time - start).max(0.0);
         let p = (elapsed / self.animation_duration).clamp(0.0, 1.0) as f32;
@@ -146,7 +135,6 @@ impl Sparkline {
         fill_path.line_to((last_x, h - pad));
         fill_path.close();
 
-        // Clip for animation
         let clip_w = w * progress;
         canvas.save();
         canvas.clip_rect(
@@ -155,7 +143,6 @@ impl Sparkline {
             false,
         );
 
-        // Gradient fill
         if self.fill {
             let (r, g, b, _) = parse_hex_color(&self.color);
             let top_color = Color::from_argb((self.fill_opacity * 255.0) as u8, r, g, b);
@@ -179,7 +166,6 @@ impl Sparkline {
             }
         }
 
-        // Line stroke
         let mut line_paint = paint_from_hex(&self.color);
         line_paint.set_style(PaintStyle::Stroke);
         line_paint.set_stroke_width(self.stroke_width);
@@ -261,11 +247,6 @@ mod tests {
 
     #[test]
     fn a_flat_series_is_centered_not_pinned_to_the_bottom_edge() {
-        // #7's exact repro: with every value equal, `(val - min_val)` is
-        // 0 for every point, so the line was drawn on the bottom edge
-        // (`h - pad`) — reading as "a series of zeroes" instead of "a
-        // constant series at some value". `chart::line::series_scale`
-        // was fixed to center a flat series (0.5) for exactly this reason.
         const H: i32 = 40;
         let flat = base_sparkline(vec![7.0, 7.0, 7.0, 7.0, 7.0]);
         let mut surface = skia_safe::surfaces::raster_n32_premul((120, H)).expect("raster surface");

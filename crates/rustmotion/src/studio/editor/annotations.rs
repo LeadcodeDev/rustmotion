@@ -20,12 +20,16 @@ fn write_file(path: &std::path::Path, content: &str) -> Result<(), String> {
     std::fs::write(path, content).map_err(|e| format!("write: {e}"))
 }
 
+static IDS_MINTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn annotation_id() -> String {
-    let n = std::time::SystemTime::now()
+    let nanos_since_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    format!("an_{n:x}")
+    let tiebreak_for_ids_minted_within_one_clock_tick =
+        IDS_MINTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("an_{nanos_since_epoch:x}_{tiebreak_for_ids_minted_within_one_clock_tick:x}")
 }
 
 pub fn submit_annotation(

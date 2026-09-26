@@ -26,12 +26,6 @@ impl Chart {
         let (min_x, max_x, norm_x) = series_scale(self.points.iter().map(|p| p.x));
         let (min_y, max_y, norm_y) = series_scale(self.points.iter().map(|p| p.y));
 
-        // `ScatterPoint` carries no label, so the previous empty slice meant
-        // `show_x_labels: true` reserved a bottom gutter and then drew nothing
-        // into it. A scatter's x axis is numeric: label it with ticks over
-        // min_x..max_x, at the same 5 fractions `draw_axes` uses for the y
-        // axis. Passing `categorical: false` places tick i at i/(n-1) of the
-        // width, which is exactly where those fractions fall.
         let x_labels: Vec<String> = if self.show_x_labels {
             (0..=5)
                 .map(|i| format_number(min_x + (max_x - min_x) * (i as f64 / 5.0)))

@@ -1,24 +1,8 @@
-//! `rustmotion captions` — generate word-level caption timings.
-//!
-//! Two modes:
-//! - **Transcription** (default): shells out to a whisper.cpp binary
-//!   (`whisper-cli`, `whisper-cpp` or `main` in PATH), following the same
-//!   philosophy as ffmpeg: auto-detection, actionable error when absent,
-//!   no compiled-in C++ dependency.
-//! - **Import**: `--from-srt` / `--from-vtt` parse subtitle files offline
-//!   with a hand-rolled parser (no dependency). Word timing inside a cue is
-//!   spread uniformly over the cue duration (approximation).
-//!
-//! Output shape (stdout or `-o`): `{"words":[{"text","start","end"}]}` —
-//! directly usable as a `--props` file with a `"words": "$words"` variable
-//! reference in the scenario.
-
 use rustmotion::error::{Result, RustmotionError};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// A single timed word, as emitted in the output JSON.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct TimedWord {
     pub text: String,
@@ -26,23 +10,17 @@ pub struct TimedWord {
     pub end: f64,
 }
 
-/// Output file shape: `{"words": [...]}`.
 #[derive(Debug, Serialize)]
 struct WordsFile<'a> {
     words: &'a [TimedWord],
 }
 
-/// A subtitle cue (SRT/VTT): a time window and its (already cleaned) text.
 #[derive(Debug, Clone, PartialEq)]
 struct Cue {
     start: f64,
     end: f64,
     text: String,
 }
-
-// ---------------------------------------------------------------------------
-// Subtitle parsing (SRT / VTT)
-// ---------------------------------------------------------------------------
 
 fn parse_srt(input: &str) -> Result<Vec<Cue>> {
     parse_cues(input, false)
@@ -52,8 +30,6 @@ fn parse_vtt(input: &str) -> Result<Vec<Cue>> {
     parse_cues(input, true)
 }
 
-/// Shared SRT/VTT cue parser: blocks separated by blank lines, each with a
-/// `start --> end` timing line followed by (possibly multi-line) text.
 fn parse_cues(input: &str, vtt: bool) -> Result<Vec<Cue>> {
     let input = input
         .trim_start_matches('\u{feff}')
@@ -76,8 +52,6 @@ fn parse_cues(input: &str, vtt: bool) -> Result<Vec<Cue>> {
         {
             continue;
         }
-        // The timing line is usually line 0 (VTT) or line 1 (SRT index /
-        // VTT cue identifier before it).
         let Some(timing_idx) = lines.iter().position(|l| l.contains("-->")) else {
             continue;
         };
@@ -103,17 +77,13 @@ fn parse_cues(input: &str, vtt: bool) -> Result<Vec<Cue>> {
     Ok(cues)
 }
 
-/// Parses `start --> end [cue settings...]` into a `(start, end)` pair.
 fn parse_timing_line(line: &str) -> Option<(f64, f64)> {
     let (left, right) = line.split_once("-->")?;
     let start = parse_timestamp(left)?;
-    // The end timestamp may be followed by VTT cue settings.
     let end = parse_timestamp(right.split_whitespace().next()?)?;
     Some((start, end))
 }
 
-/// Parses `HH:MM:SS,mmm` (SRT), `HH:MM:SS.mmm` (VTT) or `MM:SS.mmm`
-/// (VTT short form) into seconds.
 fn parse_timestamp(s: &str) -> Option<f64> {
     let s = s.trim();
     let (clock, frac) = match s.rsplit_once([',', '.']) {
@@ -129,7 +99,6 @@ fn parse_timestamp(s: &str) -> Option<f64> {
     Some(h as f64 * 3600.0 + m as f64 * 60.0 + sec as f64 + frac)
 }
 
-/// Removes `<i>`, `<b>`, `<font ...>` and any other angle-bracket tags.
 fn strip_tags(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut in_tag = false;
@@ -144,8 +113,6 @@ fn strip_tags(text: &str) -> String {
     out
 }
 
-/// Spreads each cue's duration uniformly across its words (approximation:
-/// every word in a cue gets `duration / word_count` seconds).
 fn distribute_words(cues: &[Cue]) -> Vec<TimedWord> {
     let mut words = Vec::new();
     for cue in cues {
@@ -169,16 +136,10 @@ fn round_ms(t: f64) -> f64 {
     (t * 1000.0).round() / 1000.0
 }
 
-/// Serializes the words to the `{"words": [...]}` JSON shape.
 fn words_to_json(words: &[TimedWord]) -> String {
     serde_json::to_string_pretty(&WordsFile { words }).expect("words serialize to JSON")
 }
 
-// ---------------------------------------------------------------------------
-// whisper.cpp subprocess
-// ---------------------------------------------------------------------------
-
-/// Actionable error when no whisper.cpp binary is found in PATH.
 fn missing_binary_error() -> RustmotionError {
     RustmotionError::Generic(
         "No whisper.cpp binary found in PATH (tried `whisper-cli`, `whisper-cpp`, `main`).\n\
@@ -189,7 +150,6 @@ fn missing_binary_error() -> RustmotionError {
     )
 }
 
-/// Actionable error when the requested model cannot be resolved.
 fn missing_model_error(name: &str, searched: &[PathBuf]) -> RustmotionError {
     let searched_list = searched
         .iter()
@@ -204,7 +164,6 @@ fn missing_model_error(name: &str, searched: &[PathBuf]) -> RustmotionError {
     ))
 }
 
-/// Searches PATH for an executable file with the given name.
 fn find_in_path(name: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
     std::env::split_paths(&path_var)
@@ -212,9 +171,6 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// Looks for a whisper.cpp binary in PATH (`whisper-cli`, `whisper-cpp`,
-/// `main`), probing `--help` and requiring "whisper" in the help text (this
-/// guards against an unrelated binary that happens to be called `main`).
 fn detect_whisper_binary() -> Option<PathBuf> {
     ["whisper-cli", "whisper-cpp", "main"]
         .iter()
@@ -235,8 +191,6 @@ fn detect_whisper_binary() -> Option<PathBuf> {
         })
 }
 
-/// Resolves `--model`: a direct `.bin` path, or a name searched as
-/// `ggml-<name>.bin` in `~/.cache/whisper` and next to the binary.
 fn resolve_model(model: &str, binary: &Path) -> Result<PathBuf> {
     if model.ends_with(".bin") || model.contains('/') {
         let as_path = Path::new(model);
@@ -264,8 +218,6 @@ fn resolve_model(model: &str, binary: &Path) -> Result<PathBuf> {
         .ok_or_else(|| missing_model_error(model, &searched))
 }
 
-/// whisper.cpp `-oj` output (documented format): segments under
-/// `transcription`, with `offsets.{from,to}` in milliseconds.
 #[derive(Deserialize)]
 struct WhisperOutput {
     #[serde(default)]
@@ -284,9 +236,6 @@ struct WhisperOffsets {
     to: u64,
 }
 
-/// Parses whisper.cpp `-oj` JSON output (`transcription[].offsets.{from,to}`
-/// in milliseconds, `.text`) into timed words. Punctuation-only segments
-/// (produced by `-ml 1 -sow`) are glued to the previous word.
 fn parse_whisper_json(json: &str) -> Result<Vec<TimedWord>> {
     let parsed: WhisperOutput = serde_json::from_str(json)?;
     let mut words: Vec<TimedWord> = Vec::new();
@@ -297,8 +246,6 @@ fn parse_whisper_json(json: &str) -> Result<Vec<TimedWord>> {
         }
         let end = round_ms(seg.offsets.to as f64 / 1000.0);
         if !text.chars().any(|c| c.is_alphanumeric()) {
-            // Punctuation-only segment: attach to the previous word
-            // (drop it when there is no previous word).
             if let Some(prev) = words.last_mut() {
                 prev.text.push_str(&text);
                 prev.end = end;
@@ -314,15 +261,6 @@ fn parse_whisper_json(json: &str) -> Result<Vec<TimedWord>> {
     Ok(words)
 }
 
-/// Runs the whisper.cpp binary on the audio file and returns timed words.
-///
-/// Flags used (whisper.cpp CLI):
-/// - `-m <model>` / `-f <audio>`: model and input file
-/// - `-ml 1 -sow`: max segment length 1 + split on word — whisper.cpp's
-///   documented recipe for word-level timestamps (one segment per word)
-/// - `-oj -of <base>`: write JSON output to `<base>.json`
-/// - `-np`: suppress progress prints
-/// - `-l <lang>`: optional language code
 fn transcribe(
     audio: &Path,
     model: &str,
@@ -385,10 +323,6 @@ fn transcribe(
     parse_whisper_json(&json)
 }
 
-// ---------------------------------------------------------------------------
-// Command entry point
-// ---------------------------------------------------------------------------
-
 pub fn cmd_captions(
     audio: Option<&Path>,
     output: Option<&Path>,
@@ -440,8 +374,6 @@ fn read_subtitle(path: &Path) -> Result<String> {
 mod tests {
     use super::*;
 
-    // --- SRT parsing ---
-
     #[test]
     fn srt_parses_a_simple_cue() {
         let srt = "1\n00:00:01,500 --> 00:00:03,000\nHello world\n";
@@ -488,8 +420,6 @@ mod tests {
         assert!(err.to_string().contains("no cues"), "got: {err}");
     }
 
-    // --- VTT parsing ---
-
     #[test]
     fn vtt_parses_header_and_dot_timestamps() {
         let vtt = "WEBVTT\n\n00:00:01.500 --> 00:00:03.000\nHello world\n";
@@ -506,8 +436,6 @@ mod tests {
 
     #[test]
     fn vtt_accepts_short_timestamps_cue_ids_and_settings() {
-        // MM:SS.mmm form, an optional cue identifier line, and cue settings
-        // after the end timestamp must all be handled.
         let vtt =
             "WEBVTT - title\n\nintro\n01:02.000 --> 01:04.500 position:10%,line-left\nshort form\n";
         let cues = parse_vtt(vtt).unwrap();
@@ -525,11 +453,8 @@ mod tests {
         assert_eq!(cues[0].text, "real cue");
     }
 
-    // --- Uniform word distribution ---
-
     #[test]
     fn distributes_cue_duration_uniformly_across_words() {
-        // 3 words over 1.5s → 0.5s each, at the right offsets.
         let cues = vec![Cue {
             start: 1.0,
             end: 2.5,
@@ -558,8 +483,6 @@ mod tests {
         );
     }
 
-    // --- Output JSON shape ---
-
     #[test]
     fn output_json_has_words_array_shape() {
         let words = vec![TimedWord {
@@ -574,8 +497,6 @@ mod tests {
         assert_eq!(value["words"][0]["end"], 0.75);
         assert_eq!(value["words"].as_array().unwrap().len(), 1);
     }
-
-    // --- whisper.cpp integration ---
 
     #[test]
     fn missing_binary_error_contains_install_hint() {
@@ -602,7 +523,6 @@ mod tests {
 
     #[test]
     fn parses_whisper_cpp_json_output() {
-        // Documented whisper.cpp -oj format: transcription[].offsets in ms.
         let json = r#"{
             "systeminfo": "x",
             "result": { "language": "en" },
@@ -635,8 +555,6 @@ mod tests {
 
     #[test]
     fn whisper_json_appends_punctuation_only_segments_to_previous_word() {
-        // With -ml 1 -sow, punctuation can come out as its own segment; it
-        // must be glued to the previous word instead of becoming a "word".
         let json = r#"{
             "transcription": [
                 { "offsets": { "from": 0, "to": 300 }, "text": " Hi" },
@@ -649,8 +567,6 @@ mod tests {
         assert_eq!(words[0].end, 0.35);
     }
 
-    /// Real transcription path — only runs when a whisper.cpp binary is
-    /// installed; skips silently otherwise (no binary on CI).
     #[test]
     fn detects_whisper_binary_when_installed() {
         match detect_whisper_binary() {

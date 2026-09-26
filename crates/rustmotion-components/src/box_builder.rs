@@ -1,19 +1,3 @@
-//! Bridge from the `Component` tree to the new `BoxNode` tree.
-//!
-//! Each `ChildComponent` becomes one `BoxNode`. The component's
-//! `style: CssStyle` is augmented with:
-//! - `position: absolute` + `top` / `left` when `child.position` is set
-//! - `width` / `height` from the component's `size` field (if any)
-//! - `z-index` from the child's `z_index` field
-//!
-//! The single container component (`Component::Container`, tagged `div` and
-//! aliased `container`/`card`/`flex`/`grid`/`positioned` — all six spellings
-//! deserialize into the same struct) recursively builds child boxes. Leaf
-//! components produce an empty-children box that the dispatcher will paint.
-//!
-//! The builder also returns a flat `Vec<&Component>` indexed by NodeId so
-//! the painter can resolve a node back to its component.
-
 use std::sync::Arc;
 
 use rustmotion_core::css::style::{AlignSelf, CssStyle, Position, Size as CSize};
@@ -34,62 +18,27 @@ use crate::timeline::TimelineDirection;
 use crate::tooltip::TooltipArrow;
 use crate::{ChildComponent, Component};
 
-/// Frame-level context passed into the builder so animations can be resolved
-/// per-node and merged into the resulting `CssStyle`. When `None`, the box
-/// tree is built without any animation overrides (resting state).
 #[derive(Debug, Clone, Copy)]
 pub struct BuildAnimationCtx {
     pub time: f64,
-    /// Seconds since the scenario started, as opposed to `time`, which
-    /// restarts at every scene. Only the `audio-reactive` binding reads it:
-    /// the audio analysis is indexed on the scenario's timeline, so using
-    /// `time` gave a scene starting at t=73 s the analysis at 73 s *into that
-    /// scene*. Every animation stays on `time`, which is what a delay, a
-    /// stagger or a preset is written against.
     pub scenario_time: f64,
     pub scene_duration: f64,
-    /// Frames per second of the output video. Required to convert the
-    /// `shutter` fraction (in `MotionBlurConfig`) into an absolute temporal
-    /// offset: `shutter_window = shutter / fps` seconds.
     pub fps: u32,
 }
 
-/// Padding allowance to keep arrow/connector heads inside the box.
 const ARROW_BBOX_PADDING: f32 = 16.0;
 
-/// Result of building a box tree from a scene description.
 pub struct BuiltScene<'a> {
-    /// Root box (a flex column container at viewport dimensions).
     pub root: BoxNode,
-    /// Lookup table — `components[id as usize]` is the component for `id`.
-    /// `None` for synthetic boxes (the root scene wrapper).
     pub components: Vec<Option<&'a ChildComponent>>,
-    /// Per-node animation delay: ancestor containers' `stagger` plus the
-    /// node's own `start_at` (indexed like `components`). Consumed by the
-    /// paint dispatcher so internal animations shift by the same amount as
-    /// the CSS overrides resolved at build time — and so an entrance/exit
-    /// animation on a `start_at`ed node plays from its own first keyframe
-    /// instead of one already resolved at the untouched scene clock.
     pub stagger_delays: Vec<f64>,
-    /// Per-node affine time remap accumulated from ancestor containers'
-    /// `time_scale`/`time_offset`. Entry `i` is `(scale, shift)` where
-    /// `t_local = scale * t_global + shift`. Default `(1.0, 0.0)` = identity.
-    /// Indexed like `components` and `stagger_delays`.
     pub time_params: Vec<(f64, f64)>,
 }
 
-/// Build a box tree for a flat list of scene-level children at a given
-/// viewport size.
-///
-/// The implicit scene root is a `display: flex; flex-direction: column;
-/// width/height: 100%`; children flow vertically unless they specify
-/// `position: { x, y }`, in which case they become `position: absolute`.
 pub fn build_scene<'a>(children: &'a [ChildComponent], viewport: (f32, f32)) -> BuiltScene<'a> {
     build_scene_with_root(children, viewport, default_root_css(viewport))
 }
 
-/// Same as [`build_scene`] but lets the caller supply the root container's
-/// `CssStyle`. Width/height are forced to the viewport regardless.
 pub fn build_scene_with_root<'a>(
     children: &'a [ChildComponent],
     viewport: (f32, f32),
@@ -98,9 +47,6 @@ pub fn build_scene_with_root<'a>(
     build_scene_from_refs(children.iter(), viewport, root_css, None)
 }
 
-/// Like [`build_scene_with_root`] but resolves animations at `time` (seconds)
-/// for each node and merges the result into its `CssStyle`. Use this when
-/// rendering an animated frame.
 pub fn build_scene_at_time<'a>(
     children: &'a [ChildComponent],
     viewport: (f32, f32),
@@ -110,8 +56,6 @@ pub fn build_scene_at_time<'a>(
     build_scene_from_refs(children.iter(), viewport, root_css, Some(anim))
 }
 
-/// Like [`build_scene`] but with an animation context. Convenience wrapper
-/// that uses the default root CSS (full-viewport flex column).
 pub fn build_scene_with_anim<'a>(
     children: &'a [ChildComponent],
     viewport: (f32, f32),
@@ -125,17 +69,6 @@ pub fn build_scene_with_anim<'a>(
     )
 }
 
-/// Same as [`build_scene_with_root`] but accepts an iterator over
-/// `&ChildComponent` references. Useful when the caller has filtered or
-/// re-ordered the scene's children and doesn't want to clone.
-///
-/// Builds with no outer [`Scope`] — see
-/// [`build_scene_from_refs_with_scope`]'s doc for what that means and why
-/// every other public entry point in this file (this one included) keeps
-/// that parameter fixed at `None` rather than exposing it: a scenario using
-/// no `vars` and no `node(...)` reference renders through exactly this
-/// path, unchanged, whatever `rustmotion/src/engine/render/scene.rs` does
-/// on its own richer path.
 pub fn build_scene_from_refs<'a, I>(
     children: I,
     viewport: (f32, f32),
@@ -148,24 +81,6 @@ where
     build_scene_from_refs_with_scope(children, viewport, root_css, anim, None)
 }
 
-/// Full form of [`build_scene_from_refs`]: `outer_scope` is tried, after the
-/// per-node [`rustmotion_core::css::FrameClock`], by every node's own
-/// `style.expr` (issue #338) — see [`resolve_computed_style`]'s doc for the
-/// exact composition (`rustmotion_core::css::ComposedScope`) and why the
-/// clock always wins for its own six reserved names.
-///
-/// `outer_scope` is caller-owned and frame-global: unlike `anim` (which
-/// `build_child` remaps per node through each container's own
-/// `time_scale`/`time_offset`), the same `&dyn Scope` reference is handed to
-/// every node in this call — a declared `vars` name and a `node(...)`
-/// reference both resolve against one shared, already-computed state for
-/// the whole frame, not a per-node one. See
-/// `rustmotion/src/engine/render/scene.rs`'s `EngineScope` for what
-/// typically sits behind it (a `vars::VarScope` composed with an
-/// `engine::deps::ResolvedFrame`) and why that composition happens one
-/// level up rather than in this crate: this crate does not otherwise depend
-/// on `rustmotion-core`'s `vars` or `engine::deps` modules by name, only on
-/// the `Scope` trait object they both implement.
 pub fn build_scene_from_refs_with_scope<'a, I>(
     children: I,
     viewport: (f32, f32),
@@ -179,18 +94,6 @@ where
     build_scene_from_refs_with_scope_quiet(children, viewport, root_css, anim, outer_scope, true)
 }
 
-/// Full form of [`build_scene_from_refs_with_scope`]: `warn_unresolved`
-/// gates [`resolve_computed_style`]'s stderr warning for an expression that
-/// fails to resolve against `outer_scope`. `false` for a build whose only
-/// purpose is to seed a not-yet-complete `outer_scope` (the throwaway first
-/// pass `render_with_new_pipeline_iter` runs for a scene with a `node(...)`
-/// reference — see that function's doc): a `node(...)` call there fails
-/// *by construction*, not because anything is actually wrong, and is
-/// corrected by the very next build; warning about it would be a stderr
-/// line that doesn't describe the frame that actually gets painted. Every
-/// other build (the common no-outer-scope path, and any build whose
-/// `outer_scope` is already complete) keeps warning — an expression that
-/// still fails there really does keep its pre-expression value on screen.
 pub fn build_scene_from_refs_with_scope_quiet<'a, I>(
     children: I,
     viewport: (f32, f32),
@@ -204,7 +107,7 @@ where
 {
     let mut components: Vec<Option<&'a ChildComponent>> = vec![None];
     let mut stagger_delays: Vec<f64> = vec![0.0];
-    let mut time_params: Vec<(f64, f64)> = vec![(1.0, 0.0)]; // slot 0 = root (identity)
+    let mut time_params: Vec<(f64, f64)> = vec![(1.0, 0.0)];
     let mut next_id: NodeId = 1;
 
     let mut child_boxes = Vec::new();
@@ -226,7 +129,6 @@ where
         ));
     }
 
-    // Force the root to viewport dimensions even if the caller didn't set them.
     root_css.width = Some(CSize::Length(CLP::Px(viewport.0)));
     root_css.height = Some(CSize::Length(CLP::Px(viewport.1)));
 
@@ -248,21 +150,6 @@ where
     }
 }
 
-/// Every declared `id` in this subtree, paired with the `node(...)`
-/// references its own style expressions make — the
-/// `(String, Vec<NodeRef>)` shape `rustmotion_core::engine::deps::DepGraph::build`
-/// wants. A node's references were already found once, at load (see
-/// `rustmotion_core::css::computed::extract`'s `node_refs` field), so this
-/// is a plain tree walk with no `Expr`/JSON work of its own — cheap enough
-/// to call every frame, and callers on the hot per-frame path do (see
-/// `rustmotion/src/engine/render/scene.rs`).
-///
-/// Recurses into a container's children via [`container_children_of`], the
-/// same `Component` variant match `container_children` uses (minus the
-/// animation-context bookkeeping this walk doesn't need) to decide which
-/// components nest children and under which field, so a component type
-/// this file doesn't (yet) recurse into cannot silently diverge between
-/// "what gets laid out" and "what gets scanned for references".
 pub fn collect_node_refs<'a, I>(children: I) -> Vec<(String, Vec<NodeRef>)>
 where
     I: IntoIterator<Item = &'a ChildComponent>,
@@ -286,12 +173,6 @@ fn collect_node_refs_into(child: &ChildComponent, out: &mut Vec<(String, Vec<Nod
     }
 }
 
-/// The child slice a container `Component` variant nests its own children
-/// under, empty for anything else — the one list of "which variants nest
-/// children and where" every tree walk in this file that needs to see the
-/// *whole* subtree (not just what `container_children` lays out with an
-/// animation context in hand) shares, rather than re-deriving its own copy
-/// that could quietly drift from it.
 fn container_children_of(component: &Component) -> &[ChildComponent] {
     match component {
         Component::Container(c) => &c.children,
@@ -299,17 +180,6 @@ fn container_children_of(component: &Component) -> &[ChildComponent] {
     }
 }
 
-/// True when *any* node in this subtree — declared `id` or not — makes at
-/// least one `node(...)` reference. Deliberately not derived from
-/// [`collect_node_refs`]'s own result: that function only ever records a
-/// node's references under *that node's own* entry, and only when the node
-/// itself has a declared `id` (matching `DepGraph::build`'s contract, which
-/// needs an entry only for a reference *target*, never for a plain
-/// referencer). The common shape — a node with no `id` of its own reading
-/// `node("otherId", ...)` — would then never surface in
-/// `collect_node_refs`'s output at all, silently skipping the second build
-/// pass its own reference needs. This walks every node regardless of
-/// whether it declares an `id`.
 pub fn scene_uses_node_refs<'a, I>(children: I) -> bool
 where
     I: IntoIterator<Item = &'a ChildComponent>,
@@ -336,10 +206,6 @@ fn default_root_css(viewport: (f32, f32)) -> CssStyle {
     }
 }
 
-/// Detect motion_blur and trail configs from a merged effect list.
-///
-/// Returns `(motion_blur, trail)`. Only the first occurrence of each type is
-/// used; duplicate effects of the same kind are ignored.
 fn detect_ghost_effects(
     effects: &[AnimationEffect],
 ) -> (Option<MotionBlurConfig>, Option<TrailConfig>) {
@@ -355,25 +221,6 @@ fn detect_ghost_effects(
     (mb, tr)
 }
 
-/// Build ghost `BoxNode`s for motion-blur or trail effects.
-///
-/// Returns a `Vec<BoxNode>` of ghosts to be prepended (painted underneath)
-/// the principal node. Each ghost gets a fresh `NodeId` and its own slot in
-/// `components`/`stagger_delays`, both pointing to the same `ChildComponent`
-/// as the principal (v1 approximation: internal content uses frame time, not
-/// ghost time).
-///
-/// # Ghost CSS
-///
-/// For **motion_blur**: the CSS is resolved at `t_ghost = t - i * (shutter/fps)/samples`
-/// and opacity is `base_opacity / (samples + 1)`. The principal's opacity is
-/// kept at its base value so the static (no-motion) case stays visually full.
-///
-/// For **trail**: the CSS is resolved at `t_ghost = t - i * spacing` and
-/// opacity is `base_opacity * falloff^i`. The principal is unchanged.
-///
-/// Only one of `mb` / `tr` is used at a time; if both are present, motion_blur
-/// takes priority.
 #[allow(clippy::too_many_arguments)]
 fn build_ghosts<'a>(
     child: &'a ChildComponent,
@@ -389,7 +236,6 @@ fn build_ghosts<'a>(
 ) -> Vec<BoxNode> {
     let (mb, tr) = detect_ghost_effects(effects);
 
-    // Choose the ghost generation strategy.
     enum Strategy {
         MotionBlur {
             samples: u32,
@@ -404,7 +250,6 @@ fn build_ghosts<'a>(
     let strategy = if let Some(mc) = mb {
         let samples = mc.samples.clamp(1, 16);
         if samples <= 1 {
-            // Degenerate: no ghosts needed (ghost = principal position).
             return Vec::new();
         }
         let shutter_window = mc.shutter / actx.fps.max(1) as f64;
@@ -424,7 +269,6 @@ fn build_ghosts<'a>(
     };
 
     let base_css_for_ghost = |ghost_time: f64, ghost_opacity_scale: f32| -> CssStyle {
-        // Start from the same base CSS as the principal.
         let mut css = component_css(&child.component);
         if let Some((x, y)) = child.absolute_position() {
             css.position = Some(Position::Absolute);
@@ -434,19 +278,12 @@ fn build_ghosts<'a>(
         if let Some(z) = child.z_index {
             css.z_index = Some(z);
         }
-        // Cascade: a ghost is the same component as the principal, painted
-        // at a different sampled time, so it inherits from the same parent.
         rustmotion_core::css::cascade::inherit_from(parent_css, &mut css);
-        // Apply timeline style states at the ghost time.
         if let Some(animatable) = child.component.as_animatable() {
             let steps = animatable.timeline_steps();
             if steps.iter().any(|s| s.style.is_some()) {
                 let skip_opacity = css.transition.is_some();
                 apply_style_states(&mut css, steps, ghost_time - extra_delay, skip_opacity);
-                // Same `border-radius`/`background` smoothing as the
-                // principal path in `build_child`, sampled at `ghost_time`
-                // so a motion-blur/trail ghost mid-transition matches what
-                // the principal will look like at that same instant.
                 let overrides = resolve_transition_css_overrides(
                     child.component.as_styled().style_config(),
                     steps,
@@ -460,7 +297,6 @@ fn build_ghosts<'a>(
                 }
             }
         }
-        // Resolve animation props at the *ghost* time.
         let ghost_actx = BuildAnimationCtx {
             time: ghost_time,
             scenario_time: actx.scenario_time,
@@ -479,7 +315,6 @@ fn build_ghosts<'a>(
             apply_glow_effect(&mut css, &ghost_effects);
             carry_paint_pass_effects(&mut css, &ghost_effects);
         }
-        // Scale opacity: multiply the base opacity by the ghost opacity factor.
         let base_opacity = css.opacity.unwrap_or(1.0);
         css.opacity = Some((base_opacity * ghost_opacity_scale).clamp(0.0, 1.0));
         css
@@ -492,8 +327,6 @@ fn build_ghosts<'a>(
             samples,
             shutter_window,
         } => {
-            // Ghost opacity: 1 / (samples + 1) of base opacity.
-            // Principal stays at full base opacity (handled in build_child).
             let ghost_opacity_scale = 1.0 / (samples + 1) as f32;
             for i in 1..=samples {
                 let ghost_time = actx.time - (i as f64 * shutter_window / samples as f64);
@@ -501,7 +334,6 @@ fn build_ghosts<'a>(
 
                 let ghost_id = *next_id;
                 *next_id += 1;
-                // Register a slot so the dispatcher can look up the component.
                 components.push(Some(child));
                 stagger_delays.push(extra_delay);
                 time_params.push(time_remap);
@@ -510,8 +342,8 @@ fn build_ghosts<'a>(
                     id: ghost_id,
                     kind: BoxKind::Ghost(Arc::new(ghost_id)),
                     css: ghost_css,
-                    children: Vec::new(), // v1: no child recursion in ghosts
-                    intrinsic: None,      // v1: ghosts have no layout-measured content
+                    children: Vec::new(),
+                    intrinsic: None,
                     source_path: None,
                     window: None,
                 });
@@ -522,10 +354,6 @@ fn build_ghosts<'a>(
             spacing,
             falloff,
         } => {
-            // Ghosts painted from oldest (most-trailing) to newest (closest to principal).
-            // We build them in reverse order (copies → 1) so that index i=copies
-            // is the oldest ghost (lowest opacity), and we then reverse to get the
-            // correct under-to-over paint order.
             let mut trail_nodes = Vec::with_capacity(copies as usize);
             for i in 1..=copies {
                 let ghost_time = actx.time - i as f64 * spacing;
@@ -548,7 +376,6 @@ fn build_ghosts<'a>(
                     window: None,
                 });
             }
-            // Oldest ghost (most-trailing) painted first → prepend in reverse.
             trail_nodes.reverse();
             ghosts = trail_nodes;
         }
@@ -557,25 +384,6 @@ fn build_ghosts<'a>(
     ghosts
 }
 
-/// Convert a single `ChildComponent` into one or more `BoxNode`s.
-///
-/// Returns a `Vec` whose elements are inserted in order into the parent's
-/// `children`. The last element is the principal node; any preceding elements
-/// are `BoxKind::Ghost` nodes inserted *before* (painted underneath) the
-/// principal for motion-blur or trail effects.
-///
-/// `stagger_delay` is the animation delay accumulated from ancestor
-/// containers' `stagger` fields.
-/// `time_remap` is the accumulated affine time transform `(scale, shift)` where
-/// `t_local = scale * t_global + shift`. Default is `(1.0, 0.0)` (identity).
-/// `viewport` feeds [`rustmotion_core::css::FrameClock`] for this node's own
-/// `style.expr` (issue #338) — see this file's "Per-frame expressions" doc
-/// section, above [`resolve_computed_style`]. `outer_scope` is the same
-/// frame-global `Scope` [`build_scene_from_refs_with_scope`] received,
-/// passed straight through every recursion (never remapped per node the way
-/// `anim`/`time_remap` are — see that function's own doc). `warn_unresolved`
-/// is [`build_scene_from_refs_with_scope_quiet`]'s own flag, passed through
-/// unchanged.
 #[allow(clippy::too_many_arguments)]
 fn build_child<'a>(
     child: &'a ChildComponent,
@@ -592,31 +400,16 @@ fn build_child<'a>(
     outer_scope: Option<&dyn Scope>,
     warn_unresolved: bool,
 ) -> Vec<BoxNode> {
-    // Compute the local animation context for this node — remapped by the
-    // accumulated affine time transform from ancestor containers.
-    // `t_local = scale * t_global + shift`
     let local_actx = anim.map(|a| {
         let (scale, shift) = time_remap;
         BuildAnimationCtx {
             time: a.time * scale + shift,
-            // A container's `time_scale`/`time_offset` remaps the *animation*
-            // clock of its subtree. The audio is not part of that subtree —
-            // it plays at wall-clock speed regardless — so the scenario clock
-            // passes through unremapped.
             scenario_time: a.scenario_time,
             scene_duration: a.scene_duration,
             fps: a.fps,
         }
     });
 
-    // A node's own `start_at` rebases its animation clock the same way an
-    // ancestor's `stagger` already does: both push out the instant the
-    // component's *own* first keyframe is considered reached. Without this,
-    // `start_at` only gated visibility — the effect list still resolved
-    // against the untouched scene clock, so an entrance already playing out
-    // by the time the node became visible snapped straight to its end state,
-    // and an exit whose own `delay` elapsed before `start_at` left the node
-    // painting nothing for its whole visible window.
     let anim_delay = stagger_delay
         + child
             .component
@@ -624,9 +417,6 @@ fn build_child<'a>(
             .and_then(|t| t.timing().0)
             .unwrap_or(0.0);
 
-    // ── Ghost generation (motion_blur / trail) ───────────────────────────────
-    // Must happen before allocating the principal's id so that ghost ids are
-    // lower (earlier in the slot table). The principal's id is allocated below.
     let mut ghosts: Vec<BoxNode> = Vec::new();
     if let Some(actx) = local_actx {
         if let Some(effects) = effective_effects(&child.component, anim_delay, actx.time) {
@@ -653,7 +443,6 @@ fn build_child<'a>(
 
     let mut css = component_css(&child.component);
 
-    // Apply per-child position/z-index from the wrapper.
     if let Some((x, y)) = child.absolute_position() {
         css.position = Some(Position::Absolute);
         css.left = Some(CLP::Px(x));
@@ -663,33 +452,14 @@ fn build_child<'a>(
         css.z_index = Some(z);
     }
 
-    // CSS cascade (round 4 audit, lot LAYOUT, constat 2): propagate
-    // inheritable properties (color, font-*, text-align, white-space, ...)
-    // from the parent's already-cascaded style into any of this node's own
-    // unset properties — mirrors CSS's "specified value" resolution, which
-    // happens before state/animation overrides compute the final value.
-    // `crates/rustmotion-core/src/css/cascade.rs::inherit_from` existed but
-    // nothing called it until this fix.
     rustmotion_core::css::cascade::inherit_from(parent_css, &mut css);
 
-    // Timeline style states: merge every state whose (at + stagger) <= t
-    // into the box CSS. Opacity is excluded when a `transition` smooths it
-    // (the synthesized keyframes then own its whole history). States affect
-    // box-model properties (layout, background, border, opacity, transform,
-    // filter); painter-internal properties like text color flow through the
-    // keyframes path below instead.
     if let Some(animatable) = child.component.as_animatable() {
         let steps = animatable.timeline_steps();
         if steps.iter().any(|s| s.style.is_some()) {
             let t = local_actx.map(|a| a.time).unwrap_or(0.0);
             let skip_opacity = css.transition.is_some();
             apply_style_states(&mut css, steps, t - anim_delay, skip_opacity);
-            // `border-radius`/`background` (solid colour, uniform absolute
-            // px only — see `resolve_transition_css_overrides`'s doc
-            // comment) smooth the same way opacity does above, but land
-            // directly on `css` instead of through the generic effects
-            // pipeline: no `AnimatedProperties` field for them is ever read
-            // by a painter, so that pipeline is a dead end for these two.
             let overrides = resolve_transition_css_overrides(
                 child.component.as_styled().style_config(),
                 steps,
@@ -704,12 +474,6 @@ fn build_child<'a>(
         }
     }
 
-    // Resolve animations and apply transform/opacity/filter overrides on the
-    // box's CSS. Paint-time properties (transform, opacity, filter,
-    // perspective) plus the box size (`width`/`height`, which taffy needs so a
-    // resize reflows its children instead of stretching pixels) flow into CSS
-    // — internal animations like draw_progress or char_animation remain on the
-    // `AnimatedProperties` legacy path.
     if let Some(actx) = local_actx {
         if let Some(effects) = effective_effects(&child.component, anim_delay, actx.time) {
             let props = resolve_props_for_effects(&effects, actx.time, actx.scene_duration);
@@ -729,9 +493,6 @@ fn build_child<'a>(
         );
     }
 
-    // ── Audio-reactive binding ────────────────────────────────────────────────
-    // Reads the audio analysis cache and lerps the target CSS property between
-    // min and max. Cache-miss → value = min (deterministic fallback).
     if let Some(ar) = css.audio_reactive.take() {
         use rustmotion_core::css::style::{AudioReactiveProperty, AudioSource, AudioSourceTag};
         use rustmotion_core::engine::renderer::audio_analysis::audio_analysis_cache;
@@ -754,7 +515,7 @@ fn build_child<'a>(
                     }
                 }
             } else {
-                0.0 // cache empty → use min
+                0.0
             };
 
             let lerped = ar.min as f32 + raw * (ar.max - ar.min) as f32;
@@ -784,13 +545,6 @@ fn build_child<'a>(
         }
     }
 
-    // Visibility window (start_at/end_at) — enforced by the paint pass.
-    // The stagger delay shifts the window too, so a hard-cut child appears
-    // in step with its staggered siblings.
-    // When there is an accumulated time remap, the window times (which are in
-    // local/remapped time) must be converted back to global time so the paint
-    // pass (which operates on global time) can apply them correctly.
-    // If `t_local = scale * t_global + shift`, then `t_global = (t_local - shift) / scale`.
     let window = child.component.as_timed().and_then(|t| {
         let (start, end) = t.timing();
         (start.is_some() || end.is_some()).then_some({
@@ -836,59 +590,11 @@ fn build_child<'a>(
         window,
     };
 
-    // Ghosts prepended (painted underneath the principal).
     let mut result = ghosts;
     result.push(principal);
     result
 }
 
-// ── Per-frame expressions (issue #338) ──────────────────────────────────────
-//
-// `css.expr` (`rustmotion_core::css::ComputedStyle`) holds whatever `"= ..."`
-// expressions `CssStyle`'s own `Deserialize` impl pulled off this node's
-// style at load time — see that type's module doc. This is where the other
-// half of the two-tier model in `rustmotion_core::expr`'s own doc happens:
-// evaluating those expressions fresh every frame and applying the result
-// through `apply_animated_props`, the exact same override path a resolved
-// `style.animation` already goes through a few lines above this function's
-// call site — an expression is a second source of the same kind of
-// override, not a parallel application mechanism.
-//
-// `apply_animated_props` is called a second time (once for the resolved
-// animation, once for this), so the two compose exactly the way it already
-// composes an animation on top of a literal CSS value: `opacity` multiplies
-// (both contribute — a literal, an animation, and an expression on the same
-// node all multiply together), `width`/`height` last-write-wins (an
-// expression overrides an animation's own resize, since this call runs
-// after it), and the four covered `transform` leaves each append their own
-// `TransformFn` (both contribute, associative — see
-// `rustmotion_core::css::computed::extract`'s doc for why the neutral
-// placeholder its extraction leaves behind makes that safe).
-//
-// The `Scope` used here composes `rustmotion_core::css::FrameClock` — the
-// reserved scenario-clock names (`t`/`T`/`duration`/`W`/`H`/`fps`), built
-// from data `BuildAnimationCtx` and `viewport` already carry down to this
-// exact call site — with `outer_scope`, the frame-global `&dyn Scope`
-// `build_scene_from_refs_with_scope` threads down unchanged through every
-// recursive `build_child`/`container_children` call (see those functions'
-// own doc for why it isn't remapped per node the way `anim`/`time_remap`
-// are). `rustmotion_core::css::ComposedScope` is the composite: the clock's
-// six reserved names always win (see that type's own doc for why),
-// everything else — a declared `vars` name, a `node(...)` reference — falls
-// through to `outer_scope`. `rustmotion/src/engine/render/scene.rs` is what
-// actually builds one (its own `EngineScope`, composing a `vars::VarScope`
-// with the `node(...)` dependency graph's `ResolvedFrame`) and passes it in
-// as `outer_scope`; every other caller in this crate (tests, the studio hit
-// probe, any scenario with no `vars` and no node `id`) passes `None`, which
-// makes `ComposedScope` behave exactly like a bare `FrameClock` — see that
-// type's doc for why that is byte-for-byte, not just "close enough". An
-// expression naming a name neither the clock nor `outer_scope` answers
-// still fails loudly and specifically (see below), never silently — except
-// when `warn_unresolved` is `false` (a throwaway pass whose own build is
-// about to be discarded/superseded; see
-// `build_scene_from_refs_with_scope_quiet`'s doc), in which case the
-// best-effort fallback still applies but stays silent, since the frame it
-// would be describing is never the one that reaches the screen.
 fn resolve_computed_style(
     css: &mut CssStyle,
     path: &str,
@@ -915,19 +621,6 @@ fn resolve_computed_style(
     match css.expr.resolve(&scope) {
         Ok(props) => apply_animated_props(css, &props),
         Err(e) => {
-            // Best-effort, same contract `deserialize_children`
-            // (`rustmotion/src/engine/render/scene.rs`) already uses for a
-            // single broken child: named and located (`e` carries the exact
-            // property and the underlying `ExprError`, `path` carries which
-            // node), but never a fatal error and never a silent zero — the
-            // property that failed simply keeps whatever value it already
-            // had (its literal, or whatever an animation already resolved
-            // it to) for this frame, instead of aborting or blanking the
-            // rest of this node's expressions too... except that it *does*
-            // abort the rest of *this* node's expressions this frame:
-            // `ComputedStyle::resolve` stops at the first failing property,
-            // so a later expression on the same node that would have
-            // succeeded is not evaluated either. See that type's own doc.
             if warn_unresolved {
                 eprintln!(
                     "warning: {path}: {e} — this property keeps its pre-expression value this frame"
@@ -937,18 +630,6 @@ fn resolve_computed_style(
     }
 }
 
-/// The full effect list for a component at paint time: `style.animation`,
-/// plus the `timeline` steps whose `at` `t` has reached, shifted by their
-/// `at`, plus keyframes synthesized from timeline style-state changes
-/// (`style.transition`), plus `extra_delay` applied to everything — callers
-/// fold in both the ancestor-stagger delay and the node's own `start_at` here,
-/// so the effect list is agnostic to which one (or both) it's carrying.
-/// Returns `None` when there is nothing to resolve, `Some(Cow::Borrowed)` on
-/// the no-merge fast path.
-///
-/// `t` is the component's own local time, the same clock
-/// `resolve_props_for_effects` is called with, and the same one
-/// `apply_style_states` gates a step's `style` on.
 pub fn effective_effects(
     component: &Component,
     extra_delay: f64,
@@ -957,8 +638,6 @@ pub fn effective_effects(
     let animatable = component.as_animatable()?;
     let effects = animatable.animation_effects();
     let steps = animatable.timeline_steps();
-    // `color` keyframes drive AnimatedProperties.color, consumed by the
-    // text-like painters only.
     let smooth_color = matches!(component, Component::Text(_) | Component::Counter(_));
     let synthesized =
         transition_keyframes(component.as_styled().style_config(), steps, smooth_color);
@@ -982,10 +661,6 @@ pub fn effective_effects(
     (!merged.is_empty()).then_some(std::borrow::Cow::Owned(merged))
 }
 
-/// Merge every timeline style state whose `at <= t` into `css`, in `at`
-/// order. Serialize-merge keeps this schema-complete; `null`s and the empty
-/// `animation` array never erase existing values. `skip_opacity` leaves
-/// opacity to the synthesized transition keyframes.
 pub(crate) fn apply_style_states(
     css: &mut CssStyle,
     steps: &[rustmotion_core::schema::TimelineStep],
@@ -1024,14 +699,6 @@ pub(crate) fn apply_style_states(
             base.insert(k, v);
         }
     }
-    // `CssStyle::expr` (issue #338) is `#[serde(skip)]` — neither `css`
-    // above nor a `step.style` survives this serialize round trip with its
-    // expressions intact, so `merged.expr` comes back empty regardless of
-    // what either side held. Restore `css`'s own pre-merge expressions
-    // (`.prefer` rather than a bare overwrite, so this stays correct even
-    // if that serialize-skip ever narrows) — otherwise a node with both a
-    // `style.expr` and any `timeline` style state would silently lose its
-    // expression the first time a state became due.
     let saved_expr = css.expr.clone();
     if let Ok(mut merged) = serde_json::from_value::<CssStyle>(serde_json::Value::Object(base)) {
         merged.expr = merged.expr.prefer(saved_expr);
@@ -1039,12 +706,6 @@ pub(crate) fn apply_style_states(
     }
 }
 
-/// Synthesize `Keyframes` effects smoothing timeline style-state changes per
-/// the component's `style.transition`. Supported: `opacity` (as ratios of the
-/// base opacity — `apply_animated_props` multiplies) and, on text-like
-/// components, `color` (absolute, via `AnimatedProperties.color`). Color
-/// states without a transition still synthesize a near-instant ramp because
-/// text painters only see color through this path.
 pub(crate) fn transition_keyframes(
     base: &CssStyle,
     steps: &[rustmotion_core::schema::TimelineStep],
@@ -1060,8 +721,6 @@ pub(crate) fn transition_keyframes(
     }
     let (duration, easing) = match base.transition.as_ref() {
         Some(tr) if tr.duration() > 0.0 => (tr.duration(), tr.easing()),
-        // Color snaps still need the keyframes path (see doc above); a 1ms
-        // ramp is visually a hard cut.
         _ => (0.001, rustmotion_core::schema::EasingType::Linear),
     };
     let smooth_opacity = base.transition.is_some();
@@ -1086,8 +745,6 @@ pub(crate) fn transition_keyframes(
         value: KeyframeValue::Color(c),
         easing: None,
     };
-    // Keep keyframe times strictly ascending even when states overlap a
-    // still-running transition (the resolver walks ordered segments).
     let push_pair = |kfs: &mut Vec<Keyframe>, at: f64, from: Keyframe, to: Keyframe| {
         let floor = kfs.last().map(|k| k.time + 1e-6).unwrap_or(f64::MIN);
         let start = at.max(floor);
@@ -1155,44 +812,11 @@ pub(crate) fn transition_keyframes(
     out
 }
 
-/// Resolved `style.transition` smoothing for `border-radius`/`background`,
-/// ready to be written straight onto a `CssStyle`.
 pub(crate) struct TransitionCssOverrides {
     pub border_radius: Option<rustmotion_core::css::style::BorderRadius>,
     pub background: Option<rustmotion_core::css::style::Background>,
 }
 
-/// CSS-native smoothing for `border-radius` (uniform, absolute-px only) and
-/// `background` (solid colour only) timeline style-state changes.
-///
-/// Unlike `opacity`/`color` in `transition_keyframes` above, neither
-/// property has anywhere to land in `AnimatedProperties` that any painter or
-/// the CSS bridge (`css/animation.rs::apply_animated_props`) actually reads
-/// (see `KNOWN_ANIMATABLE_PROPERTIES`'s doc comment in `animator.rs`) —
-/// every painter reads `css.border_radius`/`css.background` straight off
-/// the node's own `CssStyle` (`paint_pass.rs`, frozen, already does this for
-/// the static case). So instead of synthesizing an `AnimationEffect` for the
-/// generic effects pipeline (a dead end for these two), this resolves the
-/// interpolated value directly and returns it for the caller to write onto
-/// the box's `CssStyle` by hand — reusing `animator::resolve_keyframe_track`
-/// for the actual segment/easing/spring math rather than reinventing it.
-///
-/// Gated on `style.transition` being set, mirroring `opacity`'s gate above
-/// (not `color`'s forced near-instant ramp — nothing downstream *requires*
-/// these two to smooth the way text painters require `color` to). Absent an
-/// explicit `style.transition`, this returns an all-`None` result, so every
-/// existing scenario without one renders byte-identical to before this
-/// workstream.
-///
-/// **"Unités mixtes" decision** (see workstream report): resolves only when
-/// *both* the origin and the target value are the exact shape
-/// `BorderRadius::absolute_px`/`Background::solid_hex` can resolve without a
-/// `LengthContext` — uniform absolute px, solid colour. Anything else
-/// (per-corner radii, `%`/`em`/`rem`/`vw`/`vh`, gradients, image layers) is
-/// refused rather than guessed: that property just falls back to
-/// `apply_style_states`'s existing snap. `validate_schema.rs` calls the
-/// exact same two predicates so the diagnostic and the runtime can never
-/// disagree about what's interpolable.
 pub(crate) fn resolve_transition_css_overrides(
     base: &CssStyle,
     steps: &[rustmotion_core::schema::TimelineStep],
@@ -1228,10 +852,6 @@ pub(crate) fn resolve_transition_css_overrides(
     let mut radius_kfs: Vec<Keyframe> = Vec::new();
     let mut bg_kfs: Vec<Keyframe> = Vec::new();
 
-    // Same ascending-time bookkeeping as `transition_keyframes`'s
-    // `push_pair` above (kept local — a shared closure can't easily borrow
-    // two different `Vec`s across both loops below without upsetting the
-    // borrow checker for no real benefit at this size).
     let push_pair = |kfs: &mut Vec<Keyframe>, at: f64, from: Keyframe, to: Keyframe| {
         let floor = kfs.last().map(|k| k.time + 1e-6).unwrap_or(f64::MIN);
         let start = at.max(floor);
@@ -1268,11 +888,6 @@ pub(crate) fn resolve_transition_css_overrides(
                         prev_radius = Some(target);
                     }
                 }
-                // Unresolvable shape (per-corner, %/em/rem/vw/vh) — lose the
-                // interpolation origin for *this* transition only;
-                // `validate_schema.rs` diagnoses this exact step, and a
-                // later resolvable value simply resumes smoothing from
-                // itself onward (see the doc comment above).
                 None => prev_radius = None,
             }
         }
@@ -1329,9 +944,6 @@ pub(crate) fn resolve_transition_css_overrides(
     out
 }
 
-/// Quick gate: does this resolved `AnimatedProperties` carry any property
-/// that we know how to translate to CSS? Avoids allocating a transform Vec
-/// when there's nothing to apply.
 fn props_has_paint_overrides(p: &AnimatedProperties) -> bool {
     p.translate_x != 0.0
         || p.translate_y != 0.0
@@ -1344,25 +956,10 @@ fn props_has_paint_overrides(p: &AnimatedProperties) -> bool {
         || p.blur > 0.0
         || (p.glow_radius > 0.0 && p.glow_intensity > 0.0)
         || p.perspective > 0.0
-        // An animated box size is a *layout* override rather than a paint one,
-        // but it travels through the same bridge, so the gate has to let it
-        // through or `apply_animated_props` never runs for a scenario whose
-        // only animated property is `width`/`height` (the card-resize case).
-        // -1.0 is the animator's "never animated" sentinel.
         || p.width >= 0.0
         || p.height >= 0.0
 }
 
-/// Hand the effects that the *paint pass* resolves for itself down to the box
-/// node, in their delay-shifted form.
-///
-/// Everything else on this path is resolved here and lands on `css` as a
-/// finished value. `shimmer` cannot be: it composites against the pixels the
-/// node paints, which do not exist until the paint pass has run. So the paint
-/// pass reads it off `css.animation` — and it has to read the *shifted* copy
-/// (container stagger, `timeline` step `at`) rather than the author's raw
-/// `style.animation`, or a shimmer inside a staggered list would sweep in step
-/// with the list's first item instead of its own.
 fn carry_paint_pass_effects(
     css: &mut CssStyle,
     effects: &[rustmotion_core::schema::AnimationEffect],
@@ -1380,29 +977,6 @@ fn carry_paint_pass_effects(
     }
 }
 
-/// M3: apply the static `glow` animation effect (a coloured halo — not
-/// time-varying, see `AnimationEffect::shift_delay`'s doc comment) as a CSS
-/// `filter: drop-shadow(...)`.
-///
-/// This is deliberately *not* routed through `resolve_props_for_effects` /
-/// `AnimatedProperties::glow_radius`+`glow_intensity` even though those
-/// fields exist: `AnimatedProperties`'s public shape is frozen for this
-/// workstream (can't add a `glow_color` field), and the existing bridge that
-/// *does* consume those two fields — `css::animation::apply_animated_props`,
-/// in a file outside this workstream's scope — hardcodes `color: None` on
-/// the `DropShadow` it builds, which resolves to black. Piping the `glow`
-/// effect through that path would either still render black, or — if we did
-/// find a way to set the color fields too — double up into two stacked
-/// drop-shadows (one colourless from the frozen bridge, one coloured from
-/// here). Building the filter directly here, from the raw `GlowConfig`
-/// (found via `animator::find_glow_effect`), keeps it a single, correctly
-/// coloured shadow and needs no change to any frozen file.
-///
-/// The pre-existing `glow_radius`/`glow_intensity` numeric-property path
-/// (animating those as arbitrary `keyframes` targets, unrelated to this
-/// named `glow` effect) is untouched and still produces a colourless halo —
-/// that is `css::animation.rs`'s DropShadow-with-`color:None` bug, out of
-/// this workstream's file ownership.
 fn apply_glow_effect(css: &mut CssStyle, effects: &[rustmotion_core::schema::AnimationEffect]) {
     use rustmotion_core::css::style::{Color, FilterFn};
     use rustmotion_core::css::units::Length;
@@ -1429,18 +1003,6 @@ fn apply_glow_effect(css: &mut CssStyle, effects: &[rustmotion_core::schema::Ani
     css.filter.get_or_insert_with(Vec::new).push(shadow);
 }
 
-/// Build an [`IntrinsicMeasure`] for components whose box size depends on
-/// their content (text, codeblock, terminal, etc.). Returns `None` for
-/// components with explicit dimensions or pure containers.
-///
-/// `cascaded_css` is this node's own `CssStyle` after `cascade::inherit_from`
-/// has already merged it against the parent, plus every subsequent overlay
-/// (timeline states, animation) — the exact same value `LegacyPaintDispatcher`
-/// receives at paint time. `Component::with_cascaded_style` folds it into
-/// whichever component variants read inherited typography off their own
-/// style before this function's match ever sees them, so the reserved box
-/// always matches what those components' painters (which fold the same
-/// cascade in at paint time) actually draw.
 fn component_intrinsic(
     component: &Component,
     cascaded_css: &CssStyle,
@@ -1466,9 +1028,6 @@ fn component_intrinsic(
         )),
         Badge(b) => Some(Arc::new(crate::intrinsic::BadgeIntrinsic::from_badge(b))),
         Table(t) => Some(Arc::new(crate::intrinsic::TableIntrinsic::from_table(t))),
-        // M2: rich_text had no intrinsic measurer at all, so it laid out
-        // 0×0 and rendered nothing unless the author guessed an explicit
-        // width/height.
         RichText(rt) => Some(Arc::new(
             crate::intrinsic::RichTextIntrinsic::from_rich_text(rt),
         )),
@@ -1476,12 +1035,6 @@ fn component_intrinsic(
     }
 }
 
-/// If the component is a container, recurse into its children. Otherwise
-/// return an empty Vec. A container's `stagger` adds `index * stagger`
-/// to each child's inherited animation delay (cumulative across nesting).
-/// `time_remap` is the accumulated affine time transform `(scale, shift)` for
-/// this container node; the container's own `time_scale`/`time_offset` are
-/// composed in to produce the remap for children.
 #[allow(clippy::too_many_arguments)]
 fn container_children<'a>(
     component: &'a Component,
@@ -1509,22 +1062,13 @@ fn container_children<'a>(
             _ => return Vec::new(),
         };
 
-    // Clamp scale defensively to avoid division-by-zero downstream.
     let child_scale = child_scale.max(1e-6);
 
-    // Compose the container's time remap with the inherited (accumulated) remap.
-    // Accumulated remap: `t_parent = scale_acc * t_global + shift_acc`
-    // Container formula: `t_child = (t_parent - child_offset) * child_scale`
-    //   = child_scale * (scale_acc * t_global + shift_acc) - child_scale * child_offset
-    //   = (child_scale * scale_acc) * t_global + child_scale * (shift_acc - child_offset)
     let (scale_acc, shift_acc) = time_remap;
     let new_scale = child_scale * scale_acc;
     let new_shift = child_scale * (shift_acc - child_offset);
     let child_remap = (new_scale, new_shift);
 
-    // `anim` stays GLOBAL all the way down the recursion — each `build_child`
-    // derives its node-local time from the accumulated `child_remap`. Passing
-    // a pre-remapped ctx here would double-apply the transform.
     let step = stagger.unwrap_or(0.0) as f64;
     let mut result = Vec::new();
     for (j, c) in children.iter().enumerate() {
@@ -1547,8 +1091,6 @@ fn container_children<'a>(
     result
 }
 
-/// Pull the component's `CssStyle`, augmented with intrinsic `width`/`height`
-/// for components that carry a fixed size.
 fn component_css(component: &Component) -> CssStyle {
     let mut css = component_style(component).clone();
     apply_default_display(component, &mut css);
@@ -1556,16 +1098,6 @@ fn component_css(component: &Component) -> CssStyle {
     css
 }
 
-/// Set `display` on the container when the user didn't specify one. The
-/// four former variants (`card`/`flex`/`grid`/`positioned`) are now a single
-/// `Component::Container` with no field recording which spelling produced
-/// it, so the old "which variant is this" dispatch can't tell `grid` apart
-/// from the others anymore — the signal used instead is `grid-template-columns`
-/// itself: a container that sets it (the only way `validate_schema`'s grid
-/// checks let a scenario be valid in the first place) defaults to
-/// `Display::Grid`; every other container defaults to `Display::Flex`. The
-/// taffy bridge would otherwise default to `block`, silently ignoring
-/// `flex-direction` & friends.
 fn apply_default_display(component: &Component, css: &mut CssStyle) {
     use rustmotion_core::css::style::Display;
     if css.display.is_some() {
@@ -1580,12 +1112,6 @@ fn apply_default_display(component: &Component, css: &mut CssStyle) {
     }
 }
 
-/// Measure a single line of text with the exact same Skia font metrics the
-/// affected painters (`callout`, `tooltip`, `pill_nav`, `stepper`) already use
-/// to draw it (`measure_text_with_fallback`), so a size computed here matches
-/// the pixels those painters actually paint instead of guessing at an average
-/// character width. Returns `0.0` if the font family can't be resolved —
-/// matches those painters' own silent-return-on-font-load-failure behaviour.
 fn measure_text_line_width(text: &str, font_size: f32, family: &str, bold: bool) -> f32 {
     use rustmotion_core::engine::renderer::{
         emoji_typeface, measure_text_with_fallback, typeface_with_fallback,
@@ -1603,27 +1129,10 @@ fn measure_text_line_width(text: &str, font_size: f32, family: &str, bold: bool)
     measure_text_with_fallback(text, &font, &emoji_font, 0.0)
 }
 
-/// Apply per-component CSS overrides for things that the legacy
-/// `Widget::measure` derived from constraints (e.g. divider stretching to its
-/// parent, line bounding box from its endpoints).
 fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
     use Component::*;
     match component {
         Text(t) => {
-            // M1: `white-space: nowrap|pre` must style the *content*, not
-            // silently resize the *box*. Without this, CSS's "automatic
-            // minimum size" (min-width: auto + the default overflow:
-            // visible) lets a nowrap text's own auto-width box grow to its
-            // full natural width inside a flex container — which can push
-            // or resize flex siblings the author never touched, a
-            // surprising failure mode for a tool whose whole model is
-            // authors declaring explicit positions/sizes. Forcing
-            // `min-width: 0` (only when the author hasn't set their own)
-            // keeps the box within whatever space its container gives it;
-            // the painter (`text.rs`) still draws the full unwrapped line
-            // regardless of that box width, so the text visibly bleeds past
-            // it exactly as `white-space: nowrap` should — it's the box
-            // that stays put, not the content.
             let nowrap = matches!(
                 t.style.white_space,
                 Some(
@@ -1635,12 +1144,6 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 css.min_width = Some(CSize::Length(CLP::Px(0.0)));
             }
         }
-        // M1 follow-up: same reasoning as the `Text` arm above — now that
-        // `gradient_text.rs` and `caption.rs` word-wrap and respect
-        // `white-space: nowrap|pre` too (see `intrinsic.rs`'s
-        // `GradientTextIntrinsic`/`CaptionIntrinsic`), their auto-width
-        // boxes can hit the same CSS automatic-minimum-size growth when
-        // nowrap/pre is set with no explicit width.
         GradientText(t) => {
             let nowrap = matches!(
                 t.style.white_space,
@@ -1667,8 +1170,6 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
         }
         Divider(d) => match d.direction {
             DividerDirection::Horizontal => {
-                // Stretch horizontally in flex row/column parents (cross-axis
-                // for column = horizontal). Width stays auto.
                 if css.height.is_none() {
                     css.height = Some(CSize::Length(CLP::Px(d.thickness)));
                 }
@@ -1695,8 +1196,6 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             }
         },
         Line(l) => {
-            // Line draws inside its bounding box at (x1,y1)→(x2,y2). Use the
-            // bounding box as the intrinsic size so taffy reserves enough room.
             let w = (l.x2 - l.x1).abs().max(1.0);
             let h = (l.y2 - l.y1).abs().max(1.0);
             if css.width.is_none() {
@@ -1707,7 +1206,6 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             }
         }
         Arrow(a) => {
-            // Endpoint bounding box + padding for the arrowhead/curve overshoot.
             let pad = ARROW_BBOX_PADDING + a.arrow_size.max(0.0);
             let w = (a.x2 - a.x1).abs().max(1.0) + pad;
             let h = (a.y2 - a.y1).abs().max(1.0) + pad;
@@ -1730,7 +1228,6 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             }
         }
         Cursor(cur) => {
-            // Fixed-size pointer; legacy measure returns (width, height).
             if css.width.is_none() {
                 css.width = Some(CSize::Length(CLP::Px(cur.width)));
             }
@@ -1739,16 +1236,9 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             }
         }
         SuccessCheck(c) => {
-            // The halo is the box: the entrance scales *within* it (0.72→1),
-            // so the mark never needs more room than its own diameter.
             apply_default_size(css, c.size, c.size);
         }
         Pointer(p) => {
-            // The box is the arrow glyph, not the area it travels over: the
-            // waypoints translate the glyph away from this box, and the
-            // geometry checker exempts `pointer` for exactly that reason.
-            // Sizing the box to the travel instead would make the pointer
-            // shove its flex siblings around.
             if css.width.is_none() {
                 css.width = Some(CSize::Length(CLP::Px(p.size * 0.6)));
             }
@@ -1757,7 +1247,6 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             }
         }
         Particle(_) => {
-            // Particles fill their parent (legacy returned the max constraints).
             if css.width.is_none() {
                 css.width = Some(CSize::Length(CLP::String("100%".into())));
             }
@@ -1894,52 +1383,15 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             }
         }
 
-        // ── Round 4 audit, lot LAYOUT, constat 4: the 23-components block
-        // below (`Callout` through `Lottie`) now routes every default size
-        // through `apply_default_size`, which honours an explicit
-        // `aspect-ratio` (see its own doc comment) instead of the two
-        // guards below reaching separate, aspect-ratio-blind defaults —
-        // `width: 400` + `aspect-ratio: 16/9` used to still get the
-        // component's unrelated hardcoded default height (e.g. `shape`'s
-        // 80px) instead of the 225px the ratio implies.
-        // ── #126 / W3: the 23 components with no size source ─────────────
-        //
-        // A card's default flex column gives every child its width via
-        // `align-items: stretch`, but height stays at the CSS auto-height
-        // default (0 for a leaf with no intrinsic measurer) — these 23 paint
-        // nothing. Like the arms above, every default here fires only when
-        // the author hasn't set the corresponding `style` property, so a
-        // component that already declares `width`/`height` keeps rendering
-        // exactly as before. Both width *and* height are always set (not
-        // just height) so the same defaults also work in a flex *row* (e.g.
-        // `stat` cards side by side), where width — not height — is the one
-        // that would otherwise collapse to 0.
-        //
-        // Text-bearing "bubble" components (callout/tooltip) and label-flow
-        // components (pill_nav/stepper) are measured with the exact same
-        // Skia metrics their own painters use (`measure_text_line_width`),
-        // so the box matches the ink. Everything else uses either a formula
-        // derived from the component's own fields (heatmap/skeleton/gauge/
-        // marquee) or a fixed size justified by a documented convention
-        // already established in this project's own skill docs
-        // (`.claude/skills/rustmotion/rules/*.md`) or its own example
-        // scenarios (`examples/*.json`) — never a number picked by feel.
         Callout(t) => {
-            // Mirrors callout.rs's own `paint()`: 12px text padding, a
-            // `font_size * 1.4` line height, and the arrow eating into
-            // whichever axis it points along (width for Left/Right, height
-            // for Top/Bottom/default). Sized to a single line — since the
-            // box is fit exactly to the unwrapped text width, the painter's
-            // own `wrap_text(text, font, Some(text_area_w))` never has a
-            // reason to wrap, so painted output matches this box exactly.
             let font_size = t
                 .style
                 .font_size_px_ctx(&crate::intrinsic::measure_time_font_size_ctx(0.0), 16.0);
             let family = t.style.font_family_or("Inter");
             let text_w = measure_text_line_width(&t.text, font_size, family, false);
-            let h_pad = 12.0; // callout.rs's own `let padding = 12.0;`
-            let v_pad = 16.0; // breathing room around the line, same order of magnitude as h_pad
-            let line_h = font_size * 1.4; // callout.rs's own `line_height = font_size * 1.4`
+            let h_pad = 12.0;
+            let v_pad = 16.0;
+            let line_h = font_size * 1.4;
             let (extra_w, extra_h) = match t.arrow_direction {
                 CalloutArrowDirection::Left | CalloutArrowDirection::Right => (t.arrow_size, 0.0),
                 CalloutArrowDirection::Top | CalloutArrowDirection::Bottom => (0.0, t.arrow_size),
@@ -1951,9 +1403,6 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             );
         }
         Tooltip(t) => {
-            // Same shape as Callout above; padding value borrowed from
-            // callout.rs since tooltip.rs's own paint() centers text in the
-            // body with no defined constant of its own.
             let font_size = t.style.font_size_px_ctx(
                 &crate::intrinsic::measure_time_font_size_ctx(0.0),
                 t.font_size,
@@ -1976,12 +1425,6 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             );
         }
         PillNav(p) => {
-            // `height` is already a declared field on the component (like
-            // Progress/Switch/Slider above) — just promote it to CSS. Width
-            // replicates pill_nav.rs's own private `compute_tab_layout()`
-            // formula (h_pad = font_size*1.2 per side, `gap` before/after/
-            // between every pill) using the same public fields and the same
-            // `measure_text_with_fallback` call it makes internally.
             let font_size = p
                 .style
                 .font_size_px_ctx(&crate::intrinsic::measure_time_font_size_ctx(0.0), 14.0);
@@ -1997,21 +1440,6 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             apply_default_size(css, total_w, p.height);
         }
         Marquee(m) => {
-            // Marquee's whole purpose is to scroll unbounded content, so
-            // there's no natural content width. A percentage (mirroring
-            // `Particle`'s "fills its parent" default above) would be the
-            // obvious choice, but it resolves to 0 against an indefinite
-            // parent (a card that itself has no explicit width) — the same
-            // "card with height: auto" case this issue asks to fix, so a
-            // percentage default would still paint nothing in that case. A
-            // fixed width sidesteps that: 800px matches this project's own
-            // marquee usage (examples/mega-showcase.json and SKILL.md's own
-            // example both use `style.width: 800`, or scale up from there —
-            // mega-showcase's 1700px is that same scene's marquee spanning a
-            // much wider bleed banner). Height follows the font-size-to-
-            // height ratio both of those same real usages share:
-            // `font_size: 24` paired with `style.height: 48`, i.e.
-            // `2 × font_size`.
             let font_size = m.style.font_size_px_ctx(
                 &crate::intrinsic::measure_time_font_size_ctx(0.0),
                 m.font_size,
@@ -2019,11 +1447,6 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             apply_default_size(css, 800.0, font_size * 2.0);
         }
         Stepper(s) => {
-            // Same shape as `Timeline`'s formula above (r*2 + label metrics),
-            // adapted to stepper.rs's own layout constants: `cy = r + 4.0`,
-            // label offset `r + 12.0`, description offset
-            // `label_font_size + 4.0`, and its hardcoded label/description
-            // font sizes (14px / 11px — not fields, copied from paint()).
             let n = (s.steps.len().max(1)) as f32;
             let has_desc = s.steps.iter().any(|st| st.description.is_some());
             const LABEL_FS: f32 = 14.0;
@@ -2041,10 +1464,6 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 .fold(0.0_f32, f32::max);
             match s.orientation {
                 StepperOrientation::Horizontal => {
-                    // Per-step allocation: the node needs ~3 diameters of
-                    // breathing room (a common stepper-UI spacing
-                    // convention), or enough for its longest label/desc,
-                    // whichever is larger.
                     let per_step = (s.node_size * 3.0).max(max_label_w.max(max_desc_w) + 24.0);
                     let label_h = LABEL_FS * 1.3;
                     let desc_h = if has_desc { DESC_FS * 1.3 + 4.0 } else { 0.0 };
@@ -2065,14 +1484,6 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             }
         }
         TagCloud(tc) => {
-            // Replicates tag_cloud.rs's own per-tag metrics (bold Inter,
-            // weight-normalized font size between min/max_font_size, its
-            // hardcoded h_gap=12/v_gap=8) to sum a single-line content width,
-            // then wraps that at a conventional card-content width (matching
-            // this project's own tag_cloud usage in
-            // examples/mega-showcase.json) to estimate a line count and
-            // hence a height — an approximation of the real flow-wrap
-            // algorithm, not a re-implementation of it.
             let n = tc.tags.len();
             if n > 0 {
                 let min_w = tc.tags.iter().map(|t| t.weight).fold(f64::MAX, f64::min);
@@ -2099,10 +1510,6 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             }
         }
         Heatmap(h) => {
-            // Fully content-derived from heatmap.rs's own paint() formula:
-            // `step = cell_size + cell_gap`, cell (col,row) drawn at
-            // `(col*step, row*step)` sized `cell_size` — so the painted
-            // extent is exactly `(cols-1)*step + cell_size` per axis.
             let rows = h.data.len();
             let cols = h.data.iter().map(|r| r.len()).max().unwrap_or(0);
             let step = h.cell_size + h.cell_gap;
@@ -2111,65 +1518,26 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             apply_default_size(css, w, hh);
         }
         Sparkline(_) => {
-            // "Sparkline: no axes, no labels, compact (120x40 default),
-            // inline use" — documented in
-            // .claude/skills/rustmotion/rules/data-viz-components.md.
             apply_default_size(css, 120.0, 40.0);
         }
         Stat(_) => {
-            // Documented default from
-            // .claude/skills/rustmotion/rules/stat-cards.md's own "GOOD"
-            // example: `style: { width: 280, height: 180 }`. This is also
-            // the fix for the issue's second bug: three `stat`s in a flex
-            // row with no explicit size rendered zero pixels because width
-            // (not just height) collapsed to 0 in a row context.
             apply_default_size(css, 280.0, 180.0);
         }
         Gauge(g) => {
-            // Square — gauge.rs's own paint() derives its ring radius from
-            // `min(w, h)/2 - track_width/2 - 4`. Solved backwards for a
-            // target radius of 88px (chosen so the value-text font-size —
-            // this same file's own `radius * 0.45` — comes out to ~40px,
-            // comfortably legible), so the box scales with the component's
-            // own `track_width` field rather than a size picked independent
-            // of it. At the default `track_width` (16px) this lands on
-            // exactly 200×200, which also matches the midpoint of the
-            // documented "hero icon" desktop range (160–200px) in
-            // icon-sizing-hierarchy.md.
             const TARGET_RADIUS: f32 = 88.0;
             let size = 2.0 * (TARGET_RADIUS + g.track_width / 2.0 + 4.0);
             apply_default_size(css, size, size);
         }
         DotMap(_) => {
-            // 2:1 — the standard aspect ratio for an equirectangular world
-            // map (360° longitude : 180° latitude), the projection
-            // dot_map.rs's own `geo_to_screen` implements. dot_map.rs always
-            // paints a full-box background rect first, so any positive size
-            // shows ink even with zero points.
             apply_default_size(css, 640.0, 320.0);
         }
         Comparison(_) => {
-            // No natural intrinsic size (the painter just splits whatever
-            // box it's given at the divider) — matches this project's own
-            // reference usage in examples/mega-showcase.json's `comparison`
-            // block.
             apply_default_size(css, 520.0, 280.0);
         }
         Treemap(_) => {
-            // Slice-and-dice treemap fills whatever box it's given — matches
-            // this project's own reference usage in
-            // examples/mega-showcase.json's `treemap` block (near-square,
-            // the conventional treemap aspect since its rectangles are area-
-            // proportional in both axes).
             apply_default_size(css, 416.0, 368.0);
         }
         Chart(c) => {
-            // Pie/donut/radar/radial_bar are inherently circular — a square
-            // box avoids wasting space on one axis or clipping into an
-            // ellipse. The other 8 chart types (bar/line/area/scatter/
-            // funnel/waterfall/stacked_bar/horizontal_bar) read axis labels
-            // best in a landscape 4:3, per data-viz-components.md's guidance
-            // that charts are "larger, standalone" than a sparkline.
             let round = matches!(
                 c.chart_type,
                 ChartType::Pie | ChartType::Donut | ChartType::Radar | ChartType::RadialBar
@@ -2181,30 +1549,16 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             };
             apply_default_size(css, dw, dh);
         }
-        Skeleton(s) => {
-            // `rectangle`: documented default from data-viz-components.md's
-            // own "GOOD" example (`{ "width": 400, "height": 200 }`).
-            // `circle`: matches this file's own Icon/Avatar-adjacent 64px
-            // convention (skeleton circles most commonly stand in for an
-            // avatar). `text`: fully derived from the component's own
-            // `lines`/`line_height`/`line_gap` fields, mirroring `List`'s
-            // formula above — matches skeleton.rs's own per-line paint loop
-            // (`y = i * (line_height + line_gap)`) exactly.
-            match s.variant {
-                SkeletonVariant::Rectangle => apply_default_size(css, 400.0, 200.0),
-                SkeletonVariant::Circle => apply_default_size(css, 64.0, 64.0),
-                SkeletonVariant::Text => {
-                    let n = s.lines.max(1) as f32;
-                    let h = n * s.line_height + (n - 1.0).max(0.0) * s.line_gap;
-                    apply_default_size(css, 240.0, h);
-                }
+        Skeleton(s) => match s.variant {
+            SkeletonVariant::Rectangle => apply_default_size(css, 400.0, 200.0),
+            SkeletonVariant::Circle => apply_default_size(css, 64.0, 64.0),
+            SkeletonVariant::Text => {
+                let n = s.lines.max(1) as f32;
+                let h = n * s.line_height + (n - 1.0).max(0.0) * s.line_gap;
+                apply_default_size(css, 240.0, h);
             }
-        }
+        },
         Mockup(m) => {
-            // Per-device aspect matches each device's real-world screen
-            // proportions: phones (iPhone/Android) ~9:19.5 (modern
-            // flagship aspect), laptop 16:10 (the common MacBook/ultrabook
-            // ratio), browser 16:9 (the standard desktop viewport ratio).
             let (dw, dh) = match m.device {
                 MockupDevice::Iphone | MockupDevice::Android => (320.0, 690.0),
                 MockupDevice::Laptop => (640.0, 400.0),
@@ -2213,46 +1567,21 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             apply_default_size(css, dw, dh);
         }
         Icon(_) => {
-            // 64×64 — the midpoint of the documented "card / feature icon"
-            // role across all three device classes in
-            // icon-sizing-hierarchy.md (desktop 40–56px, mobile 72–96px,
-            // square 60–80px), and a size icon asset systems near-universally
-            // ship as a default export (24/32/48/64 being the common family).
             apply_default_size(css, 64.0, 64.0);
         }
         Svg(_) => {
-            // 200×200 — square, since an arbitrary vector graphic (icon,
-            // diagram, or logo) has no single natural aspect; matches the
-            // common equal-aspect SVG viewBox convention and sits above
-            // Icon's 64px "card icon" role for the more elaborate content
-            // `svg` typically carries (illustrations/diagrams, not glyphs).
             apply_default_size(css, 200.0, 200.0);
         }
         Shape(_) => {
-            // 80×80 — matches the median of this project's own decorative
-            // (non full-bleed-background, non-divider-line) shape usages in
-            // examples/*.json, which cluster at 44–70px for accent shapes
-            // (26, 36, 44, 60, 70, 140 — median ~55, rounded up for
-            // visibility as a standalone default rather than a same-scene
-            // accent tuned against neighbours).
             apply_default_size(css, 80.0, 80.0);
         }
         Image(_) => {
-            // 4:3 (400×300) — the traditional default photo aspect ratio,
-            // distinct from Video/Gif's 16:9 below so a generic still image
-            // doesn't presume widescreen framing.
             apply_default_size(css, 400.0, 300.0);
         }
         Video(_) | Gif(_) => {
-            // 16:9 (400×225) — the industry-standard video aspect ratio
-            // (matches every render resolution this project documents:
-            // 1920×1080, 1280×720), scaled down to a card-sized default.
             apply_default_size(css, 400.0, 225.0);
         }
         Lottie(_) => {
-            // 300×300 — square, matching the aspect the vast majority of
-            // Lottie animation assets ship at (LottieFiles' own marketplace
-            // preview convention is a 1:1 canvas).
             apply_default_size(css, 300.0, 300.0);
         }
 
@@ -2260,26 +1589,6 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
     }
 }
 
-/// Apply a component's natural default size (`dw` × `dh`) to `css`, honouring
-/// an explicit `aspect-ratio` instead of always falling back to `dw`/`dh`
-/// independently (round 4 audit, lot LAYOUT, constat 4 — the previous code
-/// guarded each axis with its own `is_none()` check and never looked at
-/// `aspect-ratio`, so `width: 400` + `aspect-ratio: 16/9` still got the
-/// component's unrelated hardcoded default height instead of 225).
-///
-/// - Both axes already set: untouched (the author fully specified the box).
-/// - One axis set to a fixed pixel length, `aspect-ratio` present: the other
-///   axis is derived from it (`h = w / ratio` or `w = h * ratio`) — the CSS
-///   replaced-element sizing rule for a single definite axis plus a
-///   preferred aspect ratio.
-/// - Neither axis set: the natural default width is kept (there is no
-///   author-declared axis to derive from), and height is derived from
-///   `aspect-ratio` when present, the natural default height otherwise.
-///
-/// `min-*`/`max-*` need no equivalent guard here: taffy clamps the final
-/// used size against them at layout time regardless of what `size` resolves
-/// to (`style.min_size`/`max_size` in `taffy_bridge::to_taffy_style`), so a
-/// default below `min-width` is corrected downstream, not silently wrong.
 fn apply_default_size(css: &mut CssStyle, dw: f32, dh: f32) {
     let ratio = css.aspect_ratio.filter(|r| *r > 0.0);
     match (css.width.is_some(), css.height.is_some()) {
@@ -2306,11 +1615,6 @@ fn apply_default_size(css: &mut CssStyle, dw: f32, dh: f32) {
     }
 }
 
-/// Extract a fixed pixel value from a `Size`, if it resolves to one without a
-/// `LengthContext` (only `Size::Length(LengthPercentage::Px(_))` — a bare
-/// number or `"NNpx"`). `%`/`vw`/`vh`/`em`/`rem` and `auto` return `None`:
-/// `apply_default_size` can't derive a ratio from a length it can't resolve
-/// at build time, so it falls back to the component's hardcoded default.
 fn fixed_px(size: Option<&CSize>) -> Option<f32> {
     match size? {
         CSize::Length(lp) => match lp.try_parse()? {
@@ -2321,7 +1625,6 @@ fn fixed_px(size: Option<&CSize>) -> Option<f32> {
     }
 }
 
-/// Borrow the `CssStyle` from any component.
 fn component_style(c: &Component) -> &CssStyle {
     use Component::*;
     match c {
@@ -2381,7 +1684,6 @@ fn component_style(c: &Component) -> &CssStyle {
     }
 }
 
-/// Short kind label for a component (for studio selection / inspector display).
 pub fn component_kind(c: &Component) -> &'static str {
     use Component::*;
     match c {
@@ -2435,11 +1737,6 @@ pub fn component_kind(c: &Component) -> &'static str {
         Timeline(_) => "timeline",
         Tooltip(_) => "tooltip",
         Treemap(_) => "treemap",
-        // The schema tag is `div` (`#[serde(rename = "div", alias =
-        // "container", alias = "card", alias = "flex", alias = "grid", alias
-        // = "positioned")]` on the enum in `lib.rs`) — the other five only
-        // survive as deserialize aliases, so naming this label anything else
-        // told an author to look for a tag their scenario cannot contain.
         Container(_) => "div",
         AudioSpectrum(_) => "audio_spectrum",
         Waveform(_) => "waveform",
@@ -2450,11 +1747,6 @@ pub fn component_kind(c: &Component) -> &'static str {
 mod tests {
     use super::*;
 
-    /// Two timeline steps on one node. Each step is documented to trigger at
-    /// its own `at`, and `apply_style_states` already gates a step's `style`
-    /// that way — its `animation` half must obey the same rule, or a step
-    /// that has not begun still sets the value through the shared
-    /// last-effect-wins bucket.
     #[test]
     fn a_timeline_step_leaves_the_value_alone_until_its_at() {
         let component: Component = serde_json::from_value(json!({
@@ -2505,12 +1797,6 @@ mod tests {
         );
     }
 
-    /// A `start_at`ed entrance must play from its own first keyframe, not
-    /// from wherever the unrebased scene clock already landed it. Measured
-    /// bug: a `fade_in_down` (0.6s) on a `start_at: 2.0` node resolved at
-    /// t=2.0 (the instant it becomes visible) to the animation's value at
-    /// scene time 2.0 — long past the 0.6s duration — so it appeared already
-    /// fully faded in instead of animating.
     #[test]
     fn start_at_rebases_the_entrance_animation_clock() {
         let scene = vec![ChildComponent {
@@ -2560,12 +1846,6 @@ mod tests {
         );
     }
 
-    /// Companion to the entrance case above, mirroring the measured `badge`
-    /// bug: an exit declared after the entrance (so it alone owns `opacity`
-    /// under last-declared-wins) carries its own `delay`. Unrebased, that
-    /// delay is measured from scene time zero, so the exit can finish before
-    /// `start_at` is even reached — the component then renders zero pixels
-    /// for its entire visible window.
     #[test]
     fn start_at_rebases_an_exit_animation_declared_after_the_entrance() {
         let scene = vec![ChildComponent {
@@ -2689,7 +1969,7 @@ mod tests {
     fn empty_scene_has_only_root() {
         let built = build_scene(&[], (1920.0, 1080.0));
         assert_eq!(built.root.children.len(), 0);
-        assert_eq!(built.components.len(), 1); // synthetic root slot
+        assert_eq!(built.components.len(), 1);
     }
 
     #[test]
@@ -2764,7 +2044,6 @@ mod tests {
         let c2 = layout
             .get(card_box.children[1].id)
             .expect("shape 2 laid out");
-        // Padding 20 from top, then first shape 50 high, gap 10 → 80.
         assert_eq!(c1.x, 20.0);
         assert_eq!(c1.y, 20.0);
         assert_eq!(c2.x, 20.0);
@@ -2836,9 +2115,6 @@ mod tests {
 
     #[test]
     fn text_child_in_flex_card_gets_cosmic_intrinsic_size() {
-        // A flex column card with no fixed size — its children's intrinsic
-        // sizes should determine the card's width/height. The text child
-        // must be measured via cosmic-text, not collapse to 0×0.
         use crate::container::ContainerComponent;
         use crate::text::Text;
 
@@ -2912,7 +2188,6 @@ mod tests {
             text_layout.height
         );
 
-        // Card height should hug the text + 2×padding(20) = ~text_h + 40.
         let card_layout = layout.get(card_id).expect("card laid out");
         assert!(
             card_layout.height >= text_layout.height + 40.0 - 1.0,
@@ -2958,7 +2233,6 @@ mod tests {
         let l = layout
             .get(built.root.children[0].id)
             .expect("arrow laid out");
-        // bbox 100×60 + (16 padding + 12 arrow_size) = 128×88.
         assert_eq!(l.width, 128.0);
         assert_eq!(l.height, 88.0);
     }
@@ -2995,15 +2269,12 @@ mod tests {
         let l = layout
             .get(built.root.children[0].id)
             .expect("connector laid out");
-        // bbox 100×50 + (16 + 10) = 126×76.
         assert_eq!(l.width, 126.0);
         assert_eq!(l.height, 76.0);
     }
 
     #[test]
     fn counter_intrinsic_size_reserves_space_for_max_value() {
-        // 1234 → 1234 → format with 0 decimals → measure largest absolute value.
-        // Expectation: width > 0 (cosmic-text didn't fail), height ≈ font_size × line_height.
         use crate::counter::Counter;
 
         use rustmotion_core::css::units::Length;
@@ -3044,7 +2315,6 @@ mod tests {
             "counter width should be > 0, got {}",
             l.width
         );
-        // line_height defaults to font_size × 1.3 = 83.2. Allow some slack.
         assert!(
             l.height >= 60.0,
             "counter height should be ≥ ~one line ({}), got {}",
@@ -3055,8 +2325,6 @@ mod tests {
 
     #[test]
     fn badge_intrinsic_size_includes_padding_and_text() {
-        // Default size = Md → font_size 14, h_pad 12, v_pad 6, icon 18.
-        // Without an icon, height ≈ 6×2 + 14×1.3 ≈ 30.2.
         use crate::badge::{Badge, BadgeSize, BadgeVariant};
 
         let badge = ChildComponent {
@@ -3086,7 +2354,6 @@ mod tests {
         let layout = run_layout(&built.root, (400.0, 200.0), &ConversionContext::default());
         let id = built.root.children[0].id;
         let l = layout.get(id).expect("badge laid out");
-        // h_pad×2 = 24 alone, plus the text width.
         assert!(
             l.width > 24.0,
             "badge width should exceed padding alone, got {}",
@@ -3131,12 +2398,8 @@ mod tests {
         assert_eq!(l.height, 60.0);
     }
 
-    // ─── M2: rich_text intrinsic wired into component_intrinsic ─────────────
-
     #[test]
     fn rich_text_child_gets_a_non_zero_intrinsic_size() {
-        // Before the fix: rich_text had no `component_intrinsic` entry, so
-        // an auto-sized rich_text laid out at 0×0 and was invisible.
         use crate::rich_text::{RichText, RichTextSpan};
         use rustmotion_core::css::units::Length;
 
@@ -3195,8 +2458,6 @@ mod tests {
         );
     }
 
-    // ─── M3: the `glow` effect renders as a coloured drop-shadow ────────────
-
     #[test]
     fn glow_effect_adds_a_coloured_drop_shadow_filter() {
         use rustmotion_core::css::style::{Color, FilterFn};
@@ -3237,9 +2498,6 @@ mod tests {
             }
             other => panic!("expected Some(Length::Px(12.0)) blur, got {:?}", other),
         }
-        // The defect this fixes: `color: None` resolves to black downstream
-        // (see `paint_pass.rs`'s `unwrap_or(SColor::BLACK)`). The colour must
-        // be `Some` and must match the configured glow colour, not black.
         match color {
             Some(Color::Rgba { r, g, b, a }) => {
                 assert_eq!(*r, 0x5C);
@@ -3259,7 +2517,7 @@ mod tests {
         let mut shape = make_shape(100.0, 100.0);
         if let Component::Shape(ref mut s) = shape.component {
             s.style.animation = vec![AnimationEffect::Glow(GlowConfig {
-                color: "#FFFFFFFF".to_string(), // opaque white
+                color: "#FFFFFFFF".to_string(),
                 radius: 10.0,
                 intensity: 0.5,
             })];
@@ -3304,11 +2562,6 @@ mod tests {
         assert!(built.root.children[0].css.filter.is_none());
     }
 
-    // ─── #126 / W3: the 23 components with no size source ───────────────────
-
-    /// Build a `ChildComponent` from a JSON literal (matches the `type`-tagged
-    /// `Component` enum's own `Deserialize` impl) — much less error-prone than
-    /// a full struct literal for components with a dozen+ fields.
     fn child_from_json(json: serde_json::Value) -> ChildComponent {
         let component: Component =
             serde_json::from_value(json.clone()).unwrap_or_else(|e| panic!("{e}\n{json:#}"));
@@ -3323,11 +2576,6 @@ mod tests {
         }
     }
 
-    /// Lay out a single unsized child inside a card and return its final
-    /// `(width, height)`. The card itself has no explicit width or height
-    /// either, so this also exercises acceptance criterion #3 ("a card with
-    /// height: auto sizes to the component instead of collapsing to
-    /// padding").
     fn layout_in_auto_card(child_json: serde_json::Value) -> (f32, f32) {
         let card = make_card(vec![child_from_json(child_json)], CssStyle::default());
         let scene = vec![ChildComponent {
@@ -3346,13 +2594,6 @@ mod tests {
         (l.width, l.height)
     }
 
-    /// Every one of the 23 components #126 lists gets a positive width *and*
-    /// height with no `style` at all — before this file's fix they all laid
-    /// out at 0×0 inside a card (proven by rendering: see the workstream's
-    /// scratch `ink-measure` harness, which shows every one of these going
-    /// from 0 painted pixels to a positive count under the identical fixture).
-    /// A positive layout box is the necessary precondition for any of that
-    /// painted ink — this test is the fast, render-free regression guard.
     #[test]
     fn all_23_unsized_components_get_a_positive_box_in_a_card() {
         let cases: &[(&str, serde_json::Value)] = &[
@@ -3411,8 +2652,6 @@ mod tests {
 
     #[test]
     fn heatmap_intrinsic_size_matches_cell_grid_formula() {
-        // 2 rows x 3 cols, default cell_size=14, cell_gap=3.
-        // width = (3-1)*(14+3) + 14 = 48, height = (2-1)*17 + 14 = 31.
         let (w, h) =
             layout_in_auto_card(json!({"type":"heatmap","data":[[1.0,2.0,3.0],[4.0,5.0,6.0]]}));
         assert_eq!(w, 48.0);
@@ -3421,8 +2660,6 @@ mod tests {
 
     #[test]
     fn sparkline_gets_the_documented_120x40_default() {
-        // .claude/skills/rustmotion/rules/data-viz-components.md: "Sparkline:
-        // ... compact (120x40 default), inline use."
         let (w, h) = layout_in_auto_card(json!({"type":"sparkline","data":[1.0,2.0,3.0]}));
         assert_eq!(w, 120.0);
         assert_eq!(h, 40.0);
@@ -3430,7 +2667,6 @@ mod tests {
 
     #[test]
     fn stat_gets_the_documented_280x180_default() {
-        // .claude/skills/rustmotion/rules/stat-cards.md's own "GOOD" example.
         let (w, h) = layout_in_auto_card(json!({"type":"stat","value":"42"}));
         assert_eq!(w, 280.0);
         assert_eq!(h, 180.0);
@@ -3445,17 +2681,12 @@ mod tests {
 
     #[test]
     fn pill_nav_height_promotes_its_own_declared_field() {
-        // `height` is already a field on PillNav (default 44.0) — the fix
-        // just promotes it to CSS, like Progress/Switch/Slider above.
         let (_, h) = layout_in_auto_card(json!({"type":"pill_nav","items":["Overview"]}));
         assert_eq!(h, 44.0);
     }
 
     #[test]
     fn callout_width_grows_with_its_own_text_content() {
-        // A longer text must produce a wider box (content-derived, not a
-        // fixed constant) — proves the measured-text path is actually wired
-        // up, not just a padding-only fallback.
         let (short_w, _) = layout_in_auto_card(json!({"type":"callout","text":"Hi"}));
         let (long_w, _) = layout_in_auto_card(
             json!({"type":"callout","text":"This is a much longer callout message"}),
@@ -3468,10 +2699,6 @@ mod tests {
 
     #[test]
     fn three_stats_in_a_flex_row_all_get_a_positive_width() {
-        // #126's second bug: 3 `stat`s in a flex-row card with no explicit
-        // size rendered zero pixels because *width* (not height) collapsed
-        // to 0 — align-items:stretch only helps the cross axis, which is
-        // height in a row.
         let stats = vec![
             child_from_json(json!({"type":"stat","value":"45.2K","label":"Users"})),
             child_from_json(json!({"type":"stat","value":"12%","label":"Growth"})),
@@ -3511,11 +2738,6 @@ mod tests {
             );
         }
     }
-
-    // ── Round 4 audit, lot LAYOUT, constat 2: the CSS cascade is wired ──────
-    // `crates/rustmotion-core/src/css/cascade.rs::inherit_from` existed but
-    // nothing called it — `color`/`font-*` set on a container never reached
-    // children lacking their own value.
 
     #[test]
     fn card_color_cascades_to_text_child_with_no_color_of_its_own() {
@@ -3583,9 +2805,6 @@ mod tests {
 
     #[test]
     fn card_display_does_not_cascade_to_text_child() {
-        // `display` is not an inheritable CSS property — only the documented
-        // inheritable list (color, font-*, text-align, white-space, ...)
-        // should propagate.
         let card = make_card(
             vec![make_text("hello", CssStyle::default())],
             CssStyle {
@@ -3606,9 +2825,6 @@ mod tests {
         let text_box = &built.root.children[0].children[0];
         assert_eq!(text_box.css.display, None);
     }
-
-    // ── Round 4 audit, lot LAYOUT, constat 4: `apply_intrinsic_overrides`'s
-    // default size ignored an explicit `aspect-ratio`. ─────────────────────
 
     fn make_aspect_shape(width: f32, aspect_ratio: f32) -> ChildComponent {
         ChildComponent {
@@ -3637,9 +2853,6 @@ mod tests {
 
     #[test]
     fn explicit_width_with_aspect_ratio_derives_height_instead_of_the_hardcoded_default() {
-        // `shape`'s hardcoded default is 80×80 (see `apply_intrinsic_overrides`).
-        // `width: 400` + `aspect-ratio: 16/9` should derive height = 225, not
-        // fall back to the unrelated 80px default.
         let scene = vec![make_aspect_shape(400.0, 16.0 / 9.0)];
         let built = build_scene(&scene, (1920.0, 1080.0));
         let layout = run_layout(&built.root, (1920.0, 1080.0), &ConversionContext::default());
@@ -3660,9 +2873,6 @@ mod tests {
 
     #[test]
     fn neither_axis_set_with_aspect_ratio_derives_height_from_the_default_width() {
-        // No width/height at all: the natural default width (80 for shape)
-        // is kept, but height should come from the aspect-ratio, not the
-        // unrelated 80px default.
         let scene = vec![make_aspect_shape_no_width(2.0)];
         let built = build_scene(&scene, (1920.0, 1080.0));
         let layout = run_layout(&built.root, (1920.0, 1080.0), &ConversionContext::default());

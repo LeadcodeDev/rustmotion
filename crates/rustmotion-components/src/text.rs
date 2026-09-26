@@ -59,8 +59,6 @@ rustmotion_core::impl_traits!(Text {
     Styled => style,
 });
 
-/// Eased progress (0..1) of unit `idx` at `time`, honouring the config's
-/// deterministic jitter.
 fn unit_progress(cfg: &ResolvedCharAnimation, idx: usize, time: f64) -> f32 {
     let unit_start = cfg.unit_start(idx);
     let unit_end = unit_start + cfg.duration as f64;
@@ -74,11 +72,6 @@ fn unit_progress(cfg: &ResolvedCharAnimation, idx: usize, time: f64) -> f32 {
     ease(raw_t, &cfg.easing) as f32
 }
 
-/// The paint a unit draws with at progress `t`: the base paint, tinted from
-/// `ink_from` towards the text's own colour when the config asks for it.
-///
-/// `None` means "use the base paint unchanged" — worth keeping distinct from
-/// a clone, since the caller may already be mutating its own copy.
 fn ink_paint(cfg: &ResolvedCharAnimation, paint: &Paint, t: f32) -> Option<Paint> {
     let from = cfg.ink_from.as_deref()?;
     let start = paint_from_hex(from).color();
@@ -94,8 +87,6 @@ fn ink_paint(cfg: &ResolvedCharAnimation, paint: &Paint, t: f32) -> Option<Paint
     Some(p)
 }
 
-/// Apply a text animation preset to a single unit (char or word).
-/// Returns the text draw position adjustments and paint modifications.
 fn apply_text_anim_preset(
     canvas: &Canvas,
     text: &str,
@@ -105,10 +96,6 @@ fn apply_text_anim_preset(
     cursor_x: f32,
     line_y: f32,
     unit_width: f32,
-    // The tracking the *cursor* was advanced with. Drawing at 0 while the
-    // advance carries a negative value makes the glyphs overrun their slot and
-    // swallow the inter-word space — visible only once the overrun approaches
-    // a space's width, i.e. at small sizes or long words.
     letter_spacing: f32,
     cfg: &ResolvedCharAnimation,
     t: f32,
@@ -122,14 +109,9 @@ fn apply_text_anim_preset(
     let center_x = cursor_x + unit_width / 2.0;
     let center_y = line_y;
 
-    // `ink_from` and `scale_from` are cross-cutting: they compose with
-    // whatever the preset itself does rather than replacing it, so they are
-    // resolved once here instead of inside each arm.
     let inked = ink_paint(cfg, paint, t);
     let paint = inked.as_ref().unwrap_or(paint);
     if let Some(from) = cfg.scale_from {
-        // The scale-driven presets own their scale curve outright; stacking a
-        // second one on top would fight it rather than compose with it.
         if !matches!(preset, CharAnimPreset::ScaleIn | CharAnimPreset::Bounce) {
             let s = from + (1.0 - from) * t.clamp(0.0, 1.0);
             canvas.translate((center_x, center_y));
@@ -140,7 +122,6 @@ fn apply_text_anim_preset(
 
     match preset {
         CharAnimPreset::ScaleIn => {
-            // 0→(1+overshoot) at 70%, then settle to 1.0
             let scale = if overshoot > 0.001 {
                 if t < 0.7 {
                     let p = t / 0.7;
@@ -200,7 +181,7 @@ fn apply_text_anim_preset(
             );
         }
         CharAnimPreset::Bounce => {
-            let peak = 1.0 + overshoot.max(0.3); // bounce always overshoots, min 0.3
+            let peak = 1.0 + overshoot.max(0.3);
             let scale = if t < 0.5 {
                 t * 2.0 * peak
             } else {
@@ -240,8 +221,6 @@ fn apply_text_anim_preset(
             );
         }
         CharAnimPreset::SlideUp => {
-            // Despite the name, the travel axis is `direction`'s to choose —
-            // `up` (the default) is what the preset has always done.
             let travel = (1.0 - t) * font_size * 0.8 * cfg.distance;
             let (dx, dy) = cfg.direction.offset(travel);
             let mut p = paint.clone();
@@ -258,9 +237,6 @@ fn apply_text_anim_preset(
             );
         }
         CharAnimPreset::BlurIn => {
-            // One continuous progress value `t` drives all three
-            // components at once (blur settle, upward drift, opacity
-            // ramp) rather than sequencing them as separate effects.
             let tt = t.clamp(0.0, 1.0);
             let travel = (1.0 - tt) * font_size * 0.12 * cfg.distance;
             let (dx, dy) = cfg.direction.offset(travel);
@@ -291,7 +267,6 @@ fn apply_text_anim_preset(
     }
 }
 
-/// Render text with per-character or per-word animation.
 fn render_char_animation(
     canvas: &Canvas,
     _content: &str,
@@ -324,12 +299,10 @@ fn render_char_animation(
         let line_y = line_idx as f32 * line_height_val + baseline_offset;
 
         if is_word_mode {
-            // Per-word animation: split line into words and spaces
             let mut cursor_x = line_x;
             let mut chars = line.chars().peekable();
 
             while chars.peek().is_some() {
-                // Collect leading spaces
                 let mut spaces = String::new();
                 while let Some(&c) = chars.peek() {
                     if c.is_whitespace() {
@@ -342,14 +315,12 @@ fn render_char_animation(
                 if !spaces.is_empty() {
                     let space_w =
                         measure_text_with_fallback(&spaces, font, emoji_font, letter_spacing);
-                    // Draw spaces without animation
                     draw_text_with_fallback(
                         canvas, &spaces, font, emoji_font, 0.0, cursor_x, line_y, paint,
                     );
                     cursor_x += space_w;
                 }
 
-                // Collect the word
                 let mut word = String::new();
                 while let Some(&c) = chars.peek() {
                     if c.is_whitespace() {
@@ -365,7 +336,6 @@ fn render_char_animation(
                 let word_width =
                     measure_text_with_fallback(&word, font, emoji_font, letter_spacing);
 
-                // Calculate animation progress for this word
                 let t = unit_progress(char_anim, global_unit_idx, time);
 
                 canvas.save();
@@ -391,7 +361,6 @@ fn render_char_animation(
                 global_unit_idx += 1;
             }
         } else {
-            // Per-character animation (original behavior)
             let mut cursor_x = line_x;
             for ch in line.chars() {
                 let ch_str = ch.to_string();
@@ -410,10 +379,6 @@ fn render_char_animation(
                     cursor_x,
                     line_y,
                     ch_width,
-                    // Single characters carry no internal tracking, so this is
-                    // 0 by construction — passed explicitly rather than left
-                    // to a default, since the word path above needs the real
-                    // value and the two must not drift apart.
                     0.0,
                     char_anim,
                     t,
@@ -431,18 +396,10 @@ fn render_char_animation(
 }
 
 impl Text {
-    /// Every label this text can display, in order — `content` followed by
-    /// each state's.
-    ///
-    /// Used for measurement: a box sized for the first label alone would be
-    /// overrun the moment the text swapped to a longer one, and the geometry
-    /// validator would have signed off on it.
     pub fn all_labels(&self) -> impl Iterator<Item = &str> {
         std::iter::once(self.content.as_str()).chain(self.states.iter().map(|s| s.content.as_str()))
     }
 
-    /// The label showing at `time`: the last state whose `at` has passed, or
-    /// `content` before any of them.
     fn label_at(&self, time: f64) -> &str {
         self.states
             .iter()
@@ -451,12 +408,6 @@ impl Text {
             .unwrap_or(&self.content)
     }
 
-    /// The swap in progress at `time`, if any.
-    ///
-    /// `None` when the text declares no `swap` config, even if it declares
-    /// `states`: the labels then simply cut over at each `at`, which is a
-    /// legitimate (if abrupt) choice and the one the field's absence asks
-    /// for.
     fn active_swap(&self, time: f64) -> Option<ActiveSwap> {
         let cfg = self.swap.as_ref()?;
         if cfg.duration <= 0.0 {
@@ -490,24 +441,6 @@ impl Text {
         props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) -> Result<()> {
-        // `font-size` itself, plus `letter-spacing`/`line-height`'s `em`/`%`
-        // (relative to this element's *own*, just-resolved font-size) are
-        // now all resolved together against a real `LengthContext` (real
-        // viewport dims from `ctx`) via `typography_px_ctx`, which re-derives
-        // the right base between the two steps (lot B, wave S — this used to
-        // stop at the context-free `font_size_px_or`, so `rem`/`vw`/`vh`
-        // font-size silently fell back to 0px with only a loud warning).
-        //
-        // `em`/`%` *on `font-size` itself* are the one case this still
-        // doesn't get right: per CSS they're relative to the *parent's*
-        // actual computed font-size, but `cascade.rs` inherits `font-size`
-        // down the tree as a raw, unresolved `Length`, not a resolved px
-        // value (see the module note on `CssStyle::font_size_px_ctx`) — no
-        // caller here can supply the real cascaded value, so `base_ctx`
-        // below uses the CSS root default (16px) as the best available
-        // stand-in. `rem` (always relative to a fixed root, not a per-
-        // ancestor chain) and `vw`/`vh` (relative to the real viewport,
-        // available here via `ctx`) do not have this problem.
         let base_ctx = crate::intrinsic::font_size_ctx(
             ctx.video_width as f32,
             ctx.video_height as f32,
@@ -515,8 +448,6 @@ impl Text {
         );
         let (mut font_size, mut letter_spacing, mut line_height_val) =
             self.style.typography_px_ctx(&base_ctx, 48.0);
-        // Animated color (timeline style-state transitions) overrides the
-        // static style color.
         let color = props
             .color
             .as_deref()
@@ -555,12 +486,6 @@ impl Text {
 
         let typeface = typeface_with_fallback(font_family, skia_font_style)?;
 
-        // The box's own resolved width — computed here (ahead of the
-        // `white-space: nowrap` wrap decision below) because `text-autofit`
-        // needs it as its width-fit target *regardless* of nowrap: a nowrap
-        // line still shrinks to fit this box once `text-autofit` is on (see
-        // `CssStyle::text_autofit`'s doc comment), it just never breaks
-        // across lines while doing it.
         let nowrap = matches!(
             self.style.white_space,
             Some(CssWhiteSpace::Nowrap | CssWhiteSpace::Pre)
@@ -574,13 +499,6 @@ impl Text {
             self.max_width
         };
 
-        // `text-autofit`: resolve the *actual* font-size/letter-spacing/
-        // line-height used for the rest of this function — the identical
-        // computation `TextIntrinsic::measure` runs for this same node (see
-        // `resolve_text_autofit`'s doc comment for the parity argument).
-        // Must happen before `type_ctx`/the final `Font` are built below so
-        // both reflect the resolved (possibly shrunk) size, not the
-        // requested one.
         if matches!(self.style.text_autofit, Some(true)) {
             let declared_height = content_height.filter(|h| *h > 0.0 && h.is_finite());
             let (fs, ls, lh) = crate::intrinsic::resolve_text_autofit(
@@ -598,12 +516,6 @@ impl Text {
             line_height_val = lh;
         }
 
-        // This element's *own* resolved font-size as the `em`/`%` base —
-        // needed below for `text-shadow` (its blur/offset are relative to
-        // the shadow owner's own font-size, same rule as letter-spacing/
-        // line-height, not the parent-proxy `base_ctx` above). Built from
-        // the post-autofit `font_size` so a shrunk headline's shadow shrinks
-        // with it instead of using the pre-shrink em/% base.
         let type_ctx = rustmotion_core::css::units::LengthContext {
             font_size,
             ..base_ctx
@@ -614,17 +526,8 @@ impl Text {
         let mut paint = paint_from_hex(color);
         paint.set_alpha_f(1.0);
 
-        // Use the box width as the wrapping constraint (computed above, as
-        // `box_width`, ahead of the autofit step). M1: `white-space:
-        // nowrap|pre` disables wrapping entirely — the line may then exceed
-        // `layout_width`. That's the point: it makes the property mean
-        // something, and it's exactly the condition the geometry
-        // validator's `unwrappable_text_overflow` check (which re-measures
-        // via `TextIntrinsic::from_text`, now wrap-aware too) assumes the
-        // renderer can produce.
         let wrap_width = if nowrap { None } else { box_width };
 
-        // Apply typewriter effect: limit visible characters based on animation progress
         let label = self.label_at(time);
         let content = if props.visible_chars_progress >= 0.0 {
             let chars: Vec<char> = label.chars().collect();
@@ -633,20 +536,11 @@ impl Text {
             if visible == 0 && self.caret.is_none() {
                 return Ok(());
             }
-            // With a caret, an empty reveal still has something to paint: the
-            // caret itself, sitting where the first character is about to
-            // appear. Bailing out here would make it pop into existence
-            // alongside that character instead of waiting for it.
             chars[..visible].iter().collect::<String>()
         } else {
             label.to_string()
         };
 
-        // Tracking-aware wrap (issue #125 §1): the fit test now measures
-        // with this element's real `letter_spacing`, matching the
-        // measurements below (`align_width`, per-line `advance_width`) that
-        // already used it — the box this wraps for and the pixels painted
-        // into it now agree.
         let lines =
             wrap_text_with_tracking(&content, &font, &emoji_font, wrap_width, letter_spacing);
         let (_, metrics) = font.metrics();
@@ -654,9 +548,6 @@ impl Text {
         let descent = metrics.descent;
         let baseline_offset = (line_height_val + ascent - descent) / 2.0;
 
-        // Prepare optional shadow and stroke paints. The component-level
-        // `text-shadow` field wins; otherwise the CSS `style.text-shadow`
-        // list is bridged (it used to be parsed and silently dropped).
         let shadows: Vec<rustmotion_core::schema::TextShadow> = if let Some(s) = &self.text_shadow {
             vec![s.clone()]
         } else if let Some(list) = &self.style.text_shadow {
@@ -689,7 +580,6 @@ impl Text {
             p
         });
 
-        // Compute alignment width
         let align_width = if layout_width.is_finite() && layout_width > 0.0 {
             layout_width
         } else {
@@ -701,10 +591,6 @@ impl Text {
             max_w
         };
 
-        // Per-character animation mode (via style.animation char_* presets).
-        // All seven presets — `char_blur_in` included since it was routed
-        // through `extract_effects` like its siblings — arrive here already
-        // resolved, with container-level stagger folded into `delay`.
         if let Some(ref resolved) = props.char_animation {
             render_char_animation(
                 canvas,
@@ -724,10 +610,6 @@ impl Text {
             return Ok(());
         }
 
-        // A state swap has two labels on screen at once, each with its own
-        // travel, blur and opacity. Everything above — font, alignment,
-        // metrics, decorations — is shared between them; only the label text
-        // and the motion differ.
         if let Some(swap) = self.active_swap(time) {
             for (label, offset_y, blur, alpha) in swap.labels() {
                 let label_lines =
@@ -781,8 +663,6 @@ impl Text {
             0.0,
         );
 
-        // The caret rides the reveal head: the end of the last line that has
-        // been revealed so far, which is where the next character will land.
         if let Some(caret) = &self.caret {
             let done = props.visible_chars_progress < 0.0 || props.visible_chars_progress >= 1.0;
             if !(done && caret.hide_when_done) {
@@ -812,12 +692,6 @@ impl Text {
     }
 }
 
-/// Draw already-wrapped `lines` with their background, shadows, stroke and
-/// fill, shifted down by `offset_y`.
-///
-/// Shared by the plain draw and by each half of a state swap, so a swapping
-/// label keeps the decorations (`text-background`, `text-shadow`, `stroke`)
-/// the same text has when it is not swapping.
 #[allow(clippy::too_many_arguments)]
 fn draw_text_lines(
     canvas: &Canvas,
@@ -849,7 +723,6 @@ fn draw_text_lines(
         };
         let y = i as f32 * line_height_val + baseline_offset + offset_y;
 
-        // Draw background highlight behind text
         if let Some(bg) = text_background {
             let bg_paint = paint_from_hex(&bg.color);
             let (_, font_rect) = font.measure_str(line, None);
@@ -868,7 +741,6 @@ fn draw_text_lines(
             }
         }
 
-        // Draw shadows — reverse order so the first CSS shadow ends on top.
         for (sp, ox, oy) in shadow_paints.iter().rev() {
             draw_text_with_fallback(
                 canvas,
@@ -889,8 +761,6 @@ fn draw_text_lines(
     }
 }
 
-/// A state swap in progress: the label leaving, the label arriving, and how
-/// far through the crossing we are.
 struct ActiveSwap {
     from: String,
     to: String,
@@ -900,11 +770,6 @@ struct ActiveSwap {
 }
 
 impl ActiveSwap {
-    /// `(label, offset_y, blur_sigma, alpha)` for each of the two labels.
-    ///
-    /// The outgoing label leaves upwards and the incoming one arrives from
-    /// below, so the pair reads as one value moving up a slot rather than as
-    /// two labels passing each other.
     fn labels(&self) -> [(String, f32, f32, f32); 2] {
         let p = self.progress.clamp(0.0, 1.0);
         [
@@ -924,7 +789,6 @@ impl ActiveSwap {
     }
 }
 
-/// Paint a caret whose left edge sits at `x`, aligned to the text `baseline`.
 fn draw_caret(
     canvas: &Canvas,
     cfg: &CaretConfig,
@@ -934,9 +798,6 @@ fn draw_caret(
     text_paint: &Paint,
     time: f64,
 ) {
-    // A blink is a square wave over one full period, so `blink: 1.0` reads as
-    // "on for half a second, off for half a second" rather than as a rate
-    // nobody can predict from the number.
     if cfg.blink > 0.0 {
         let phase = (time / cfg.blink as f64).rem_euclid(1.0);
         if phase >= 0.5 {
@@ -950,10 +811,7 @@ fn draw_caret(
     let size = font.size();
 
     let (width, gap) = match cfg.shape {
-        // Proportional to the type size: a 3px rule that reads as a caret at
-        // 24px is a hairline at 120px.
         CaretShape::Line => ((size * 0.07).max(1.5), size * 0.05),
-        // Roughly one character cell, the terminal look.
         CaretShape::Block => (size * 0.55, size * 0.04),
     };
 
@@ -963,8 +821,6 @@ fn draw_caret(
     };
     paint.set_style(PaintStyle::Fill);
     paint.set_anti_alias(true);
-    // A caret is a solid mark, not a ghost: it must not inherit a stroke or
-    // image filter the text set up for itself.
     paint.set_image_filter(None);
 
     canvas.draw_rect(
@@ -981,11 +837,6 @@ impl Painter for Text {
         props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        // `text-autofit`'s height-fit target: the box's own content-box
-        // height, exactly as taffy resolved it for this frame's layout —
-        // `None` when it isn't a positive, finite number (an intrinsically-
-        // sized box that grew to fit its content, i.e. nothing to shrink
-        // for on this axis; see `CssStyle::text_autofit`'s doc comment).
         let (_, _, _, content_height) = layout.content_box();
         let content_height =
             (content_height > 0.0 && content_height.is_finite()).then_some(content_height);
@@ -1039,8 +890,6 @@ mod tests {
         }
     }
 
-    /// Reads back the full alpha channel of the surface as a `width × height`
-    /// row-major byte grid.
     fn alpha_grid(surface: &mut skia_safe::Surface, width: i32, height: i32) -> Vec<u8> {
         let snapshot = surface.image_snapshot();
         let info = skia_safe::ImageInfo::new(
@@ -1063,9 +912,6 @@ mod tests {
             .collect()
     }
 
-    /// Does any pixel in `[x0, x1) × [y0, y1)` have non-zero alpha? Scanning
-    /// a region rather than a single exact pixel avoids flaking on the gap
-    /// between two glyphs or on a space character.
     fn has_ink_in(grid: &[u8], surface_width: i32, x0: i32, x1: i32, y0: i32, y1: i32) -> bool {
         for y in y0..y1 {
             for x in x0..x1 {
@@ -1079,9 +925,6 @@ mod tests {
 
     #[test]
     fn nowrap_paints_a_single_line_past_the_layout_width() {
-        // M1 render-level proof: a `white-space: nowrap` line stays on one
-        // line and its glyphs visibly extend past `layout_width` — the box
-        // it was allocated.
         let text = make_text(
             "the quick brown fox jumps over the lazy dog",
             Some(CssWhiteSpace::Nowrap),
@@ -1096,16 +939,11 @@ mod tests {
             .expect("paint succeeds");
         let grid = alpha_grid(&mut surface, W, H);
 
-        // Far past the 80px box, on the first line's height band: nowrap
-        // must have painted ink there (the line didn't break at 80px).
         assert!(
             has_ink_in(&grid, W, 300, W, 0, 45),
             "nowrap text must paint past its 80px box on line 1 (scanned x∈[300,600), y∈[0,45))"
         );
 
-        // Nothing should be on a *second* line — nowrap never word-wraps
-        // (only literal newlines would start a new line, and there are
-        // none here), so all ink stays within the first line's height band.
         assert!(
             !has_ink_in(&grid, W, 0, W, 55, H),
             "nowrap text must stay on a single line; found ink on what would be line 2"
@@ -1114,8 +952,6 @@ mod tests {
 
     #[test]
     fn normal_white_space_wraps_within_the_layout_width() {
-        // Contrast case: default wrapping keeps ink within the box on the
-        // first line, and instead spills onto additional lines below.
         let text = make_text("the quick brown fox jumps over the lazy dog", None);
         const W: i32 = 600;
         const H: i32 = 200;
@@ -1137,15 +973,8 @@ mod tests {
         );
     }
 
-    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
-
     #[test]
     fn rem_font_size_paints_visible_ink() {
-        // Reproduction: `font-size: "2rem"` used to resolve to 0px (the
-        // context-free `font_size_px_or` cannot resolve `rem`), so
-        // `TextIntrinsic` measured a 0-height box and `paint_pass`'s
-        // `height <= 0.0` guard skipped painting this node entirely —
-        // `validate` reported success with only a warning.
         let text = Text {
             content: "HELLO".into(),
             max_width: None,
@@ -1174,8 +1003,6 @@ mod tests {
             .expect("paint succeeds");
         let grid = alpha_grid(&mut surface, W, H);
 
-        // 2rem against the 16px CSS root default = 32px — comfortably tall
-        // enough to show up in the first 60 rows.
         assert!(
             has_ink_in(&grid, W, 0, W, 0, 60),
             "font-size: 2rem must paint visible ink (32px glyphs), got none"
@@ -1184,9 +1011,6 @@ mod tests {
 
     #[test]
     fn vh_font_size_paints_visible_ink_scaled_to_the_real_viewport() {
-        // `vh` needs the real per-frame viewport (`ctx.video_height`), not
-        // just a fixed root size — a different resolution path from `rem`.
-        // `test_ctx()` sets `video_height: 200`, so `20vh` = 40px.
         let text = Text {
             content: "HI".into(),
             max_width: None,
@@ -1221,13 +1045,6 @@ mod tests {
         );
     }
 
-    // ─── char_blur_in ───────────────────────────────────────────────────
-
-    /// Fraction of "inked" pixels (alpha > 0) in the region that are
-    /// partially transparent (0 < alpha < 250) rather than solid. A sharp
-    /// glyph is mostly solid fill with a thin antialiased edge, so this
-    /// fraction is low. A heavily blurred glyph is a soft gradient
-    /// wherever it has any ink at all, so this fraction is high.
     fn soft_pixel_fraction(
         grid: &[u8],
         surface_width: i32,
@@ -1255,10 +1072,6 @@ mod tests {
         soft as f32 / inked as f32
     }
 
-    /// Resolve `style.animation` the way the engine does before it paints, so
-    /// a char-animation test exercises the real wiring
-    /// (`extract_effects` → `props.char_animation`) instead of a
-    /// painter-private lookup.
     fn props_for(text: &Text) -> AnimatedProperties {
         AnimatedProperties {
             char_animation: rustmotion_core::engine::animator::extract_effects(
@@ -1269,9 +1082,6 @@ mod tests {
         }
     }
 
-    /// Build the same `Font` the renderer would build for `family`/`px`, so
-    /// tests can measure exact word boundaries instead of guessing pixel
-    /// coordinates.
     fn inter_font(px: f32) -> Font {
         let style = FontStyle::new(
             skia_safe::font_style::Weight::NORMAL,
@@ -1284,10 +1094,6 @@ mod tests {
 
     #[test]
     fn char_blur_in_word_is_blurred_mid_reveal_and_sharp_when_settled() {
-        // Render-level proof that char_blur_in actually blurs: a single
-        // word must read as measurably softer mid-reveal than once
-        // settled. Also exercises the DEFAULT_CHAR_BLUR_SIGMA fallback
-        // (`blur: None`).
         let mut text = make_text("BLUR", None);
         text.style.font_size = Some(Length::Px(100.0));
         text.style.white_space = Some(CssWhiteSpace::Nowrap);
@@ -1316,8 +1122,8 @@ mod tests {
             alpha_grid(&mut surface, W, H)
         };
 
-        let early = render_at(0.15); // raw progress 0.15/0.5 = 0.3 into the reveal
-        let settled = render_at(1.0); // long past duration: sigma → 0, alpha → 1
+        let early = render_at(0.15);
+        let settled = render_at(1.0);
 
         assert!(
             has_ink_in(&early, W, 0, W, 0, H),
@@ -1341,23 +1147,8 @@ mod tests {
 
     #[test]
     fn char_blur_in_whitespace_gap_stays_empty_while_words_animate() {
-        // The word-mode char path draws inter-word whitespace unanimated
-        // at full opacity (see render_char_animation) — harmless for the
-        // six existing opacity-only presets since a space glyph has no
-        // ink. Pin down that this holds for char_blur_in too: each word's
-        // blur filter is scoped to that word's own draw call, so it must
-        // never smear ink into the gap between words.
-        //
-        // Note this is *not* the same as "a blurred word's own halo never
-        // reaches near the gap" — a Gaussian blur legitimately spreads a
-        // word's own ink a few sigma past its sharp glyph edge, which is
-        // correct behaviour, not smearing into whitespace. So this checks
-        // the gap's true center (rendering evidence: crates/.../issue-118
-        // render proof measured the same distinction against real render
-        // output — a word's halo fades to background well within a third
-        // of a multi-space gap).
         const FONT_PX: f32 = 90.0;
-        let mut text = make_text("FIRST               SECOND", None); // 15 spaces
+        let mut text = make_text("FIRST               SECOND", None);
         text.style.font_size = Some(Length::Px(FONT_PX));
         text.style.white_space = Some(CssWhiteSpace::Nowrap);
         text.style.animation = vec![AnimationEffect::CharBlurIn(CharAnimationTiming {
@@ -1404,9 +1195,6 @@ mod tests {
 
     #[test]
     fn char_blur_in_honors_word_delay_and_stagger() {
-        // With a stagger larger than the per-word duration, word 2 must
-        // not have started at all while word 1 is mid-reveal, and nothing
-        // should paint before `delay` has elapsed either.
         const FONT_PX: f32 = 90.0;
         let mut text = make_text("ONE TWO", None);
         text.style.font_size = Some(Length::Px(FONT_PX));
@@ -1428,7 +1216,6 @@ mod tests {
         let font = inter_font(FONT_PX);
         let word1_end = measure_text_with_fallback("ONE", &font, &None, 0.0) as i32;
 
-        // Before `delay`, nothing should paint at all.
         let mut before = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         {
             let canvas = before.canvas();
@@ -1441,8 +1228,6 @@ mod tests {
             "nothing should paint before `delay` has elapsed"
         );
 
-        // t=0.65s: word 1's local progress is (0.65-0.5)/0.3 = 0.5 (mid
-        // reveal), word 2 only starts at delay+stagger=1.1s.
         let mut mid = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         {
             let canvas = mid.canvas();
@@ -1454,17 +1239,11 @@ mod tests {
             has_ink_in(&mid_grid, W, 0, word1_end, 0, H),
             "word 1 should show ink by t=0.65 (mid-reveal)"
         );
-        // Leave enough clearance past word 1's sharp-edge measurement for
-        // its *own* Gaussian halo (a real, expected effect of blurring
-        // that word — see the analogous note in the whitespace-gap test
-        // above), so this only catches an actual word-2 leak.
         assert!(
             !has_ink_in(&mid_grid, W, word1_end + 70, W, 0, H),
             "word 2 (starts at delay+stagger=1.1s) must still be fully invisible at t=0.65"
         );
     }
-
-    // ─── text-autofit ───────────────────────────────────────────────────
 
     fn autofit_text(content: &str, font_size: f32, white_space: Option<CssWhiteSpace>) -> Text {
         let mut t = make_text(content, white_space);
@@ -1473,8 +1252,6 @@ mod tests {
         t
     }
 
-    /// Rightmost painted column across the whole surface — the horizontal
-    /// extent of whatever ink was actually drawn.
     fn max_ink_x(grid: &[u8], surface_width: i32, height: i32) -> Option<i32> {
         let mut max_x: Option<i32> = None;
         for y in 0..height {
@@ -1488,8 +1265,6 @@ mod tests {
         max_x
     }
 
-    /// Bottommost painted row across the whole surface — the vertical
-    /// extent of whatever ink was actually drawn.
     fn max_ink_y(grid: &[u8], surface_width: i32, height: i32) -> Option<i32> {
         for y in (0..height).rev() {
             for x in 0..surface_width {
@@ -1503,24 +1278,11 @@ mod tests {
 
     #[test]
     fn measure_and_paint_agree_on_a_shrunk_nowrap_line() {
-        // Trap #1 — the one the brief calls the only one that can ruin this
-        // work: `TextIntrinsic::measure` and `Text::paint` must resolve to
-        // the *same* font size for the same node, or the box the layout
-        // engine reserves stops matching what actually gets painted. Both
-        // delegate to `resolve_text_autofit` with identical inputs (see its
-        // doc comment); this proves that agreement operationally, on the
-        // real render path, not by re-deriving the expected size by hand
-        // (which would only test this test's own arithmetic).
         let text = autofit_text(
             "the quick brown fox jumps over the lazy dog",
             90.0,
             Some(CssWhiteSpace::Nowrap),
         );
-        // 300px comfortably clears this sentence's floor-fit width (~252px
-        // — this string never reads shorter than the calibrated legibility
-        // floor allows), so the box is reachable by shrinking alone,
-        // distinct from the separate floor-behaviour tests in
-        // `intrinsic.rs`.
         const BOX_W: f32 = 300.0;
         const BOX_H: f32 = 60.0;
 
@@ -1531,8 +1293,6 @@ mod tests {
                 AvailableSpace::Definite(BOX_H),
             ),
         );
-        // Sanity: at 90px this line would never fit a 300px box unshrunk —
-        // proves the shrink path is actually exercised here.
         assert!(
             measured_w <= BOX_W + 0.5,
             "TextIntrinsic itself must report a fit once autofit is on, got {measured_w}"
@@ -1567,9 +1327,6 @@ mod tests {
 
     #[test]
     fn measure_and_paint_agree_on_a_shrunk_wrapped_paragraph_height() {
-        // Same agreement proof as above, on the height axis with wrapping
-        // on: a paragraph whose box has an explicit height too short for
-        // its natural (unshrunk) line count.
         let text = autofit_text(
             "the quick brown fox jumps over the lazy dog and then keeps going for quite a while longer",
             60.0,
@@ -1612,9 +1369,6 @@ mod tests {
 
     #[test]
     fn autofit_size_is_stable_across_frames_for_fixed_content() {
-        // Trap #2: nothing in the resolution may depend on `ctx.time` for
-        // fixed content — rendering it at two different times, same box,
-        // must be byte-identical.
         let text = autofit_text(
             "the quick brown fox jumps over the lazy dog",
             90.0,
@@ -1647,14 +1401,6 @@ mod tests {
 
     #[test]
     fn autofit_size_does_not_drift_during_a_typewriter_reveal() {
-        // Trap #2's named example: a typewriter reveal
-        // (`visible_chars_progress`) must not make the resolved font size
-        // drift as more characters become visible — `resolve_text_autofit`
-        // is always fed the full, untruncated content, never the
-        // reveal-in-progress view (see its doc comment). Proof: the line's
-        // vertical footprint (driven by line-height, hence font size) must
-        // be identical at 30% and 100% reveal, even though the horizontal
-        // extent legitimately differs (fewer glyphs are visible yet).
         let text = autofit_text(
             "the quick brown fox jumps over the lazy dog",
             90.0,
@@ -1690,9 +1436,6 @@ mod tests {
              as the typewriter reveal progresses: early={early_bottom}, full={full_bottom}"
         );
 
-        // And the visible width at 30% must be meaningfully narrower than
-        // the full line — otherwise this test would not actually be
-        // exercising a partial reveal at all.
         let early_right = max_ink_x(&early, W, H).expect("some ink at 30% reveal");
         let full_right = max_ink_x(&full, W, H).expect("some ink at full reveal");
         assert!(
@@ -1704,11 +1447,6 @@ mod tests {
 
     #[test]
     fn without_text_autofit_nowrap_still_bleeds_past_the_box_exactly_as_before() {
-        // Backward compatibility: a scenario that does not declare
-        // `text-autofit` must render exactly as it did before this feature
-        // existed, even now that `content_height` is threaded through —
-        // the render-level twin of
-        // `intrinsic::tests::text_intrinsic_ignores_autofit_target_when_the_flag_is_off`.
         let text = make_text(
             "the quick brown fox jumps over the lazy dog",
             Some(CssWhiteSpace::Nowrap),
@@ -1727,8 +1465,6 @@ mod tests {
             "without text-autofit, nowrap must still bleed past its box exactly as before"
         );
     }
-
-    // ─── Text state swap ──────────────────────────────────────────────────────
 
     fn swapping_text(swap: Option<TextSwapConfig>) -> Text {
         let mut text = make_text("Saving draft", Some(CssWhiteSpace::Nowrap));
@@ -1761,8 +1497,6 @@ mod tests {
 
     #[test]
     fn states_cut_over_at_their_own_time_without_a_swap_config() {
-        // `states` on its own is a hard cut: abrupt, but it is exactly what
-        // omitting `swap` asks for, and it must not silently animate.
         let text = swapping_text(None);
         let before = render_plain(&text, 0.5);
         let after = render_plain(&text, 1.5);
@@ -1773,8 +1507,6 @@ mod tests {
             "\"Saving draft\" should be visibly wider than \"Saved\" — the label must actually \
              have changed at t=1.0"
         );
-        // A cut has exactly one label on screen at each instant, so the frame
-        // right after the boundary equals the settled one.
         assert_eq!(
             render_plain(&text, 1.01),
             render_plain(&text, 1.5),
@@ -1786,9 +1518,6 @@ mod tests {
     fn a_swap_puts_both_labels_on_screen_at_once() {
         let text = swapping_text(Some(TextSwapConfig::default()));
 
-        // Just before, only the outgoing label; mid-window, both; well after,
-        // only the incoming one. "Both" shows up as ink covering more rows
-        // than either label alone occupies, since they are offset vertically.
         let rows_with_ink = |time: f64| -> usize {
             let grid = render_plain(&text, time);
             (0..CARET_H)
@@ -1809,9 +1538,6 @@ mod tests {
     fn a_finished_swap_settles_on_the_incoming_label_alone() {
         let swapped = swapping_text(Some(TextSwapConfig::default()));
         let cut = swapping_text(None);
-        // Past `at + duration` the animated version must be indistinguishable
-        // from a plain cut — no residual offset, blur or ghost of the old
-        // label parked behind the new one.
         assert_eq!(
             render_plain(&swapped, 2.0),
             render_plain(&cut, 2.0),
@@ -1821,9 +1547,6 @@ mod tests {
 
     #[test]
     fn the_box_is_measured_for_the_widest_label_not_the_first() {
-        // A box sized for "Saved" would be overrun the instant the text
-        // swapped back to "Saving draft" — and the geometry validator, which
-        // measures through this same intrinsic, would have signed off on it.
         let mut short_first = make_text("Saved", Some(CssWhiteSpace::Nowrap));
         short_first.states = vec![TextState {
             at: 1.0,
@@ -1849,8 +1572,6 @@ mod tests {
         );
     }
 
-    // ─── Typewriter caret ─────────────────────────────────────────────────────
-
     const CARET_W: i32 = 900;
     const CARET_H: i32 = 160;
 
@@ -1861,7 +1582,6 @@ mod tests {
         text
     }
 
-    /// Render a `visible_chars_progress` reveal at `progress`, at `time`.
     fn render_reveal(text: &Text, progress: f32, time: f64) -> Vec<u8> {
         let props = AnimatedProperties {
             visible_chars_progress: progress,
@@ -1879,17 +1599,12 @@ mod tests {
 
     #[test]
     fn the_caret_follows_the_reveal_head_instead_of_standing_still() {
-        // The whole reason this is a field on `text` rather than a separate
-        // `cursor` component placed next to it: a hand-placed caret stays
-        // put while the text grows out from under it.
         let text = typewriter_text(Some(CaretConfig {
             blink: 0.0,
             ..Default::default()
         }));
         let plain = typewriter_text(None);
 
-        // Rightmost ink, with and without the caret: the difference is the
-        // caret's own position.
         let caret_x = |progress: f32| -> i32 {
             let with = render_reveal(&text, progress, 0.0);
             let without = render_reveal(&plain, progress, 0.0);
@@ -1922,9 +1637,6 @@ mod tests {
         let right_edge = |grid: &[u8]| max_ink_x(grid, CARET_W, CARET_H).unwrap_or(0);
         let baseline = right_edge(&render_reveal(&plain, 0.5, 0.0));
 
-        // First half of the period: caret visible, so ink extends past the
-        // text. Second half: it must be gone, i.e. back to the text's own
-        // right edge.
         let on = right_edge(&render_reveal(&text, 0.5, 0.1));
         let off = right_edge(&render_reveal(&text, 0.5, 0.6));
         assert!(on > baseline, "caret should be visible at phase 0.1");
@@ -1965,9 +1677,6 @@ mod tests {
 
     #[test]
     fn the_caret_is_there_before_the_first_character_is() {
-        // At 0% reveal there is no text yet, but a typewriter that starts
-        // with a blank frame and pops both caret and first letter together
-        // reads as a glitch rather than as typing.
         let text = typewriter_text(Some(CaretConfig {
             blink: 0.0,
             ..Default::default()
@@ -1979,12 +1688,9 @@ mod tests {
         );
     }
 
-    // ─── Char-animation tuning (direction / distance / scale_from / ink_from) ──
-
     const TUNING_W: i32 = 520;
     const TUNING_H: i32 = 360;
 
-    /// A single 90px word carrying `timing` as a `char_slide_up` effect.
     fn tuned_slide_up(timing: CharAnimationTiming) -> Text {
         let mut text = make_text("GO", None);
         text.style.font_size = Some(Length::Px(90.0));
@@ -2011,7 +1717,6 @@ mod tests {
         alpha_grid(&mut surface, TUNING_W, TUNING_H)
     }
 
-    /// Topmost inked row, i.e. how high on the canvas the glyphs sit.
     fn min_ink_y(grid: &[u8], surface_width: i32, height: i32) -> Option<i32> {
         (0..height)
             .find(|&y| (0..surface_width).any(|x| grid[(y * surface_width + x) as usize] > 0))
@@ -2019,10 +1724,6 @@ mod tests {
 
     #[test]
     fn direction_down_starts_the_unit_above_its_line_instead_of_below() {
-        // `char_slide_up` used to hardcode a downward starting offset. With
-        // `direction: "down"` the same preset has to start *above* the line
-        // and fall — the "letters cascading from the top" look. Sampled
-        // mid-travel, where the two are furthest apart.
         let base = || CharAnimationTiming {
             duration: 1.0,
             stagger: 0.0,
@@ -2072,8 +1773,6 @@ mod tests {
             ..base()
         });
 
-        // Same instant, same preset: the only difference is how far each has
-        // left to travel, which shows up as how far below its line it sits.
         let close_top =
             min_ink_y(&render_alpha(&close, 0.5), TUNING_W, TUNING_H).expect("close word paints");
         let far_top =
@@ -2088,9 +1787,6 @@ mod tests {
 
     #[test]
     fn settled_units_land_in_the_same_place_whatever_the_direction_and_distance() {
-        // Whatever route it took, a unit's resting position is its laid-out
-        // one — otherwise the tuning knobs would silently move the finished
-        // frame, which is the frame that has to match the layout.
         let settled = |timing: CharAnimationTiming| {
             let grid = render_alpha(&tuned_slide_up(timing), 5.0);
             min_ink_y(&grid, TUNING_W, TUNING_H).expect("settled word paints")
@@ -2132,7 +1828,6 @@ mod tests {
             stagger: 0.0,
             granularity: TextAnimGranularity::Word,
             easing: EasingType::Linear,
-            // Isolate the scale: no travel to move the ink around.
             distance: Some(0.0),
             scale_from: Some(0.5),
             ..Default::default()
@@ -2164,8 +1859,6 @@ mod tests {
 
     #[test]
     fn ink_from_starts_at_the_given_colour_and_settles_to_the_texts_own() {
-        // `char_scale_in` is the one preset that leaves alpha alone, so the
-        // measurement reads the colour ramp instead of a fade.
         let mut text = make_text("INK", None);
         text.style.font_size = Some(Length::Px(90.0));
         text.style.white_space = Some(CssWhiteSpace::Nowrap);
@@ -2176,12 +1869,10 @@ mod tests {
             granularity: TextAnimGranularity::Word,
             easing: EasingType::Linear,
             overshoot: Some(0.0),
-            // Pure red start → the green channel is the whole measurement.
             ink_from: Some("#FF0000".into()),
             ..Default::default()
         })];
 
-        // Mean green over inked pixels: 0 at pure red, 255 once white.
         let mean_green = |time: f64| -> f32 {
             let mut surface = skia_safe::surfaces::raster_n32_premul((TUNING_W, TUNING_H))
                 .expect("raster surface");
@@ -2212,12 +1903,6 @@ mod tests {
                 skia_safe::IPoint::new(0, 0),
                 skia_safe::image::CachingHint::Disallow,
             ));
-            // Weight by alpha rather than requiring `alpha == 255`: the fill
-            // colour is uniform across a unit regardless of AA coverage, so
-            // this reads the same value it would with an opaque-only filter
-            // — but it stays correct once `char_scale_in` has shrunk the
-            // glyph enough (early in its ramp) that no single pixel is fully
-            // covered.
             let (weighted, alpha_sum) =
                 (0..(TUNING_W * TUNING_H) as usize).fold((0u64, 0u64), |(s, a), i| {
                     let alpha = buf[i * 4 + 3] as u64;

@@ -1,11 +1,3 @@
-//! The confirmation mark: a checkmark drawing itself inside a pale halo,
-//! arriving with a small pop and a rotation it resolves as it lands.
-//!
-//! Assembling this out of a `shape` circle, an `svg` with `draw_in` and a
-//! `scale_in` is possible, and was the only way before this existed — but the
-//! three have to be kept in time with each other by hand, and the mark is the
-//! single most repeated beat in a product video. One component, one timeline.
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Path, PathBuilder};
@@ -92,18 +84,13 @@ rustmotion_core::impl_traits!(SuccessCheck {
     Styled => style,
 });
 
-/// Where the mark is in its arrival at a given instant.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct CheckPhase {
-    /// Eased 0..1 over the whole arrival — drives scale, rotation, opacity.
     pub arrival: f32,
-    /// Eased 0..1 over the stroke's own, later window.
     pub stroke: f32,
 }
 
 impl SuccessCheck {
-    /// The stroke starts once the halo has mostly landed: a mark that draws
-    /// itself while still flying in reads as two unrelated animations.
     const STROKE_START: f64 = 0.35;
 
     pub(crate) fn phase_at(&self, time: f64) -> CheckPhase {
@@ -115,9 +102,6 @@ impl SuccessCheck {
         }
         let raw = ((time - self.delay) / self.duration).clamp(0.0, 1.0);
         if raw <= 0.0 {
-            // `ease_out_back(0)` is 0 only up to float residue (~2e-16), and
-            // "has it started?" is a question this type should answer
-            // exactly rather than approximately.
             return CheckPhase {
                 arrival: 0.0,
                 stroke: 0.0,
@@ -130,7 +114,6 @@ impl SuccessCheck {
         }
     }
 
-    /// The checkmark itself, in units of `size`.
     pub(crate) fn check_path(size: f32) -> Path {
         let mut path = PathBuilder::new();
         path.move_to((0.28 * size, 0.52 * size));
@@ -155,9 +138,6 @@ impl Painter for SuccessCheck {
         let size = self.size;
         let centre = size / 2.0;
 
-        // Scale up from 72% and unwind the entrance rotation. `ease_out_back`
-        // already overshoots past 1, so the mark settles by springing back
-        // rather than by decelerating into place.
         let scale = 0.72 + 0.28 * phase.arrival;
         let angle = -18.0 * self.spin * (1.0 - phase.arrival);
 
@@ -167,7 +147,6 @@ impl Painter for SuccessCheck {
         canvas.rotate(angle, None);
         canvas.translate((-centre, -centre));
 
-        // Halo
         if self.ring > 0.0 {
             let hex = self.ring_color.as_deref().unwrap_or(&self.tint);
             let (r, g, b, _) = parse_hex_color(hex);
@@ -179,8 +158,6 @@ impl Painter for SuccessCheck {
             canvas.draw_circle((centre, centre), size * 0.5, &halo);
         }
 
-        // The mark, drawn on rather than faded in: a dash whose gap shrinks
-        // to nothing is what makes it read as being written.
         let path = Self::check_path(size);
         let mut stroke = paint_from_hex(&self.tint);
         stroke.set_style(PaintStyle::Stroke);
@@ -225,8 +202,6 @@ mod tests {
 
     #[test]
     fn the_stroke_starts_after_the_halo_has_landed() {
-        // A mark that writes itself while still flying in reads as two
-        // animations fighting rather than as one gesture.
         let c = check(serde_json::json!({ "duration": 1.0 }));
         let early = c.phase_at(0.2);
         assert!(
@@ -260,8 +235,6 @@ mod tests {
 
     #[test]
     fn the_mark_finishes_upright_whatever_the_spin() {
-        // `spin` scales the swing on the way in; it must never leave the
-        // finished mark tilted, or a still frame of the end state is wrong.
         for spin in [0.0, 1.0, 2.0, 5.0] {
             let c = check(serde_json::json!({ "spin": spin, "duration": 0.5 }));
             let settled = c.phase_at(2.0).arrival;

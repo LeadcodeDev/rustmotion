@@ -123,38 +123,34 @@ impl TuiProgress {
             let area = frame.area();
 
             let chunks = Layout::vertical([
-                Constraint::Length(1), // Output
-                Constraint::Length(1), // Config
-                Constraint::Length(1), // Status
-                Constraint::Length(1), // Spacer
-                Constraint::Length(1), // Progress bar
-                Constraint::Length(1), // Spacer
-                Constraint::Length(1), // Timing
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
             ])
             .split(area);
 
-            // Output line
             let output_line = Line::from(vec![
                 Span::styled("Output    ", Style::default().fg(Color::DarkGray)),
                 Span::raw(&output_path),
             ]);
             frame.render_widget(Paragraph::new(output_line), chunks[0]);
 
-            // Config line
             let config = Line::from(vec![
                 Span::styled("Config    ", Style::default().fg(Color::DarkGray)),
                 Span::raw(&config_line),
             ]);
             frame.render_widget(Paragraph::new(config), chunks[1]);
 
-            // Status line
             let status_line = Line::from(vec![
                 Span::styled("Status    ", Style::default().fg(Color::DarkGray)),
                 Span::styled(&status, Style::default().fg(Color::Green)),
             ]);
             frame.render_widget(Paragraph::new(status_line), chunks[2]);
 
-            // Progress bar: "72/810  8% ━━━━━━━━━━━━━━━━━━━━"
             let bar_width: usize = 20;
             let filled = (ratio * bar_width as f64).round() as usize;
             let unfilled = bar_width - filled;
@@ -168,7 +164,6 @@ impl TuiProgress {
             ]);
             frame.render_widget(Paragraph::new(progress_line), chunks[4]);
 
-            // Timing line
             let timing = Line::from(vec![Span::styled(
                 &timing_line,
                 Style::default().fg(Color::DarkGray),
@@ -185,8 +180,6 @@ impl Drop for TuiProgress {
         self.cleanup();
     }
 }
-
-// ── Watch mode TUI ──────────────────────────────────────────────────
 
 pub enum WatchPhase {
     InitialRender,
@@ -329,7 +322,6 @@ impl TuiWatch {
         let output_path = state.output_path.clone();
         let config_line = format!("{} @ {}fps · {}", state.resolution, state.fps, state.codec);
 
-        // Build all 5 lines (fixed height, always overwrite everything)
         let line0 = Line::from(vec![
             Span::styled("Watch     ", Style::default().fg(Color::DarkGray)),
             Span::raw(&input_path),
@@ -381,8 +373,6 @@ impl TuiWatch {
             Line::from("")
         };
 
-        // Render as a single Paragraph widget covering the entire viewport
-        // This ensures all lines are always overwritten (no stale content)
         let content = vec![line0, line1, line2, line3, line4, line5];
 
         self.terminal.draw(|frame| {

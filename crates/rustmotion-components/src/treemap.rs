@@ -113,10 +113,6 @@ impl Treemap {
         if !self.animated {
             return 1.0;
         }
-        // Ramp measured from `start_at`, not from scene time zero — matches
-        // `Counter::ramp_progress`. A treemap delayed with `start_at` used
-        // to read raw scene time, so it was already fully scaled in on the
-        // very first frame it became visible.
         let start = self.timing.start_at.unwrap_or(0.0);
         let elapsed = (time - start).max(0.0);
         let p = (elapsed / self.animation_duration).clamp(0.0, 1.0) as f32;
@@ -133,7 +129,6 @@ impl Treemap {
 
         let progress = self.progress_at(time);
 
-        // Sort data by value descending, keeping original indices
         let mut sorted: Vec<(f64, usize)> = self
             .data
             .iter()
@@ -153,7 +148,6 @@ impl Treemap {
         for (idx, rect) in &rects {
             let item = &self.data[*idx];
 
-            // Apply gap by insetting the rect
             let inset = self.gap / 2.0;
             let inset_rect = Rect::from_xywh(
                 rect.left + inset,
@@ -166,7 +160,6 @@ impl Treemap {
                 continue;
             }
 
-            // Animation: scale each rect from center
             let cx = inset_rect.left + inset_rect.width() / 2.0;
             let cy = inset_rect.top + inset_rect.height() / 2.0;
             let scaled_w = inset_rect.width() * progress;
@@ -174,7 +167,6 @@ impl Treemap {
             let scaled_rect =
                 Rect::from_xywh(cx - scaled_w / 2.0, cy - scaled_h / 2.0, scaled_w, scaled_h);
 
-            // Color
             let color_str = item
                 .color
                 .as_deref()
@@ -186,7 +178,6 @@ impl Treemap {
             let rrect = RRect::new_rect_xy(scaled_rect, self.border_radius, self.border_radius);
             canvas.draw_rrect(rrect, &paint);
 
-            // Labels
             if self.show_labels || self.show_values {
                 let mut text_parts: Vec<String> = vec![];
                 if self.show_labels {
@@ -203,13 +194,6 @@ impl Treemap {
                 }
 
                 let font_size = (scaled_rect.width() * 0.12).clamp(10.0, 24.0);
-                // `draw_text_with_fallback` builds a single-line `TextBlob`
-                // (renderer/text.rs) — joining label and value with "\n"
-                // never produced a line break, it fed the blob a literal
-                // control glyph. Each part now gets its own baseline, and
-                // the space each line needs (`20.0` per line, same floor
-                // the old single-line check used) is checked before
-                // drawing instead of after.
                 let line_height = font_size * 1.2;
                 if scaled_rect.width() < 30.0
                     || scaled_rect.height() < 20.0 * text_parts.len() as f32
@@ -304,20 +288,12 @@ mod tests {
         buf
     }
 
-    /// A pixel is "text ink" if it's opaque-ish and near-white — the fixed
-    /// `#FFFFFF` label/value color, distinct from the cell's own colored
-    /// (never white) `DEFAULT_PALETTE` background fill that would otherwise
-    /// dominate a naive alpha-only scan.
     fn is_text_ink(buf: &[u8], w: i32, x: i32, y: i32) -> bool {
         let idx = ((y * w + x) * 4) as usize;
         let (r, g, b, a) = (buf[idx], buf[idx + 1], buf[idx + 2], buf[idx + 3]);
         a > 40 && r > 200 && g > 200 && b > 200
     }
 
-    /// Contiguous vertical bands (start_y, end_y) of text ink, merging rows
-    /// separated by a 1px anti-aliasing gap but splitting on anything
-    /// wider — used to tell "two stacked text lines" apart from "one line
-    /// of text".
     fn row_bands(buf: &[u8], w: i32, h: i32) -> Vec<(i32, i32)> {
         let mut bands: Vec<(i32, i32)> = vec![];
         for y in 0..h {
@@ -347,11 +323,6 @@ mod tests {
 
     #[test]
     fn label_and_value_render_on_two_separate_centered_lines() {
-        // #8's exact repro: `text_parts.join("\n")` fed a single-line
-        // `TextBlob` a literal "\n" glyph — the label and value landed side
-        // by side on the same baseline instead of stacked, and the whole
-        // (wrongly wide) string was centered as one block, decentering the
-        // label itself.
         const W: i32 = 300;
         const H: i32 = 200;
         let mut treemap = base_treemap(vec![TreemapItem {

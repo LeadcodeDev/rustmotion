@@ -1,9 +1,3 @@
-//! The declared shape of a scenario or scene variable: [`VarDef`] and its
-//! [`VarKeyframe`] animation segments. See the [module doc](super) for the
-//! resolver that turns this into numbers and the
-//! [`Scope`](crate::expr::Scope) implementation that lets an expression
-//! read them.
-
 use std::collections::BTreeMap;
 
 use schemars::JsonSchema;
@@ -12,20 +6,6 @@ use serde::{Deserialize, Serialize};
 use crate::schema::animation::EasingType;
 use crate::schema::time::TimePoint;
 
-/// The `vars` map a scenario or a scene declares: variable name to
-/// definition. `BTreeMap` rather than a `HashMap` so serialization and the
-/// generated JSON schema are deterministic — the reason the rest of this
-/// crate's schema types reach for it over a `HashMap` whenever map order
-/// could otherwise vary between runs.
-///
-/// Not to be confused with `config`/`VariableDefinition` in
-/// [`crate::variables`]: that mechanism substitutes a whole JSON value
-/// (string, number, boolean, object or array) once, at load, from a
-/// `--var` override or a `for-each` binding. A [`VarDef`] is narrower
-/// (always a scalar `f64`) and wider (it can move on the timeline) — the
-/// two share the `$name` sigil deliberately, but answer different
-/// questions: "what value was this configured with" versus "what is this
-/// worth right now".
 pub type VarSet = BTreeMap<String, VarDef>;
 
 /// A single declared variable: the value it holds before any keyframe
@@ -51,11 +31,6 @@ pub struct VarDef {
 }
 
 impl VarDef {
-    /// True when this variable has no `animation` — a constant. Mirrors
-    /// [`crate::expr::Expr::is_static`]: a caller that gets `true` back may
-    /// substitute `default` once, at load, and never revisit this variable
-    /// for the rest of the render. See [`dynamic_names`] for the hook a
-    /// loader's static-folding pass needs to act on this.
     pub fn is_static(&self) -> bool {
         self.animation.is_empty()
     }
@@ -114,14 +89,6 @@ fn default_duration() -> TimePoint {
     TimePoint::Seconds(0.0)
 }
 
-/// Every name in `vars` whose [`VarDef::is_static`] is false — the set a
-/// loader's static-folding pass (`crates/rustmotion/src/loader.rs`'s
-/// `is_dynamic_var_name`) needs to treat as dynamic in addition to its own
-/// fixed list (`t`, `T`, `beat`, `duration`), so an expression reading an
-/// animated variable is kept for the per-frame tier instead of being
-/// folded to whatever value it happened to hold at load time. A variable
-/// with no `animation` is intentionally *not* included here — it is a
-/// constant and the loader is free to fold expressions that only read it.
 pub fn dynamic_names(vars: &VarSet) -> impl Iterator<Item = &str> {
     vars.iter()
         .filter(|(_, def)| !def.is_static())

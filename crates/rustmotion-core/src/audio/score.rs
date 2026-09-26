@@ -1,9 +1,3 @@
-//! [`Score`]: the declarative timeline — `voices` (see
-//! [`super::voices::Voice`]) plus a list of [`ScoreEvent`]s that trigger
-//! them, resolved against the scenario's own beat grid via
-//! [`crate::schema::time::TimePoint`]/[`crate::schema::time::TimeCtx`] (the
-//! frozen contract this whole workstream shares with `Scene::at`).
-
 use std::collections::HashMap;
 
 use schemars::JsonSchema;
@@ -117,8 +111,6 @@ pub struct Score {
     pub master: MasterBus,
 }
 
-/// Everything that can go wrong turning a [`Score`] into a set of hit
-/// instants.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ScoreError {
     #[error("score event references unknown voice '{0}' (not declared in `voices`)")]
@@ -142,9 +134,6 @@ pub enum ScoreError {
     },
 }
 
-/// Safety cap on how many times a single [`ScoreEvent`] may repeat, so a
-/// typo like `"every": "1ms"` over a multi-minute scenario fails fast with
-/// a named error instead of allocating a multi-gigabyte hit list.
 const MAX_HITS_PER_EVENT: usize = 100_000;
 
 impl Score {
@@ -152,11 +141,6 @@ impl Score {
         self.voices.is_empty() && self.score.is_empty()
     }
 
-    /// Every event resolved into a flat list of absolute-scenario-seconds
-    /// hit instants, grouped by voice name. `scenario_duration` is the
-    /// default `to` for a repeating event that never names one (the `hat`
-    /// voice in the issue's example) — see the caller in `rustmotion`'s
-    /// `encode` crate for how that duration is computed.
     pub fn resolve_hits(
         &self,
         ctx: &TimeCtx,
@@ -174,10 +158,6 @@ impl Score {
     }
 }
 
-/// `at`/`from`/`to`: instants, resolved with the real `beat_offset` —
-/// identical semantics to [`crate::schema::Scene::at`] (score events are
-/// never nested inside a scene, so `ctx.scene_start` is always `0.0` and
-/// `resolve_relative`/`resolve_absolute` agree).
 fn resolve_instant(tp: &TimePoint, ctx: &TimeCtx, voice: &str) -> Result<f64, ScoreError> {
     tp.resolve_relative(ctx).map_err(|source| ScoreError::Time {
         voice: voice.to_string(),
@@ -185,15 +165,6 @@ fn resolve_instant(tp: &TimePoint, ctx: &TimeCtx, voice: &str) -> Result<f64, Sc
     })
 }
 
-/// `every`/`offset`: durations. `TimePoint::eval_spec`'s beat term is
-/// `beat_offset + n * 60/bpm` — correct for "where does beat `n` land"
-/// (an instant), wrong for "how long is `n` beats" (a duration), which
-/// must not carry `beat_offset` at all. Reuses the exact same
-/// [`TimePoint::resolve_relative`] the instant fields go through (the
-/// frozen contract: `TimePoint`/`TimeCtx` are not reshaped), just against a
-/// [`TimeCtx`] copy with `beat_offset` zeroed — `bpm`, the only thing that
-/// actually determines a beat's length, is untouched, so `{"every": "1b"}`
-/// still means exactly one beat of the scenario's own grid.
 fn resolve_duration(tp: &TimePoint, ctx: &TimeCtx, voice: &str) -> Result<f64, ScoreError> {
     let duration_ctx = TimeCtx {
         beat_offset: 0.0,
@@ -278,8 +249,6 @@ mod tests {
 
     #[test]
     fn every_1b_is_one_beat_regardless_of_beat_offset() {
-        // bpm=120 -> one beat is 0.5s. A nonzero beat_offset must not leak
-        // into the *interval* length (only into where "from" lands).
         let c = ctx(Some(120.0), 2.2);
         let d = resolve_duration(&tp("1b"), &c, "kick").unwrap();
         assert!(

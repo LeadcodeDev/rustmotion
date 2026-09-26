@@ -1,10 +1,3 @@
-//! Intrinsic measurers for components whose box size depends on content.
-//!
-//! Uses the same Skia metrics that the painter uses, so the box reserved by
-//! taffy matches the pixels actually drawn — measure-vs-paint mismatches
-//! would otherwise cause text to wrap onto an extra line at paint time and
-//! overflow into the next sibling.
-
 use skia_safe::{Font, FontStyle as SkFontStyle, Typeface};
 
 use rustmotion_core::css::style::{
@@ -25,44 +18,8 @@ use crate::gradient_text::GradientText;
 use crate::kbd::Kbd;
 use crate::text::Text;
 
-// ─── Shared `font-size` context resolution (deployment of `font_size_px_ctx`
-// / `typography_px_ctx`, css/style.rs, across every component that still
-// resolved `font-size` with the context-free `font_size_px_or`) ───────────
-//
-// `font_size_px_or`/`.px()` cannot resolve `%`/`em`/`rem`/`vw`/`vh` — for a
-// `Some(Length::String(_))` that parses as one of those units, `.px()` warns
-// and returns `0.0`, and since the field itself is `Some`, the `_or`
-// fallback default never kicks in either. A `text` with `"font-size":
-// "2rem"` therefore measured *and* painted at 0px: `validate` passed (only
-// warnings), but the rendered frame had no visible text (paint_pass's
-// `height <= 0.0` guard skips the node once the intrinsic measures it at
-// zero).
-//
-// `rustmotion_core::css::style::CssStyle::font_size_px_ctx` (and
-// `typography_px_ctx`, which resolves `font-size`, `letter-spacing`, and
-// `line-height` together, honouring CSS's two different `em` bases) already
-// exist and are tested — nothing in the engine called them. These two
-// helpers build the `LengthContext` every call site below feeds them,
-// so the context-building logic lives in exactly one place instead of being
-// copied into ~15 components.
 use rustmotion_core::css::units::LengthContext;
 
-/// `LengthContext` for resolving `font-size` (and, through
-/// [`CssStyle::typography_px_ctx`], `letter-spacing`/`line-height` derived
-/// from it) against a real, per-frame viewport. Use from `Painter::
-/// paint_content` and friends, which have a real `PaintCtx` (`video_width`/
-/// `video_height`) on hand.
-///
-/// `rem`/`vw`/`vh` resolve correctly through this. `em`/`%` on `font-size`
-/// itself do not: per CSS they're relative to the *parent's* computed
-/// font-size, but `cascade.rs` inherits `font-size` down the tree as a raw,
-/// unresolved `Length`, not a resolved px value (see the module note above
-/// `CssStyle::font_size_px_ctx`) — no caller in this workstream's scope can
-/// supply the real cascaded value. `font_size: 16.0` here is the CSS root
-/// default used as the best available stand-in; it makes `em`/`%` on
-/// `font-size` *resolve* (no longer silently drop to 0px) without making
-/// them *correct* against an actual parent font-size. Fixing that fully
-/// needs a `cascade.rs` change, out of scope here.
 pub fn font_size_ctx(viewport_width: f32, viewport_height: f32, parent_size: f32) -> LengthContext {
     LengthContext {
         viewport_width,
@@ -73,28 +30,10 @@ pub fn font_size_ctx(viewport_width: f32, viewport_height: f32, parent_size: f32
     }
 }
 
-/// Same as [`font_size_ctx`], for the `Intrinsic` measurers in this module:
-/// they run at `box_builder`/`geometry` construction time, before layout, so
-/// there is no real per-frame viewport to hand (see the pre-existing note on
-/// `TextIntrinsic::from_parts`, which has the same limitation for
-/// `letter-spacing`/`line-height`). Falls back to the engine-wide default
-/// 1920×1080 (same as `LengthContext::default()`) so `rem` — which does not
-/// depend on the viewport at all — still resolves exactly, and `vw`/`vh` get
-/// a reasonable non-zero approximation instead of silently dropping to 0.
-/// This can diverge from what `Painter::paint_content` resolves via
-/// [`font_size_ctx`] for `vw`/`vh` specifically, on videos that aren't
-/// 1920×1080 — closing that fully needs the real `VideoConfig` threaded
-/// through `box_builder.rs`/`geometry.rs`, both outside this workstream.
 pub fn measure_time_font_size_ctx(parent_size: f32) -> LengthContext {
     font_size_ctx(1920.0, 1080.0, parent_size)
 }
 
-/// Skia-backed intrinsic measurer for [`Text`] (audit #10: despite the name
-/// this module's doc header suggests, this uses `skia_safe::Font::
-/// measure_str` via `engine::renderer::text`'s fallback-aware helpers — the
-/// same primitives `Text::paint` draws with — not `engine::text::cosmic`,
-/// which has no callers on the real render path at all; see that module's
-/// doc comment).
 pub struct TextIntrinsic {
     content: String,
     font_family: Option<String>,
@@ -105,40 +44,16 @@ pub struct TextIntrinsic {
     letter_spacing: f32,
     max_width: Option<f32>,
     wrap: bool,
-    /// `style.text-align`, resolved to the three horizontal keywords that
-    /// matter for placing a line inside its box (`right`/`end` collapse to
-    /// `Right`, everything else — including `justify`, which this engine
-    /// doesn't implement — collapses to `Left`). Only consulted by
-    /// [`Self::text_metrics`] (issue #328): line placement for painting is
-    /// `Text`'s own concern and already reads `style.text_align` directly.
     text_align: CssTextAlign,
-    /// `style.text-autofit == Some(true)`, but only ever set by
-    /// [`Self::from_text`] / [`GradientTextIntrinsic::from_gradient_text`] —
-    /// see [`Self::with_autofit`]'s doc comment for why `from_parts`/
-    /// `from_parts_with_wrap` (shared by `Caption`/`Kbd`/`Badge`/`Counter`,
-    /// none of whose painters read `text-autofit`) must never set this from
-    /// `style` directly.
     text_autofit: bool,
 }
 
 impl TextIntrinsic {
-    /// M1: `white-space: nowrap|pre` disables wrapping — the geometry
-    /// validator's `unwrappable_text_overflow`/`ContentOverflowsBox` checks
-    /// (crates/rustmotion/src/cli/commands/geometry.rs) already branch on
-    /// exactly this pair of variants and re-measure via this same
-    /// `TextIntrinsic`, so the wrap decision here must match theirs exactly
-    /// or the validator's assumption about what the renderer produces is
-    /// false.
     pub fn from_text(text: &Text) -> Self {
         let wrap = !matches!(
             text.style.white_space,
             Some(WhiteSpace::Nowrap | WhiteSpace::Pre)
         );
-        // Measure the *longest* label the text can ever show, not just the
-        // first: a box sized for "Saved" would be overrun the moment a
-        // `states` entry swapped in "Saving draft…", and the geometry
-        // validator — which measures through here — would have signed off on
-        // the overflow.
         let widest = text
             .all_labels()
             .max_by_key(|label| label.chars().count())
@@ -147,51 +62,12 @@ impl TextIntrinsic {
             .with_autofit(matches!(text.style.text_autofit, Some(true)))
     }
 
-    /// Opt this instance into `text-autofit`. Deliberately a separate,
-    /// explicit step rather than something `from_parts`/`from_parts_with_wrap`
-    /// read off `style` themselves: those two constructors are shared by
-    /// every atomic/synthetic-style caller in this file (`Caption`, `Kbd`,
-    /// `Badge`, `Counter`) whose *painters* have no idea `text-autofit`
-    /// exists — if the flag leaked in through the shared style, `measure()`
-    /// would shrink the reserved box for one of those while the painter
-    /// went on drawing at the full requested size, which is exactly the
-    /// measure-vs-paint divergence this feature exists to prevent, not
-    /// reintroduce elsewhere. Only [`Self::from_text`] and
-    /// [`GradientTextIntrinsic::from_gradient_text`] call this, matching the
-    /// two painters (`Text`, `GradientText`) that actually implement it.
     pub fn with_autofit(mut self, on: bool) -> Self {
         self.text_autofit = on;
         self
     }
 
-    /// Generic constructor shared by [`GradientText`]/[`Caption`] intrinsics,
-    /// whose painters don't (yet) implement `white-space: nowrap` — kept
-    /// wrap:true unconditionally so their measured size still matches what
-    /// those painters actually draw.
     pub fn from_parts(content: &str, style: &CssStyle, max_width: Option<f32>) -> Self {
-        // No *real* `LengthContext` (real viewport, real parent width) is
-        // reachable here without changing this constructor's signature —
-        // its only callers are `box_builder.rs` and
-        // `rustmotion/src/cli/commands/geometry.rs`, both outside this
-        // workstream's scope (box_builder.rs is a sibling's live file this
-        // wave; the geometry validator re-measures via this exact type and
-        // must keep agreeing with it byte-for-byte, so changing what it
-        // needs to pass in is not a call to make unilaterally here).
-        // `measure_time_font_size_ctx` falls back to the engine-wide default
-        // viewport (1920×1080) for this reason — see its doc comment.
-        //
-        // `font-size` itself, and `letter-spacing`/`line-height`'s `em`/`%`
-        // (relative to this element's *own*, just-resolved font-size — CSS
-        // spec, also documented on `CssStyle::letter_spacing_px_ctx`/
-        // `line_height_for_ctx`) are resolved together by
-        // `typography_px_ctx`, which re-derives the right context between
-        // the two steps. `Text`/`Caption`'s painters resolve the same three
-        // properties with the real `PaintCtx`'s viewport (lot B, wave S), so
-        // `rem` (viewport-independent) always agrees between measure and
-        // paint; `vw`/`vh` can diverge on videos that aren't 1920×1080 —
-        // closing that fully needs the real `VideoConfig` plumbed through
-        // `box_builder.rs`/`geometry.rs`, still out of scope for the reasons
-        // above.
         let base_ctx = measure_time_font_size_ctx(0.0);
         let (font_size, letter_spacing, line_height_resolved) =
             style.typography_px_ctx(&base_ctx, 48.0);
@@ -215,8 +91,6 @@ impl TextIntrinsic {
         }
     }
 
-    /// Build with an explicit `wrap` override (used by atomic components like
-    /// counter, kbd, badge that never wrap).
     pub fn from_parts_with_wrap(
         content: &str,
         style: &CssStyle,
@@ -268,15 +142,6 @@ impl IntrinsicMeasure for TextIntrinsic {
             return (base_w, base_h);
         }
 
-        // Height target: mirrors the `known`/`available` merge above for
-        // width — taffy hands a leaf its own `known`/`available` height
-        // already padding/border-subtracted (content-box space) whenever
-        // the node's own box resolves to a *definite* height, exactly the
-        // same protocol it uses for width. No separate hand-rolled read of
-        // `style.height` here: reusing this signal is what guarantees this
-        // agrees with `Text::paint`'s `content_height` (from the *same*
-        // taffy-resolved `BoxLayout::content_box()`, post-layout) — see
-        // `CssStyle::text_autofit`'s doc comment.
         let target_height = match known.1 {
             Some(h) => Some(h),
             None => match available.1 {
@@ -328,26 +193,6 @@ impl TextIntrinsic {
         typeface_with_fallback(family, self.sk_font_style()).ok()
     }
 
-    /// Text/glyph metrics for a `node("id", ...)` expression read (issue
-    /// #328) — the `TextMetrics`/`Glyphs` families of
-    /// `crate::engine::deps::ResolvedNode::prop`. `content_box_width` is the
-    /// node's own resolved content-box width, post-`layout_pass`
-    /// (`BoxLayout::content_box().2`) — the same width `self.measure`
-    /// itself would receive as `known.0`/`available.0`, which is why this
-    /// can only run *after* layout, unlike [`Self::sk_font_style`].
-    ///
-    /// `capHeight`/`ascender`/`baseline` are plain font metrics (wrap-
-    /// independent); `textWidth` and the glyph run depend on how `content`
-    /// wraps at `content_box_width`, computed the same way
-    /// [`Self::measure`] does (`wrap_text_with_tracking`, same font/tracking
-    /// inputs), so the box an expression reads back always agrees with the
-    /// box `layout_pass` actually reserved. Does not account for
-    /// `text-autofit`'s shrunk font size — this reports metrics at the
-    /// *requested* size regardless of whether autofit later shrinks it, a
-    /// known simplification (autofit and `node(...)` reads are an unusual
-    /// combination: autofit exists for content whose length can't be
-    /// predicted, which cuts against also anchoring another node to its
-    /// exact rendered size).
     pub fn text_metrics(&self, content_box_width: f32) -> Option<TextMetrics> {
         let typeface = self.typeface()?;
         let font = Font::from_typeface(typeface, self.font_size);
@@ -375,9 +220,6 @@ impl TextIntrinsic {
         for line in &lines {
             let advance = measure_text_with_fallback(line, &font, &emoji_font, self.letter_spacing);
             text_width = text_width.max(advance);
-            // `self.text_align` is already normalised to Left/Center/Right
-            // at construction (see `from_parts`) — no other variant is ever
-            // stored here.
             let line_x = match self.text_align {
                 CssTextAlign::Center => (content_box_width - advance) / 2.0,
                 CssTextAlign::Right => content_box_width - advance,
@@ -393,9 +235,6 @@ impl TextIntrinsic {
         let (_, metrics) = font.metrics();
         let ascender = -metrics.ascent;
         let descender = metrics.descent;
-        // Mirrors `text.rs::paint`'s own `baseline_offset` formula exactly
-        // (centers the em box within the line box) so `baseline` describes
-        // where the glyphs this same struct paints actually sit.
         let baseline = (self.line_height_resolved + ascender - descender) / 2.0;
 
         Some(TextMetrics {
@@ -408,18 +247,6 @@ impl TextIntrinsic {
     }
 }
 
-/// [`TextMetricsProvider`] implementation for the two components whose
-/// intrinsic measurer is [`TextIntrinsic`]-backed and expose plain text
-/// content (`Text`, `GradientText`) — the bridge
-/// `rustmotion_core::engine::deps` needs from this crate to resolve the
-/// `TextMetrics`/`Glyphs` families without `rustmotion-core` knowing either
-/// concrete type (see that module's doc comment on why this is a trait
-/// rather than a direct call).
-///
-/// `Caption`/`Counter`/`Kbd`/`Badge`/`RichText` also measure through
-/// `TextIntrinsic`-shaped helpers but are not wired in here — extending
-/// this is a matter of downcasting to each and calling the same
-/// `TextIntrinsic::text_metrics`, not new measurement logic.
 pub struct ComponentTextMetrics;
 
 impl TextMetricsProvider for ComponentTextMetrics {
@@ -440,12 +267,6 @@ impl TextMetricsProvider for ComponentTextMetrics {
     }
 }
 
-/// Wrap `content` at `font_size` (with `letter_spacing`/`line_height`
-/// already resolved for that size) and return its `(max_line_width,
-/// total_height)` — the single wrap+measure routine `TextIntrinsic::measure`
-/// calls for both its base (requested-size) and, when `text-autofit` shrinks
-/// it, its final (resolved-size) measurement, so the two never drift apart
-/// from hand-duplicated logic.
 fn wrap_and_measure(
     content: &str,
     typeface: &Typeface,
@@ -456,10 +277,6 @@ fn wrap_and_measure(
 ) -> (f32, f32) {
     let font = Font::from_typeface(typeface.clone(), font_size);
     let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
-    // Tracking-aware wrap (issue #125 §1): matches the real `letter_spacing`
-    // used to measure each line's width just below, so the box this
-    // measurer reserves and what the painter (also tracking-aware) actually
-    // paints agree on line count.
     let lines = wrap_text_with_tracking(content, &font, &emoji_font, wrap_at, letter_spacing);
     let mut max_w = 0.0f32;
     for line in &lines {
@@ -474,40 +291,6 @@ fn wrap_and_measure(
     (max_w, line_count * line_height)
 }
 
-/// `text-autofit`'s shared shrink resolution — the single computation
-/// `TextIntrinsic::measure` and `Text`/`GradientText`'s painters all call
-/// with identical inputs, so the resolved size can never disagree between
-/// the box taffy reserves and the pixels actually painted into it (see
-/// `CssStyle::text_autofit`'s doc comment — this exact class of bug is what
-/// this workstream exists to close, not reopen).
-///
-/// Pure and stateless: the same `(content, typeface, requested_font_size,
-/// requested_letter_spacing, requested_line_height, wrap, box_width,
-/// declared_height)` always produces the same `(font_size, letter_spacing,
-/// line_height)`. That purity is *why* calling this fresh every paint call
-/// (frame) is stable rather than something that needs caching — see the two
-/// call sites' comments for what does and does not change frame to frame.
-/// The one input this deliberately never sees is the paint-time typewriter
-/// reveal (`AnimatedProperties::visible_chars_progress`): both call sites
-/// pass the full, untruncated content, so a reveal-in-progress can't make
-/// the resolved size drift as more characters become visible.
-///
-/// `letter_spacing`/`line_height` are rescaled proportionally with the
-/// chosen font size (`requested * chosen/requested`) rather than
-/// re-resolved from the original CSS declaration at each candidate size.
-/// This matches CSS exactly for the common declarations (a unitless
-/// `line-height` number, `%`/`em` line-height, or the engine's `1.3×`
-/// default all scale linearly with font-size by definition) and is a
-/// deliberate approximation for the rare case of an absolute
-/// (`px`/`rem`/`vw`/`vh`) `line-height`/`letter-spacing`, which CSS says
-/// should stay fixed regardless of font-size — getting that exactly right
-/// needs threading the full `CssStyle` (not just its already-resolved
-/// scalars) through both call sites, out of scope here.
-///
-/// `box_width`/`declared_height`: `None` means nothing to fit against on
-/// that axis (an unconstrained box cannot overflow); returns
-/// `requested_font_size` unchanged, without measuring anything, when both
-/// are `None`.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_text_autofit(
     content: &str,
@@ -562,21 +345,6 @@ pub fn resolve_text_autofit(
     }
 }
 
-/// Binary-search the largest font size in `[floor_px, requested_font_size]`
-/// whose `measure_at(size)` fits within `(target_width, target_height)`
-/// (either bound `None` = no constraint on that axis). Assumes `measure_at`
-/// is monotonically non-increasing as `size` shrinks — true for real text:
-/// smaller glyphs measure narrower, and a fixed pixel wrap width can only
-/// need the same or fewer lines as glyphs get smaller. 16 halvings of the
-/// search range give sub-0.01px precision for any realistic font size — this
-/// is a visual convenience, not a geometry-critical value, so that precision
-/// is far more than needed.
-///
-/// Never returns below `floor_px`: if the content doesn't fit there either,
-/// `floor_px` is returned anyway — illegible-but-smallest beats an even
-/// larger overflow — and the caller's own overflow signal (the geometry
-/// validator's `ContentOverflowsBox`) is left to fire. This function never
-/// silences that; it only tries to make it unnecessary.
 fn shrink_to_fit(
     requested_font_size: f32,
     floor_px: f32,
@@ -602,8 +370,6 @@ fn shrink_to_fit(
     let (mut lo, mut hi) = (floor_px, requested_font_size);
     let (w_floor, h_floor) = measure_at(lo);
     if !fits(w_floor, h_floor) {
-        // Doesn't fit even at the floor — stop there and let the caller's
-        // own overflow check fire; see this function's doc comment.
         return lo;
     }
     for _ in 0..16 {
@@ -628,23 +394,16 @@ fn weight_to_u16(w: Option<&CssFontWeight>) -> u16 {
     }
 }
 
-/// Cosmic-text–backed intrinsic measurer for [`GradientText`] — same content
-/// model as [`Text`] (a single string + style); the gradient is purely a
-/// paint-time concern and doesn't change box dimensions.
 pub struct GradientTextIntrinsic(TextIntrinsic);
 
 impl GradientTextIntrinsic {
     pub fn from_gradient_text(t: &GradientText) -> Self {
-        // max_width comes from CSS style.width if set as a fixed pixel value
         use rustmotion_core::css::style::Size as CSize;
         use rustmotion_core::css::units::LengthPercentage;
         let max_width = match &t.style.width {
             Some(CSize::Length(LengthPercentage::Px(v))) => Some(*v),
             _ => None,
         };
-        // M1 follow-up (issue #109 review): gradient_text now word-wraps
-        // like `text` (see `gradient_text.rs::paint`) — mirror the same
-        // white-space: nowrap|pre rule here so measure and paint agree.
         let wrap = !matches!(
             t.style.white_space,
             Some(WhiteSpace::Nowrap | WhiteSpace::Pre)
@@ -666,8 +425,6 @@ impl IntrinsicMeasure for GradientTextIntrinsic {
     }
 }
 
-/// Intrinsic measurer for [`Caption`]. Concatenates the words with single
-/// spaces and measures the result like a regular text run.
 pub struct CaptionIntrinsic(TextIntrinsic);
 
 impl CaptionIntrinsic {
@@ -678,12 +435,6 @@ impl CaptionIntrinsic {
             .map(|w| w.text.as_str())
             .collect::<Vec<_>>()
             .join(" ");
-        // M1 follow-up: `Highlight`/`Karaoke`/`KaraokePop` word-wrap all
-        // words (see `caption.rs::paint`); `white-space: nowrap|pre` now
-        // forces them onto one line there too — mirror it here. (`WordByWord`
-        // /`WordPop` show one word at a time; wrapping is moot for those,
-        // same as the existing kbd/counter/badge "atomic, never wraps"
-        // components, so this doesn't need a mode-specific branch.)
         let wrap = !matches!(
             c.style.white_space,
             Some(WhiteSpace::Nowrap | WhiteSpace::Pre)
@@ -707,9 +458,6 @@ impl IntrinsicMeasure for CaptionIntrinsic {
     }
 }
 
-/// Intrinsic measurer for [`Kbd`] — measures the key text plus the legacy
-/// keyboard-cap padding (h ≈ font_size × 0.7, v ≈ font_size × 0.4) and
-/// enforces a min-width of `font_size × 1.8`.
 pub struct KbdIntrinsic {
     text: TextIntrinsic,
     h_padding: f32,
@@ -745,8 +493,6 @@ impl IntrinsicMeasure for KbdIntrinsic {
     }
 }
 
-/// Intrinsic measurer for [`Counter`] — reserves space for the largest absolute
-/// value the counter will display so layout never reflows during animation.
 pub struct CounterIntrinsic(TextIntrinsic);
 
 impl CounterIntrinsic {
@@ -758,7 +504,6 @@ impl CounterIntrinsic {
             absmax
         };
         let display = format_counter_value(signed, c.decimals, &c.separator, &c.prefix, &c.suffix);
-        // Counter is atomic: it never wraps.
         Self(TextIntrinsic::from_parts_with_wrap(
             &display, &c.style, None, false,
         ))
@@ -775,14 +520,6 @@ impl IntrinsicMeasure for CounterIntrinsic {
     }
 }
 
-/// Intrinsic measurer for [`crate::number_wheel::NumberWheel`].
-///
-/// Every digit column is as wide as the *widest* digit, because that is how
-/// the painter lays the reels out — otherwise a figure that lands on `111`
-/// would reserve a narrow box and then overflow it while a `0` rolls past.
-/// Measuring the value once per possible digit and keeping the largest gives
-/// exactly the painter's own `max over digits` per column, separators
-/// included, without duplicating its layout arithmetic here.
 pub struct NumberWheelIntrinsic(TextIntrinsic);
 
 impl NumberWheelIntrinsic {
@@ -809,7 +546,6 @@ impl NumberWheelIntrinsic {
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .unwrap_or_else(|| w.value.clone());
-        // A wheel is atomic: it never wraps.
         Self(TextIntrinsic::from_parts_with_wrap(
             &widest, &w.style, None, false,
         ))
@@ -826,8 +562,6 @@ impl IntrinsicMeasure for NumberWheelIntrinsic {
     }
 }
 
-/// Intrinsic measurer for [`Badge`] — measures the label text plus icon, gap,
-/// and the size-derived horizontal/vertical padding.
 pub struct BadgeIntrinsic {
     text: TextIntrinsic,
     h_padding: f32,
@@ -877,7 +611,6 @@ impl IntrinsicMeasure for BadgeIntrinsic {
 }
 
 fn badge_size_params(s: &BadgeSize) -> (f32, f32, f32, f32) {
-    // (font_size, h_padding, v_padding, icon_size) — matches badge.rs::params
     match s {
         BadgeSize::Sm => (12.0, 8.0, 4.0, 14.0),
         BadgeSize::Md => (14.0, 12.0, 6.0, 18.0),
@@ -885,8 +618,6 @@ fn badge_size_params(s: &BadgeSize) -> (f32, f32, f32, f32) {
     }
 }
 
-/// Build a CssStyle for text measurement carrying just the typography fields
-/// from `src`, with a forced `font-size` and `font-family` fallback.
 fn synthesize_text_style(src: &CssStyle, font_size: f32, default_family: &str) -> CssStyle {
     use rustmotion_core::css::Length;
     let family = src
@@ -904,30 +635,14 @@ fn synthesize_text_style(src: &CssStyle, font_size: f32, default_family: &str) -
     }
 }
 
-// Compatibility shim: keep an unused fn so old callers that referenced
-// `LineHeight::Number` style helpers compile cleanly.
 #[allow(dead_code)]
 fn _line_height_unused(_: Option<&LineHeight>) {}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Table intrinsic measurer
-// ─────────────────────────────────────────────────────────────────────────────
-
 use crate::table::{Table, DEFAULT_FONT_SIZE as TABLE_FONT_SIZE, DEFAULT_ROW_HEIGHT_RATIO};
 
-/// Intrinsic measurer for [`Table`].
-///
-/// Natural size formula (matches the painter exactly, since both now read
-/// the same per-column distribution — see [`Table::natural_column_widths`]):
-/// - `row_height = font_size × DEFAULT_ROW_HEIGHT_RATIO`
-/// - `height = (1 + row_count) × row_height`  (header + data rows)
-/// - `width`: if `column_widths` are provided, their sum; otherwise the sum
-///   of `Table::natural_column_widths`, which the painter's own
-///   `resolve_column_widths` scales proportionally to whatever width the
-///   box actually laid out at.
 pub struct TableIntrinsic {
     row_height: f32,
-    row_count: usize, // data rows only; header adds 1
+    row_count: usize,
     total_width: f32,
 }
 
@@ -971,23 +686,8 @@ impl IntrinsicMeasure for TableIntrinsic {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// RichText intrinsic measurer
-// ─────────────────────────────────────────────────────────────────────────────
-
 use crate::rich_text::{RichText, RichTextSpan};
 
-/// Intrinsic measurer for [`RichText`].
-///
-/// M2: previously absent from `component_intrinsic` entirely, so a
-/// `rich_text` with no explicit `width`/`height` laid out 0×0 and rendered
-/// nothing. Reuses `RichText::compute_layout` — the exact same word-wrapped
-/// line-breaking algorithm the painter uses — so the box taffy reserves
-/// always matches what gets painted (same measure/paint-parity rationale as
-/// [`TextIntrinsic`]).
-///
-/// Always measures the full (untruncated) content — a `visible_chars`
-/// typewriter animation must not reflow layout as it plays.
 pub struct RichTextIntrinsic {
     spans: Vec<RichTextSpan>,
     style: CssStyle,
@@ -1136,8 +836,6 @@ mod tests {
         assert!(h > 0.0);
     }
 
-    // ─── M1: white-space: nowrap/pre ────────────────────────────────────────
-
     fn nowrap_text(content: &str, white_space: Option<WhiteSpace>) -> Text {
         Text {
             content: content.into(),
@@ -1206,8 +904,6 @@ mod tests {
 
     #[test]
     fn normal_white_space_still_wraps_at_a_constrained_width() {
-        // Regression guard: making `nowrap`/`pre` real must not touch the
-        // default (`normal`/unset) wrapping path.
         let wrapped = nowrap_text(
             "the quick brown fox jumps over the lazy dog",
             Some(WhiteSpace::Normal),
@@ -1227,8 +923,6 @@ mod tests {
         }
     }
 
-    // ─── M2: rich_text intrinsic ─────────────────────────────────────────────
-
     fn span(text: &str) -> RichTextSpan {
         RichTextSpan {
             text: text.into(),
@@ -1243,8 +937,6 @@ mod tests {
 
     #[test]
     fn rich_text_intrinsic_is_non_zero_without_explicit_size() {
-        // M2's core defect: rich_text had no `component_intrinsic` entry at
-        // all, so it measured 0×0 unless the author guessed a width/height.
         let spans = vec![span("Hello "), span("world")];
         let style = CssStyle {
             font_size: Some(Length::Px(32.0)),
@@ -1265,8 +957,6 @@ mod tests {
 
     #[test]
     fn rich_text_intrinsic_wraps_a_single_long_span_internally() {
-        // M2's second ask: a long single span must wrap like any other text,
-        // not just break at span boundaries (there is only one span here).
         let spans = vec![span(
             "the quick brown fox jumps over the lazy dog and keeps going",
         )];
@@ -1302,9 +992,6 @@ mod tests {
 
     #[test]
     fn rich_text_intrinsic_matches_compute_layout_used_by_the_painter() {
-        // Measure/paint parity: the intrinsic must reuse the exact same
-        // layout algorithm the painter does, or taffy could reserve a box
-        // that doesn't match what gets drawn.
         let spans = vec![span("Total: "), span("42"), span(" items")];
         let style = CssStyle::default();
         let intrinsic = RichTextIntrinsic {
@@ -1320,8 +1007,6 @@ mod tests {
         assert_eq!(w, layout.max_width);
         assert_eq!(h, layout.lines.len().max(1) as f32 * layout.line_height);
     }
-
-    // ─── M1 follow-up: gradient_text / caption honor white-space too ───────
 
     #[test]
     fn gradient_text_intrinsic_ignores_constrained_width_when_nowrap() {
@@ -1350,7 +1035,6 @@ mod tests {
             "nowrap gradient_text must ignore the 80px constraint, got {}",
             w
         );
-        // Single line: height should be one line, not several.
         let (_, h_unconstrained) = m.measure(
             (None, None),
             (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
@@ -1423,8 +1107,6 @@ mod tests {
         );
     }
 
-    // ─── #2 / #5: em/% typography resolve against own font-size, not 0 ────
-
     fn text_with_style(content: &str, style: CssStyle) -> Text {
         Text {
             content: content.into(),
@@ -1444,12 +1126,6 @@ mod tests {
 
     #[test]
     fn line_height_percent_no_longer_collapses_the_box_to_zero_height() {
-        // #2 reproduction: `line-height: "150%"` went through the
-        // context-free `line_height_for`, which cannot resolve `%` and
-        // silently fell back to 0 — the intrinsic then reported a
-        // `line_count * 0.0 = 0` height, so `paint_pass.rs`'s `if height <=
-        // 0.0 { return }` guard skipped painting the node (and its
-        // subtree) entirely, even though `validate` reported success.
         use rustmotion_core::css::units::LengthPercentage;
         let text = text_with_style(
             "VISIBLE?",
@@ -1491,8 +1167,6 @@ mod tests {
             (h - 90.0).abs() < 0.5,
             "line-height: 1.5em of a 60px font-size must resolve to 90px, got {h}"
         );
-        // Sanity: matches the already-correct unitless-number form exactly,
-        // proving em and the bare-number multiplier agree.
         let numeric = text_with_style(
             "VISIBLE?",
             CssStyle {
@@ -1510,13 +1184,6 @@ mod tests {
 
     #[test]
     fn letter_spacing_em_matches_the_equivalent_px_measurement() {
-        // #5 reproduction: `letter-spacing: "1.2em"` at font-size 200
-        // (=240px) went through the context-free `letter_spacing_px`, which
-        // returns 0 for `em` — the intrinsic reserved a box as if tracking
-        // were 0 while `Text::paint` (which already uses the `_ctx`
-        // resolver) painted with the real 240px tracking, so `validate`'s
-        // `unwrappable_text_overflow`/viewport checks (which re-measure via
-        // this same intrinsic) never saw the real, wider painted width.
         let em_style = CssStyle {
             font_size: Some(Length::Px(200.0)),
             letter_spacing: Some(Length::String("1.2em".into())),
@@ -1546,9 +1213,6 @@ mod tests {
             "letter-spacing: 1.2em (font-size 200) must measure the same as the equivalent \
              240px value: em={w_em}, px={w_px}"
         );
-        // And it must differ from the old (broken) zero-tracking width —
-        // otherwise this test would pass vacuously even if em still
-        // resolved to 0.
         let w_zero_tracking = TextIntrinsic::from_text(&text_with_style(
             "TRACKING",
             CssStyle {
@@ -1569,8 +1233,6 @@ mod tests {
         );
     }
 
-    // ─── text-autofit: `shrink_to_fit` (pure binary search, no Skia) ───────
-
     #[test]
     fn shrink_to_fit_is_a_noop_when_content_already_fits() {
         let calls = std::cell::RefCell::new(Vec::new());
@@ -1588,22 +1250,16 @@ mod tests {
 
     #[test]
     fn shrink_to_fit_is_a_noop_when_nothing_to_fit_against() {
-        // Both axes unconstrained: no target to shrink for, regardless of
-        // what `measure_at` reports.
         let size = shrink_to_fit(48.0, 12.0, None, None, |_| (99999.0, 99999.0));
         assert_eq!(size, 48.0);
     }
 
     #[test]
     fn shrink_to_fit_finds_a_size_that_fits_the_width_target() {
-        // Fake linear model (width = size * 2), matching how real glyph
-        // widths scale roughly linearly with font size.
         let target = 100.0;
         let size = shrink_to_fit(120.0, 5.0, Some(target), None, |s| (s * 2.0, 10.0));
         assert!(size < 120.0, "must have shrunk, got {size}");
         assert!(size * 2.0 <= target + 0.5, "resolved size must fit: {size}");
-        // And it's close to the true boundary, not grossly under-shrunk: one
-        // more px would no longer fit.
         assert!(
             (size + 1.0) * 2.0 > target + 0.5,
             "resolved size should be close to the fitting boundary, got {size}"
@@ -1612,8 +1268,6 @@ mod tests {
 
     #[test]
     fn shrink_to_fit_respects_both_axes_jointly() {
-        // Width alone would allow a much bigger size than height alone —
-        // the chosen size must satisfy the tighter of the two.
         let size = shrink_to_fit(100.0, 5.0, Some(1000.0), Some(20.0), |s| (s, s * 2.0));
         assert!(size * 2.0 <= 20.5, "must respect the height target: {size}");
         assert!(
@@ -1624,25 +1278,17 @@ mod tests {
 
     #[test]
     fn shrink_to_fit_never_returns_below_the_floor() {
-        // Content that never fits even at the floor: must stop exactly
-        // there, not silence the overflow by continuing to shrink.
         let size = shrink_to_fit(120.0, 20.0, Some(10.0), None, |s| (s * 5.0, 10.0));
         assert_eq!(size, 20.0, "must stop exactly at the floor, not lower");
     }
 
     #[test]
     fn shrink_to_fit_is_deterministic_across_repeated_calls() {
-        // Same inputs, same deterministic binary search → same output every
-        // time. This is the purity property the temporal-stability argument
-        // (see `resolve_text_autofit`'s doc comment) rests on: nothing here
-        // depends on when or how many times it's called.
         let run = || shrink_to_fit(90.0, 10.0, Some(137.0), Some(64.0), |s| (s * 1.7, s * 0.9));
         let a = run();
         let b = run();
         assert_eq!(a, b);
     }
-
-    // ─── text-autofit: `resolve_text_autofit` (real Skia fonts) ────────────
 
     fn inter_typeface() -> Typeface {
         typeface_with_fallback("Inter", SkFontStyle::normal()).expect("Inter resolves in tests")
@@ -1660,7 +1306,7 @@ mod tests {
             requested,
             0.0,
             requested * 1.3,
-            false, // nowrap: single line
+            false,
             Some(box_width),
             None,
         );
@@ -1669,8 +1315,6 @@ mod tests {
             fs >= TEXT_AUTOFIT_MIN_FONT_PX - 0.01,
             "must not shrink past the calibrated floor, got {fs}"
         );
-        // Prove the resolved size actually fits when wrapped/measured the
-        // same way the caller will — not just that a smaller number came out.
         let (w, _) = wrap_and_measure(content, &typeface, fs, None, ls, lh);
         assert!(
             w <= box_width + 0.5,
@@ -1699,8 +1343,6 @@ mod tests {
     #[test]
     fn resolve_text_autofit_never_goes_below_the_calibrated_floor() {
         let typeface = inter_typeface();
-        // Absurdly small box: even the floor doesn't fit, but the function
-        // must still stop exactly at the floor.
         let (fs, _, _) = resolve_text_autofit(
             "This sentence is far too long for a ten pixel wide box",
             &typeface,
@@ -1736,8 +1378,6 @@ mod tests {
         assert!((lh - 130.0 * ratio).abs() < 1e-3);
     }
 
-    // ─── text-autofit: `TextIntrinsic` end to end ──────────────────────────
-
     fn autofit_text(content: &str, font_size: f32) -> Text {
         Text {
             content: content.into(),
@@ -1768,14 +1408,6 @@ mod tests {
             (None, None),
             (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
         );
-        // A box at half the natural width needs roughly a ~50% size
-        // reduction — comfortably above the legibility floor for a 60px
-        // request, so this exercises the "shrinks and fits" path distinctly
-        // from `..._still_overflows_when_even_the_floor_does_not_fit` below
-        // (which drives it all the way to the floor on purpose). Derived
-        // from the actual measured natural width rather than a hardcoded
-        // px guess, so it isn't sensitive to exactly which glyph widths
-        // this font ships.
         let target = w_unconstrained / 2.0;
         let (w_constrained, _) = m.measure(
             (None, None),
@@ -1825,11 +1457,6 @@ mod tests {
 
     #[test]
     fn caption_intrinsic_never_autofits_even_if_style_declares_it() {
-        // Regression guard for the leak this feature must not reintroduce:
-        // `Caption`'s painter has no idea `text-autofit` exists (only
-        // `Text`/`GradientText`'s do), so its intrinsic must never shrink
-        // because of it, even if the field is present in `style` — see
-        // `TextIntrinsic::with_autofit`'s doc comment.
         let caption = Caption {
             words: "the quick brown fox jumps over the lazy dog"
                 .split_whitespace()
@@ -1868,8 +1495,6 @@ mod tests {
         );
     }
 
-    // ─── `text_metrics` / `ComponentTextMetrics` (issue #328) ──────────────
-
     fn plain_text(content: &str, font_size: f32) -> Text {
         Text {
             content: content.into(),
@@ -1904,9 +1529,6 @@ mod tests {
 
     #[test]
     fn text_metrics_last_glyph_sits_before_where_a_detached_char_would_go() {
-        // The issue #328 worked example: the author writes the sentence
-        // without its trailing `?` and anchors a separate node to the last
-        // glyph's right edge.
         let text = plain_text("Sentence", 32.0);
         let metrics = TextIntrinsic::from_text(&text).text_metrics(500.0).unwrap();
         let last = *metrics.glyphs.last().unwrap();
@@ -1985,8 +1607,6 @@ mod tests {
 
     #[test]
     fn component_text_metrics_returns_none_for_a_non_text_component() {
-        // Any non-text payload (a bare `i32` stands in for one here) must
-        // fall through cleanly rather than panicking on a failed downcast.
         let payload: &(dyn std::any::Any + Send + Sync) = &42i32;
         assert!(ComponentTextMetrics.text_metrics(payload, 500.0).is_none());
     }

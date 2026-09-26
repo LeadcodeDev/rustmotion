@@ -40,12 +40,6 @@ impl Painter for Icon {
         let color = self.style.color_str_or("#FFFFFF");
         let target_w = (layout.width as u32).max(1);
         let target_h = (layout.height as u32).max(1);
-        // Oversampling (crisp edges under sub-pixel positioning / scale
-        // animation) and the cache key are computed together by
-        // `icon_cache_key` — see its doc for why that matters (issue #166):
-        // this used to be a local `const OVERSAMPLE` here plus an
-        // independent `format!` in `preload.rs`'s prefetcher, and the two
-        // could never agree.
         let (render_w, render_h, cache_key) = icon_cache_key(&self.icon, color, target_w, target_h);
 
         let cache = asset_cache();
@@ -53,14 +47,6 @@ impl Painter for Icon {
             cached.clone()
         } else {
             let Ok(svg_data) = fetch_icon_svg(&self.icon, color, render_w, render_h) else {
-                // Preload (issue #167 item 2) already hard-fails when an
-                // icon cannot be resolved via disk cache or network, so this
-                // branch is defense in depth (paint_content can run without
-                // a preceding prefetch, or the layout-derived target size
-                // here can differ from the preloader's style-based
-                // estimate, producing a genuine cache miss). Guarded so a
-                // single offline/typo'd icon does not spam once per frame
-                // over a render that can be 1000+ frames long.
                 if crate::warn_once_for(&format!("icon-fetch-failed:{}", self.icon)) {
                     eprintln!(
                         "Warning: icon '{}' could not be loaded (checked the disk cache and \
@@ -148,12 +134,6 @@ mod tests {
         skia_safe::images::raster_from_data(&img_info, skia_data, 2 * 4).expect("sentinel image")
     }
 
-    /// Regression for issue #166: proves the painter's cache-key formula is
-    /// literally `icon_cache_key`. Pre-populate `asset_cache()` under the
-    /// exact key `preload.rs`'s prefetcher now computes for a 40×40 target,
-    /// then confirm the painter finds and paints it — instead of falling
-    /// through to `fetch_icon_svg` for a nonsense icon id (which pre-fix, on
-    /// a key mismatch, is exactly what would have happened every time).
     #[test]
     fn painter_finds_the_entry_preload_would_have_written() {
         let icon = Icon {
@@ -184,8 +164,6 @@ mod tests {
             icon.paint_content(canvas, &layout, &props, &ctx);
         }
 
-        // Cleanup so this entry does not leak into other tests sharing the
-        // process-global asset_cache.
         asset_cache().remove(&key);
 
         let snapshot = surface.image_snapshot();

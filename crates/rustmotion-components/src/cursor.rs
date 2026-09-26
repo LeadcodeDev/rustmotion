@@ -117,7 +117,6 @@ rustmotion_core::impl_traits!(Cursor {
 });
 
 impl Cursor {
-    /// Get all click times (from click_at or auto_path waypoints).
     fn click_times(&self) -> Vec<f64> {
         if !self.auto_path.is_empty() {
             self.auto_path.iter().map(|w| w.time).collect()
@@ -126,21 +125,11 @@ impl Cursor {
         }
     }
 
-    /// Compute cursor position offset from auto_path at the given time.
-    /// Returns (dx, dy) translation to apply.
     fn auto_path_offset(&self, time: f64) -> (f32, f32) {
         waypoint_offset(&self.auto_path, time, self.click_duration, self.path_easing)
     }
 }
 
-/// Where a waypoint path sits at `time`: `(dx, dy)` from the component's own
-/// origin.
-///
-/// Shared by `cursor` (a text caret) and `pointer` (a mouse pointer). They
-/// draw entirely different glyphs, but "hold at the first waypoint, glide to
-/// each next one on a Catmull-Rom curve, pause for the click before moving
-/// on" is the same walkthrough choreography in both, and it is worth having
-/// exactly one implementation of it.
 pub(crate) fn waypoint_offset(
     waypoints: &[CursorWaypoint],
     time: f64,
@@ -155,18 +144,15 @@ pub(crate) fn waypoint_offset(
             return (0.0, 0.0);
         }
 
-        // Before first waypoint: stay at first position
         if time <= waypoints[0].time {
             return (waypoints[0].x, waypoints[0].y);
         }
 
-        // After last waypoint: stay at last position
         if time >= waypoints[waypoints.len() - 1].time {
             let last = &waypoints[waypoints.len() - 1];
             return (last.x, last.y);
         }
 
-        // Find which segment we're in
         let mut seg_idx = 0;
         for i in 0..waypoints.len() - 1 {
             if time >= waypoints[i].time && time < waypoints[i + 1].time {
@@ -182,7 +168,6 @@ pub(crate) fn waypoint_offset(
             return (wp1.x, wp1.y);
         }
 
-        // Account for click pause: don't start moving until click animation finishes
         let click_end = wp0.time + click_duration as f64;
         let move_start = if seg_idx > 0 { click_end } else { wp0.time };
         let move_duration = wp1.time - move_start;
@@ -193,10 +178,7 @@ pub(crate) fn waypoint_offset(
 
         let raw_t = ((time - move_start) / move_duration).clamp(0.0, 1.0);
 
-        // Apply easing
         let t = match path_easing {
-            // Hold the departure point for the whole segment; the jump happens
-            // when `time` reaches the next waypoint and the segment changes.
             CursorPathEasing::Step => 0.0,
             CursorPathEasing::Linear => raw_t,
             CursorPathEasing::EaseOut => 1.0 - (1.0 - raw_t).powi(3),
@@ -209,7 +191,6 @@ pub(crate) fn waypoint_offset(
             }
         } as f32;
 
-        // Catmull-Rom interpolation for smooth curves
         let p_prev = if seg_idx > 0 {
             &waypoints[seg_idx - 1]
         } else {
@@ -228,7 +209,6 @@ pub(crate) fn waypoint_offset(
     }
 }
 
-/// Catmull-Rom spline interpolation
 fn catmull_rom(t: f32, p0: f32, p1: f32, p2: f32, p3: f32) -> f32 {
     let t2 = t * t;
     let t3 = t2 * t;
@@ -328,9 +308,6 @@ mod tests {
         .expect("cursor fixture")
     }
 
-    /// A caret jumps between positions; it must never be caught between two
-    /// fields. Every other easing interpolates, so `step` is the only way to
-    /// say that.
     #[test]
     fn step_easing_holds_the_departure_point_until_the_next_waypoint() {
         let c = caret(CursorPathEasing::Step);
@@ -345,8 +322,6 @@ mod tests {
         assert_eq!(c.auto_path_offset(9.0), (500.0, 0.0));
     }
 
-    /// The other easings keep gliding — `step` is additive, not a change of
-    /// default behaviour.
     #[test]
     fn linear_easing_still_interpolates() {
         let (x, _) = caret(CursorPathEasing::Linear).auto_path_offset(1.5);

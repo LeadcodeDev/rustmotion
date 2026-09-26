@@ -12,17 +12,14 @@ pub struct Shadow {
     pub blur: f32,
 }
 
-/// Trait for components that support a drop shadow.
 pub trait Shadowed {
     fn shadow(&self) -> Option<&Shadow>;
 }
 
-/// Mutable access to shadow — needed by builder traits.
 pub trait ShadowedMut: Shadowed {
     fn set_shadow(&mut self, shadow: Option<Shadow>);
 }
 
-/// Builder API for shadow.
 pub trait ShadowedExt: ShadowedMut + Sized {
     fn shadow_sm(mut self) -> Self {
         self.set_shadow(Some(Shadow {

@@ -167,11 +167,6 @@ impl From<SliderRaw> for Slider {
     }
 }
 
-/// Half-width of the widest value label ("100%") `paint()` can draw,
-/// using its exact `font_size = (thumb_size*0.7).max(12.0)` formula — the
-/// thumb can sit centered at either end of the track, so this (or the
-/// thumb radius, whichever is larger) is how much horizontal margin the
-/// box needs past the track on both sides.
 fn slider_value_label_half_width(thumb_size: f32) -> Option<f32> {
     let font_size = (thumb_size * 0.7).max(12.0);
     let typeface = typeface_with_fallback("Inter", skia_safe::FontStyle::normal()).ok()?;
@@ -181,8 +176,6 @@ fn slider_value_label_half_width(thumb_size: f32) -> Option<f32> {
     Some(w / 2.0)
 }
 
-/// Vertical room `paint()`'s value label needs above the thumb (ascent +
-/// descent + the 4px gap it's drawn with), using the same font size.
 fn slider_value_label_line_height(thumb_size: f32) -> Option<f32> {
     let font_size = (thumb_size * 0.7).max(12.0);
     let typeface = typeface_with_fallback("Inter", skia_safe::FontStyle::normal()).ok()?;
@@ -223,14 +216,6 @@ impl Slider {
         let radius = h / 2.0;
         let current = self.current_value_at(time).clamp(0.0, 1.0) as f32;
 
-        // The track used to be drawn flush with local (0,0) — the thumb
-        // (radius `thumb_r`, usually bigger than the thin track) and the
-        // `show_value` label both extend past that origin on every side
-        // (#127 measured a 396×7 assigned box vs. 417×31 painted). Offset
-        // everything by the same margins reserved on the `Slider` struct
-        // (see its `From<SliderRaw>` impl) so the whole thing — track,
-        // thumb at either end, and the widest possible "100%" label — sits
-        // inside `[0, layout.width] x [0, layout.height]`.
         let h_margin = slider_value_label_half_width(self.thumb_size)
             .unwrap_or(0.0)
             .max(thumb_r);
@@ -356,10 +341,6 @@ mod tests {
 
     #[test]
     fn box_reserves_room_for_the_thumb_past_the_track() {
-        // #127: the thumb (`thumb_size`, usually bigger than the thin
-        // track) can be centered at either end of the track, so it always
-        // overhangs a box sized only to the track (396×7 assigned vs.
-        // 417×31 painted in the audit).
         let s = parse(r#"{"type":"slider","width":396,"height":7,"thumb_size":20}"#);
         let w = px_width(&s);
         assert!(

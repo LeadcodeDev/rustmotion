@@ -1,24 +1,7 @@
-//! Proof that the "crop the already-composited frame buffer to a node's
-//! `render_scene_hits` rect" implementation strategy considered for
-//! node-level effects — and rejected — leaks onto overlapping siblings.
-//!
-//! This is the concrete, quantified reason the node-effects report gives for
-//! not shipping that strategy: it is the ONLY per-node box-location mechanism
-//! reachable without touching `paint_pass.rs` (which is frozen for this
-//! chantier), but because it operates on already-flattened pixels, an effect
-//! "on" a background node also mutates any sibling painted on top of it
-//! within the same screen rectangle — exactly the brief's own motivating
-//! example ("un grain sur une image de fond mais pas sur le texte par-dessus")
-//! backfires under this strategy.
-
 use rustmotion::engine::render::post_effects::apply_post_effects;
 use rustmotion::engine::render::{render_scene_frame_scaled, render_scene_hits};
 use rustmotion::schema::{PostEffect, Scene, VideoConfig};
 
-/// A background rect (red, 800x800 at the origin) with a foreground rect
-/// (blue, 100x100) painted on top of it, fully inside the background's box —
-/// the "text over a background image" shape from the brief's own example,
-/// reduced to two solid-colour shapes so the proof needs no font rendering.
 fn background_and_overlapping_foreground() -> (VideoConfig, Scene) {
     let config: VideoConfig =
         serde_json::from_value(serde_json::json!({ "width": 800, "height": 800, "fps": 30 }))
@@ -51,11 +34,8 @@ fn pixel_at(buf: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
 fn buffer_crop_strategy_leaks_effect_onto_overlapping_sibling() {
     let (config, scene) = background_and_overlapping_foreground();
 
-    // The real, already-rendered frame: red background, blue square on top.
     let rendered = render_scene_frame_scaled(&config, &scene, 0, 0.0, 30, 1.0).expect("render");
 
-    // Sanity: the foreground square really is visible (opaque blue), not
-    // occluded or blended away — otherwise the "leak" below would be trivial.
     let before = pixel_at(&rendered, config.width, 350, 350);
     assert_eq!(
         before,
@@ -63,10 +43,6 @@ fn buffer_crop_strategy_leaks_effect_onto_overlapping_sibling() {
         "foreground square must render as pure blue before any effect"
     );
 
-    // The naive strategy: find the background node's on-screen box via
-    // `render_scene_hits` (the only per-node box available without touching
-    // paint_pass.rs), then crop-apply the CPU pixel effect to that
-    // rectangle of the FINAL, already-composited buffer.
     let hits = render_scene_hits(&config, &scene, 0);
     let background_hit = hits
         .first()
@@ -81,13 +57,6 @@ fn buffer_crop_strategy_leaks_effect_onto_overlapping_sibling() {
     let effects = vec![PostEffect::Pixelate { size: 32 }];
     apply_post_effects(&mut buf, config.width, config.height, &effects, 0, 0.0);
 
-    // The foreground square sits entirely inside the background's hit rect,
-    // so the crop-and-apply strategy touches its pixels too, even though it
-    // is a later sibling painted on top and was never meant to be affected.
-    // A 32px pixelate block straddling the red/blue boundary mixes the two;
-    // a block that lands fully inside the blue square stays pure blue by
-    // coincidence, so the proof is the fraction of the sibling's own box
-    // that changed, not any single sample point.
     let mut changed = 0u32;
     let mut worst: Option<(u32, u32, [u8; 4], [u8; 4])> = None;
     for y in 300..400 {
@@ -116,9 +85,6 @@ fn buffer_crop_strategy_leaks_effect_onto_overlapping_sibling() {
          changes {changed}/10000 of them, which is exactly why it was rejected in favour of an \
          isolated Skia layer inside paint_pass.rs (frozen for this chantier)"
     );
-    // The strategy is not just imperfect at the edges — it corrupts the
-    // majority of the sibling's own box, since a 32px pixelate block is
-    // larger than most of the sibling's 100px extent near its border.
     assert!(
         changed > 5_000,
         "expected the leak to affect the majority of the sibling's box, got {changed}/10000"

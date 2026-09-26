@@ -11,7 +11,6 @@ pub struct TimingConfig {
     pub end_at: Option<f64>,
 }
 
-/// Trait for components that support timed visibility.
 pub trait Timed {
     fn timing(&self) -> (Option<f64>, Option<f64>);
 }

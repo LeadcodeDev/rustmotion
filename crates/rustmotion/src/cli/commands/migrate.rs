@@ -1,61 +1,9 @@
-//! `rustmotion migrate` — issue #335's crossing for issue #336's gate.
-//!
-//! `"timing": "v2"` (see [`rustmotion_core::schema::TimingMode`]) changes how
-//! a slide view's total duration is computed: a `"v1"` scenario's transition
-//! *carves its frames out of* the two scenes it sits between
-//! (`sum(scene durations) - sum(transition durations)`), while a `"v2"`
-//! scenario places every scene at an absolute `at` and lets a transition
-//! *add* frames past the outgoing scene's own end
-//! (`at_last + duration_last`, no subtraction). Flipping the flag alone on an
-//! existing file is therefore a real behaviour break — a five-transition
-//! reel gets 1.5s longer — which is exactly why the flag defaults to `"v1"`
-//! and needs a deliberate opt-in.
-//!
-//! This command is that opt-in, done losslessly: it does not merely set the
-//! flag, it *compensates* for the semantic difference so the migrated file
-//! renders frame-for-frame identically to the one it replaces. For every
-//! scene that has a transition entering the *next* one, this scene's own
-//! `duration` is shortened by that transition's length (clamped to this
-//! scene's own frame budget, exactly the way
-//! `rustmotion::encode::video::tasks`'s `actual_outgoing_transition` already
-//! clamps it for `"v1"` rendering) and its `tail` is set to `"continue"` —
-//! reproducing `"v1"`'s own behaviour, where the outgoing scene keeps
-//! animating (never freezes) through the overlap. Every scene's `at` is
-//! written out explicitly, as the plain number of seconds where it would
-//! have landed anyway under `"v2"`'s own default (auto) placement — a no-op
-//! for a first `migrate` run, but what makes a *subsequent*, separate
-//! `"snap": "beat"` opt-in able to move a cut at all: [`SceneStart::Auto`]
-//! ignores `snap` entirely (only an explicit [`SceneStart::At`] is
-//! snapped — see `rustmotion::encode::video::tasks::build_slide_view_tasks_v2`),
-//! so a migrated file that left every `at` on `"auto"` would silently ignore
-//! `snap: "beat"` layered on afterwards.
-//!
-//! Migration preserves; it does not improve. A scenario that already reads
-//! `13.5s` under `"v1"` still reads `13.5s`, frame for frame, once migrated —
-//! any subsequent change in on-screen timing (e.g. snapping cuts to a beat
-//! grid) is a deliberate, separate, later edit, never something this command
-//! does on its own.
-//!
-//! Refuses a templated scenario, or one using `include`/`for-each`/`use`,
-//! for the identical reason `validate --fix` already does (see
-//! `validate.rs`'s `FixRefusal` doc comment, reused here rather than
-//! re-derived): the path a migrated `duration`/`at`/`tail` gets written at is
-//! computed against the *expanded* tree, and would silently drift from the
-//! source the moment `include`/`for-each`/`use` makes the two diverge.
-
 use rustmotion::error::{Result, RustmotionError};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 use super::validate::{fixable_source, refuse_fix};
 
-/// Frames a transition entering the scene *after* `scene_frames` consumes,
-/// clamped to `scene_frames` itself — the same clamp
-/// `rustmotion::encode::video::tasks::actual_outgoing_transition` applies
-/// when `"v1"` actually renders this same overlap, reproduced here (rather
-/// than called: that function is private to a file outside this
-/// workstream's owned perimeter) so the compensation this command computes
-/// matches, frame for frame, what the source file already rendered.
 fn transition_frames_into_next(next_scene: &Value, scene_frames: u32, fps: u32) -> u32 {
     let Some(duration) = next_scene
         .get("transition")
@@ -68,9 +16,6 @@ fn transition_frames_into_next(next_scene: &Value, scene_frames: u32, fps: u32) 
     raw.min(scene_frames)
 }
 
-/// `video.fps`, defaulting to 30 (the schema's own default —
-/// `rustmotion_core::schema::video::default_fps`, private to that crate) when
-/// absent or not a plain number.
 fn scenario_fps(root: &Value) -> u32 {
     root.get("video")
         .and_then(|v| v.get("fps"))
@@ -80,11 +25,6 @@ fn scenario_fps(root: &Value) -> u32 {
         .unwrap_or(30)
 }
 
-/// Rewrites one view's `scenes` array in place: every scene's `duration` is
-/// compensated for the transition entering the *next* scene, `tail` is set
-/// to `"continue"` on a scene that has one, and every scene's `at` is
-/// written as the absolute second it lands on either way — see the module
-/// doc for why all three are necessary for a lossless migration.
 fn migrate_scenes_array(scenes: &mut [Value], fps: u32, label: &str) -> Result<()> {
     let scene_frames: Vec<u32> = scenes
         .iter()
@@ -138,7 +78,6 @@ fn migrate_scenes_array(scenes: &mut [Value], fps: u32, label: &str) -> Result<(
     Ok(())
 }
 
-/// `rustmotion migrate -f x.json [-o out.json]` — see the module doc.
 pub fn cmd_migrate(input: &PathBuf, output: Option<&Path>) -> Result<()> {
     let raw_source = std::fs::read_to_string(input).map_err(|e| RustmotionError::FileRead {
         path: input.display().to_string(),
@@ -185,10 +124,6 @@ pub fn cmd_migrate(input: &PathBuf, output: Option<&Path>) -> Result<()> {
         source: e,
     })?;
 
-    // Prove the round trip rather than just asserting it: load both the
-    // pre-migration source and the freshly written file through the exact
-    // same frame scheduler `render` uses, and report their durations side by
-    // side. A mismatch here is this command's own bug, not the input's.
     let before = rustmotion::loader::load_scenario_from_source(None, Some(&raw_source))
         .map(|s| rustmotion::encode::build_frame_tasks(&s).len());
     let after = rustmotion::loader::load_scenario_from_source(None, Some(&pretty))
@@ -247,10 +182,6 @@ mod tests {
         path
     }
 
-    /// The exact six-scene reel issue #335 names: 2.2+2.6+2.6+3.12+2.08+2.4s
-    /// of scene duration with five transitions (0.3+0.3+0.3+0.25+0.35s)
-    /// entering scenes 1..5, rendering 13.5s under `"v1"`. Migrated, it must
-    /// still render 13.5s, frame for frame.
     fn six_scene_reel_json() -> String {
         serde_json::json!({
             "video": { "width": 640, "height": 360, "fps": 30 },
@@ -282,10 +213,6 @@ mod tests {
         let frames = rustmotion::encode::build_frame_tasks(&scenario).len();
         let duration = frames as f64 / 30.0;
 
-        // The real acceptance criterion: byte-for-byte the same frame count
-        // as the pre-migration ("v1") source — not a hand-computed constant,
-        // which would silently drift from whatever `actual_outgoing_transition`
-        // (the frame scheduler's own rounding) actually does.
         let original =
             rustmotion::loader::load_scenario_from_source(None, Some(&six_scene_reel_json()))
                 .expect("original scenario loads");
@@ -294,9 +221,6 @@ mod tests {
             rustmotion::encode::build_frame_tasks(&original).len(),
             "migrated file must render the exact same frame count as the pre-migration source"
         );
-        // Sanity: near the ~13.5s issue #335 names for this reel (exact value
-        // depends on how `.round()` breaks the one exact half-frame tie in
-        // this fixture's numbers — see this workstream's report).
         assert!(
             (duration - 13.5).abs() < 0.1,
             "expected roughly 13.5s, got {duration}s ({frames} frames)"
@@ -313,8 +237,6 @@ mod tests {
         let value: Value = serde_json::from_str(&migrated).unwrap();
         let scenes = value["scenes"].as_array().unwrap();
         assert_eq!(scenes.len(), 6);
-        // Scene 0 starts at 0; every scene but the last (no transition
-        // follows it) continues through its own tail.
         assert_eq!(scenes[0]["at"], serde_json::json!(0.0));
         for s in &scenes[..5] {
             assert_eq!(s["tail"], "continue");
@@ -333,16 +255,6 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         let mut value: Value = serde_json::from_str(&migrated).unwrap();
-        // bpm=11 (a 60/11s beat, beat_offset=0): of this reel's five
-        // migrated `at` values, this is the grid where exactly one of them
-        // (scene 3's) has its nearest beat land *past* where the previous
-        // scene's own window already ends, so it actually moves (opening a
-        // hold) instead of being clamped back to its unsnapped position like
-        // every other scene's nearest beat is here. That single moved cut is
-        // what turns the migrated file's frame-identical duration into
-        // exactly 15.0s — found by simulating `build_slide_view_tasks_v2`'s
-        // exact rounding rather than guessed at (see this workstream's
-        // report).
         value["bpm"] = serde_json::json!(11.0);
         value["snap"] = serde_json::json!("beat");
 

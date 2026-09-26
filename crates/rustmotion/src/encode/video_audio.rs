@@ -1,15 +1,3 @@
-/// Extract audio from embedded `video` components and synthesise `AudioTrack`
-/// entries that can be appended to `scenario.audio` before the existing mixer.
-///
-/// # Limitations (v1)
-/// - **World views**: skipped — their camera timeline makes scene offsets
-///   non-trivial. A warning is printed to stderr.
-/// - **loop_video**: audio does not loop. The audio track plays once from
-///   `trim_start` to `trim_end` (or natural end of file), regardless of
-///   whether `loop_video` is set. Document this limitation to users.
-/// - Temporary WAV files are left in `std::env::temp_dir()` keyed by a hash
-///   of `(src, trim_start, trim_end, playback_rate)`.  A re-render with the
-///   same parameters reuses the cached file.
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -17,35 +5,12 @@ use std::path::PathBuf;
 use crate::components::{ChildComponent, Component};
 use crate::schema::{AudioTrack, ResolvedScenario, ViewType};
 
-// ─── Scene offset computation ─────────────────────────────────────────────────
-
-/// Compute the absolute start-time offset (in seconds) of each scene inside
-/// each view, mirroring the frame-emission order of `build_frame_tasks`.
-///
-/// Return value: `offsets[view_idx][scene_idx] = start_time_in_output_video`.
-///
-/// Rules (same as `build_frame_tasks`):
-/// - Between views: an optional inter-view `transition` occupies
-///   `transition.duration` seconds **before** the first frame of the next view.
-///   Those transition frames are emitted *between* views in output order, so
-///   view `N` starts at `cursor + transition.duration`.
-/// - Within a slide view: scenes are consecutive but their transitions
-///   **overlap** with the preceding scene's tail. Scene `i+1` starts at
-///   `scene_i_end - transition_duration` where the transition duration is
-///   `scenes[i+1].transition.duration` (the *incoming* transition of i+1).
-/// - World views: all scenes share the same view window. We record `cursor`
-///   as the start of that window for all scenes and advance by the total
-///   world-view duration.
-///
-/// # Panics
-/// Never panics — uses saturating arithmetic.
 pub fn scene_start_offsets(scenario: &ResolvedScenario) -> Vec<Vec<f64>> {
     let fps = scenario.video.fps as f64;
     let mut result: Vec<Vec<f64>> = Vec::with_capacity(scenario.views.len());
     let mut cursor = 0.0_f64;
 
     for (view_idx, view) in scenario.views.iter().enumerate() {
-        // ── Inter-view transition (slides in *before* this view's first frame)
         if view_idx > 0 {
             if let Some(ref vt) = view.transition {
                 cursor += vt.duration;
@@ -58,23 +23,16 @@ pub fn scene_start_offsets(scenario: &ResolvedScenario) -> Vec<Vec<f64>> {
                 let mut scene_cursor = cursor;
 
                 for (i, scene) in view.scenes.iter().enumerate() {
-                    // Incoming transition of *this* scene overlaps with the
-                    // previous scene's tail: the overlap was already "paid for"
-                    // by the previous scene, so we move *backwards* by it.
                     if i > 0 {
                         let incoming = scene.transition.as_ref().map(|t| t.duration).unwrap_or(0.0);
                         scene_cursor -= incoming;
                     }
                     scene_offsets.push(scene_cursor);
 
-                    // Advance by scene duration (in whole-frame units to stay
-                    // consistent with frame-task rounding).
                     let scene_frames = (scene.duration * fps).round() / fps;
                     scene_cursor += scene_frames;
                 }
 
-                // Advance the global cursor to the end of this slide view's
-                // last scene.
                 cursor = scene_cursor;
                 result.push(scene_offsets);
             }
@@ -87,10 +45,8 @@ pub fn scene_start_offsets(scenario: &ResolvedScenario) -> Vec<Vec<f64>> {
                     view_idx
                 );
 
-                // All scenes share the view-level window start.
                 let scene_offsets = vec![cursor; view.scenes.len()];
 
-                // Compute world-view total duration to advance cursor.
                 let world_duration: f64 = view
                     .scenes
                     .iter()
@@ -106,16 +62,6 @@ pub fn scene_start_offsets(scenario: &ResolvedScenario) -> Vec<Vec<f64>> {
     result
 }
 
-/// The rendered scenario's own total duration, in seconds — the last
-/// view's last scene's own start offset plus its (frame-rounded) duration.
-/// Reuses [`scene_start_offsets`] rather than re-deriving the same
-/// transition-overlap arithmetic a second time.
-///
-/// This is what sizes the synthesised-audio buffer (issue #331): a score
-/// event with no explicit `to` plays until here, and the muxed track built
-/// from it (`crate::encode::audio::synthesize_score_into_track`) is given
-/// exactly this many seconds so a segment render (`--frames a-b`) can slice
-/// it the same way it already slices any other [`crate::schema::AudioTrack`].
 pub fn resolved_scenario_duration(scenario: &ResolvedScenario) -> f64 {
     let offsets = scene_start_offsets(scenario);
     let fps = scenario.video.fps as f64;
@@ -135,9 +81,6 @@ pub fn resolved_scenario_duration(scenario: &ResolvedScenario) -> f64 {
     total
 }
 
-// ─── Component walk ───────────────────────────────────────────────────────────
-
-/// Collected metadata for a single video component found in the scene tree.
 #[derive(Debug)]
 struct VideoOccurrence {
     src: String,
@@ -145,9 +88,7 @@ struct VideoOccurrence {
     trim_end: Option<f64>,
     playback_rate: f64,
     volume: f32,
-    /// start_at from the component's TimingConfig (0 if absent)
     start_at: f64,
-    /// end_at from the component's TimingConfig
     end_at: Option<f64>,
 }
 
@@ -186,9 +127,6 @@ fn collect_videos_in_scene(scene: &crate::schema::Scene, out: &mut Vec<VideoOccu
     }
 }
 
-// ─── ffmpeg probe ─────────────────────────────────────────────────────────────
-
-/// Returns `true` if `ffmpeg` is available on PATH.
 fn ffmpeg_available() -> bool {
     std::process::Command::new("ffmpeg")
         .args(["-version"])
@@ -199,27 +137,8 @@ fn ffmpeg_available() -> bool {
         .unwrap_or(false)
 }
 
-// ─── atempo filter chain ──────────────────────────────────────────────────────
-
-/// Build an `atempo` filter-graph string for the given playback rate.
-///
-/// `atempo` only accepts values in `[0.5, 2.0]`.  For factors outside that
-/// range we chain multiple `atempo` filters:
-///   rate 4.0 → `atempo=2.0,atempo=2.0`
-///   rate 0.1 → `atempo=0.5,atempo=0.2`  (0.5 * 0.2 = 0.1)
-///
-/// Returns `None` if rate == 1.0 (no filter needed), or if `rate` cannot
-/// possibly be reached by any chain of `atempo` stages (`<= 0.0` or
-/// non-finite — see the guard below).
 pub fn build_atempo_filter(rate: f64) -> Option<String> {
     const EPSILON: f64 = 1e-9;
-    // `remaining` only ever converges toward `[0.5, 2.0]` by repeatedly
-    // multiplying or dividing by 2.0 starting from a *positive, finite*
-    // `rate`. At `rate == 0.0`, `remaining /= 0.5` stays `0.0` forever; at a
-    // negative or non-finite rate it diverges away from the loop's own exit
-    // test. Either way the `while` below never terminates and pushes a new
-    // `String` on every turn — the guard has to reject these before that
-    // loop is ever reached, not inside it.
     if !rate.is_finite() || rate <= 0.0 {
         return None;
     }
@@ -227,18 +146,12 @@ pub fn build_atempo_filter(rate: f64) -> Option<String> {
         return None;
     }
 
-    // A ceiling on the chain length, independent of the guard above: a
-    // legitimate rate as extreme as 1e9 only needs ~30 stages, so this never
-    // fires for real input. It exists so that a future mistake in this
-    // arithmetic degrades into "no atempo filter" instead of reopening the
-    // same unbounded loop the guard above closes.
     const MAX_STAGES: usize = 64;
 
     let mut parts: Vec<String> = Vec::new();
     let mut remaining = rate;
 
     if rate > 1.0 {
-        // Each stage multiplies by at most 2.0
         while remaining > 2.0 + EPSILON {
             if parts.len() >= MAX_STAGES {
                 return None;
@@ -248,7 +161,6 @@ pub fn build_atempo_filter(rate: f64) -> Option<String> {
         }
         parts.push(format!("atempo={:.6}", remaining));
     } else {
-        // Each stage multiplies by at least 0.5
         while remaining < 0.5 - EPSILON {
             if parts.len() >= MAX_STAGES {
                 return None;
@@ -262,21 +174,6 @@ pub fn build_atempo_filter(rate: f64) -> Option<String> {
     Some(parts.join(","))
 }
 
-// ─── Cache-keyed temp WAV path ────────────────────────────────────────────────
-
-/// Base directory the extracted-audio WAV cache lives under.
-///
-/// `std::env::temp_dir()` is shared and, on most Unix systems, world-writable
-/// — combined with `wav_cache_path`'s hash being deterministic (which it has
-/// to be, for the cache to ever hit twice), a different local user could
-/// compute the exact cache path ahead of time and plant content there before
-/// this process ever ran. `dirs::cache_dir()` is per-user (`~/Library/Caches`
-/// on macOS, `~/.cache` on Linux), so the same determinism that makes
-/// caching useful stops doubling as a cross-user attack surface. Falls back
-/// to `temp_dir()` only on a platform with no notion of a user cache
-/// directory at all — still better than failing outright, and consistent
-/// with every other fallback in this codebase preferring a degraded mode
-/// over an unusable one.
 fn wav_cache_base_dir() -> PathBuf {
     let base = dirs::cache_dir()
         .unwrap_or_else(std::env::temp_dir)
@@ -297,14 +194,6 @@ fn wav_cache_path(src: &str, trim_start: f64, trim_end: Option<f64>, rate: f64) 
     trim_end.map(|v| v.to_bits()).hash(&mut hasher);
     rate.to_bits().hash(&mut hasher);
 
-    // Constat #10: the cache key used to depend only on
-    // (src, trim_start, trim_end, rate) — editing `src` in place (same
-    // path, new bytes) left the old extraction cached under the same key
-    // forever, silently serving stale audio. Folding in the source's size
-    // and mtime means a modified file gets a different cache path
-    // automatically. Best-effort: if `metadata` fails (source vanished
-    // between validation and extraction), the hash simply falls back to the
-    // path-only key, matching the previous behavior exactly.
     if let Ok(meta) = std::fs::metadata(src) {
         meta.len().hash(&mut hasher);
         if let Ok(modified) = meta.modified() {
@@ -318,34 +207,12 @@ fn wav_cache_path(src: &str, trim_start: f64, trim_end: Option<f64>, rate: f64) 
     wav_cache_base_dir().join(format!("rustmotion_vidaud_{:016x}.wav", hash))
 }
 
-/// Whether `path` is safe to reuse as a cache hit: a genuine regular file,
-/// not a symlink. `wav_cache_path` now resolves under a per-user directory
-/// (see `wav_cache_base_dir`), which already rules out a *different* user
-/// planting one; this additionally refuses to follow a symlink planted by
-/// anything running as the *same* user (a compromised sibling process, or a
-/// leftover from before that directory existed) into wherever it points.
-/// `symlink_metadata` — unlike `Path::exists`/`std::fs::metadata` — reports
-/// on the directory entry itself rather than whatever it resolves to.
 fn cached_wav_is_trustworthy(path: &std::path::Path) -> bool {
     std::fs::symlink_metadata(path)
         .map(|m| m.file_type().is_file())
         .unwrap_or(false)
 }
 
-/// Scratch path ffmpeg writes to before a successful extraction is promoted
-/// (renamed) onto `wav_path`.
-///
-/// Deviates from the audit's literal suggestion of a `<hash>.wav.partial`
-/// suffix: `Path::with_extension` on a path already ending in `.wav`
-/// replaces the extension rather than appending, so `<hash>.wav.partial`
-/// really means "last extension is `.partial`" — and ffmpeg picks its output
-/// muxer from the *last* extension. Pointing it at a `.partial`-suffixed
-/// path makes it fail with "Unable to choose an output format", which
-/// looked identical to the transient-failure case this fix exists to guard
-/// against until traced back to this naming choice. Keeping `.wav` as the
-/// final extension (`<hash>.partial.wav`) keeps ffmpeg's format
-/// autodetection working while still being unambiguously distinct from the
-/// real cache path.
 fn partial_wav_path(wav_path: &std::path::Path) -> PathBuf {
     let stem = wav_path
         .file_stem()
@@ -354,12 +221,6 @@ fn partial_wav_path(wav_path: &std::path::Path) -> PathBuf {
     wav_path.with_file_name(format!("{stem}.partial.wav"))
 }
 
-// ─── Audio extraction ─────────────────────────────────────────────────────────
-
-/// Extract audio from a video file into a WAV using ffmpeg.
-///
-/// Returns the path of the temporary WAV file, or `None` if ffmpeg is absent
-/// or the extraction fails (warning is printed to stderr in both cases).
 fn extract_audio_to_wav(
     src: &str,
     trim_start: f64,
@@ -368,26 +229,14 @@ fn extract_audio_to_wav(
 ) -> Option<PathBuf> {
     let wav_path = wav_cache_path(src, trim_start, trim_end, rate);
 
-    // Reuse cached extraction — but only a genuine regular file placed here
-    // by a previous extraction; see `cached_wav_is_trustworthy`.
     if cached_wav_is_trustworthy(&wav_path) {
         return Some(wav_path);
     }
 
-    // Constat #10: ffmpeg used to write straight to `wav_path`. An
-    // interrupted extraction (Ctrl-C, disk full, the source still being
-    // written) left a truncated file sitting exactly at the path
-    // `wav_path.exists()` treats as a valid cache hit above — every
-    // subsequent render silently reused the corrupt WAV, with no error and
-    // no way to detect it short of manually clearing `temp_dir()`. Writing
-    // to a scratch sibling and renaming onto `wav_path` only after ffmpeg
-    // reports success means a failed extraction can never become a false
-    // cache hit.
     let partial_path = partial_wav_path(&wav_path);
 
     let mut args: Vec<String> = Vec::new();
 
-    // Input seek (trim_start)
     if trim_start > 0.0 {
         args.push("-ss".to_string());
         args.push(format!("{:.6}", trim_start));
@@ -401,16 +250,13 @@ fn extract_audio_to_wav(
     args.push("-i".to_string());
     args.push(src.to_string());
 
-    // No video
     args.push("-vn".to_string());
 
-    // atempo chain for playback rate != 1.0
     if let Some(filter) = build_atempo_filter(rate) {
         args.push("-af".to_string());
         args.push(filter);
     }
 
-    // Overwrite output
     args.push("-y".to_string());
     args.push(partial_path.to_str().unwrap_or_default().to_string());
 
@@ -452,18 +298,8 @@ fn extract_audio_to_wav(
     }
 }
 
-// ─── Public entry point ───────────────────────────────────────────────────────
-
-/// Enumerate all `video` components with `volume > 0` in slide views,
-/// extract their audio streams via ffmpeg, and return a list of `AudioTrack`
-/// entries to append to `scenario.audio` before calling the existing mixer.
-///
-/// World views are skipped with a warning.  If ffmpeg is not installed the
-/// whole function returns an empty `Vec` after printing a single warning.
 pub fn collect_video_audio_tracks(scenario: &ResolvedScenario) -> Vec<AudioTrack> {
     if !ffmpeg_available() {
-        // Only warn once — the video encoder path will also warn on ffmpeg
-        // absence so we keep this low-noise.
         eprintln!(
             "rustmotion: ffmpeg not found — embedded video audio will be silent. \
              Install ffmpeg to include audio from video components."
@@ -475,8 +311,6 @@ pub fn collect_video_audio_tracks(scenario: &ResolvedScenario) -> Vec<AudioTrack
     let mut tracks: Vec<AudioTrack> = Vec::new();
 
     for (view_idx, view) in scenario.views.iter().enumerate() {
-        // World views: offsets are computed but audio extraction is skipped
-        // (the warning was already emitted inside scene_start_offsets).
         if matches!(view.view_type, ViewType::World) {
             continue;
         }
@@ -505,11 +339,8 @@ pub fn collect_video_audio_tracks(scenario: &ResolvedScenario) -> Vec<AudioTrack
                     continue;
                 };
 
-                // Absolute start in the output video timeline
                 let abs_start = scene_start + occ.start_at;
 
-                // Duration of the extracted audio (post-rate adjustment)
-                // and optional end constraint from end_at.
                 let end = occ.end_at.map(|ea| {
                     let component_duration = ea - occ.start_at;
                     abs_start + component_duration
@@ -531,14 +362,10 @@ pub fn collect_video_audio_tracks(scenario: &ResolvedScenario) -> Vec<AudioTrack
     tracks
 }
 
-// ─── Unit tests ───────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::loader::load_scenario_from_source;
-
-    // ── Cache directory: per-user, not the shared world-writable temp dir ────
 
     #[test]
     fn wav_cache_path_does_not_sit_directly_inside_the_bare_shared_temp_dir() {
@@ -552,8 +379,6 @@ mod tests {
             cached.display()
         );
     }
-
-    // ── Cache entries must be verified, not merely `exists()` ────────────────
 
     #[cfg(unix)]
     #[test]
@@ -619,15 +444,10 @@ mod tests {
         assert!(!cached_wav_is_trustworthy(&path));
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
-
     fn load(json: &str) -> ResolvedScenario {
         load_scenario_from_source(None, Some(json)).expect("load")
     }
 
-    // ── scene_start_offsets ───────────────────────────────────────────────────
-
-    /// Single slide view, no transitions → scenes are back-to-back.
     #[test]
     fn offsets_single_view_no_transitions() {
         let s = load(
@@ -651,14 +471,8 @@ mod tests {
         assert!((v[2] - 3.0).abs() < 1e-9, "scene 2 starts at 3.0s");
     }
 
-    /// Single slide view with an incoming transition on scene 1:
-    /// scene 1 overlaps the tail of scene 0 by `transition.duration`.
     #[test]
     fn offsets_single_view_with_scene_transition() {
-        // Scene 0: 2s.  Scene 1: 1s, incoming fade of 0.5s.
-        // Expected:
-        //   scene 0 → 0.0s
-        //   scene 1 → 2.0 - 0.5 = 1.5s
         let s = load(
             r#"{
             "video": {"width": 32, "height": 32, "fps": 10},
@@ -675,10 +489,6 @@ mod tests {
         assert!((v[1] - 1.5).abs() < 1e-3, "scene 1 at 1.5s got {}", v[1]);
     }
 
-    /// Two slide views with an inter-view transition.
-    /// View 0: scene 0 (1s) + scene 1 (1s) = 2s total.
-    /// Inter-view transition: 0.5s.
-    /// View 1: scene 0 starts at 2.0 + 0.5 = 2.5s.
     #[test]
     fn offsets_two_views_with_view_transition() {
         let s = load(
@@ -706,15 +516,12 @@ mod tests {
         assert!((v0[1] - 1.0).abs() < 1e-9, "view0 scene1 at 1.0");
 
         let v1 = &offsets[1];
-        // View 0 ends at 2.0s, then 0.5s view transition, so view 1 starts at 2.5s.
         assert!(
             (v1[0] - 2.5).abs() < 1e-3,
             "view1 scene0 expected 2.5s, got {}",
             v1[0]
         );
     }
-
-    // ── build_atempo_filter ───────────────────────────────────────────────────
 
     #[test]
     fn atempo_rate_1_returns_none() {
@@ -731,7 +538,6 @@ mod tests {
     #[test]
     fn atempo_rate_4_two_stages() {
         let f = build_atempo_filter(4.0).unwrap();
-        // Should be: atempo=2.0,atempo=2.0
         let parts: Vec<&str> = f.split(',').collect();
         assert_eq!(parts.len(), 2, "rate 4.0 → 2 stages: {f}");
         assert!(parts[0].starts_with("atempo=2.0"), "first stage: {f}");
@@ -747,7 +553,6 @@ mod tests {
 
     #[test]
     fn atempo_rate_0_25_two_stages() {
-        // 0.25 = 0.5 * 0.5
         let f = build_atempo_filter(0.25).unwrap();
         let parts: Vec<&str> = f.split(',').collect();
         assert_eq!(parts.len(), 2, "rate 0.25 → 2 stages: {f}");
@@ -755,9 +560,6 @@ mod tests {
         assert!(parts[1].starts_with("atempo=0.5"), "second: {f}");
     }
 
-    // ── collect_video_audio_tracks (pure-logic parts) ─────────────────────────
-
-    /// Video with volume==0 must be excluded even if it has a valid src.
     #[test]
     fn volume_zero_is_excluded() {
         let s = load(
@@ -772,7 +574,6 @@ mod tests {
         }"#,
         );
 
-        // collect_videos_in_scene uses the same logic: check directly
         let mut occs: Vec<VideoOccurrence> = Vec::new();
         let children: Vec<ChildComponent> = s.views[0].scenes[0]
             .children
@@ -785,7 +586,6 @@ mod tests {
         assert!(occs.is_empty(), "volume=0 must not be collected");
     }
 
-    /// Video nested inside a card is found by the recursive walk.
     #[test]
     fn nested_video_in_card_is_collected() {
         let s = load(
@@ -816,19 +616,10 @@ mod tests {
         assert!((occs[0].volume - 0.8).abs() < 1e-6);
     }
 
-    /// AudioTrack offsets: video in scene 1 of a two-scene slide.
-    /// Scene 0: 1s, Scene 1: 1s, no transitions → scene 1 starts at 1.0s.
-    /// Video has start_at=0.2 → track.start = 1.0 + 0.2 = 1.2s.
-    ///
-    /// This test skips if ffmpeg is absent (integration guard).
     #[test]
     #[cfg_attr(not(feature = "ffmpeg_integration"), ignore)]
-    fn audio_track_offset_scene2_with_start_at() {
-        // This test needs a real video file; guard it.
-        // When run in CI with ffmpeg available, it verifies placement.
-    }
+    fn audio_track_offset_scene2_with_start_at() {}
 
-    /// wav_cache_path is deterministic: same inputs → same path.
     #[test]
     fn wav_cache_path_is_deterministic() {
         let p1 = wav_cache_path("foo.mp4", 0.5, Some(3.0), 1.5);
@@ -836,7 +627,6 @@ mod tests {
         assert_eq!(p1, p2);
     }
 
-    /// Different params → different path (collision check)
     #[test]
     fn wav_cache_path_differs_on_params() {
         let p1 = wav_cache_path("foo.mp4", 0.0, None, 1.0);
@@ -844,10 +634,6 @@ mod tests {
         assert_ne!(p1, p2);
     }
 
-    /// Constat #10: the cache key must fold in the source file's own
-    /// metadata, not just its path — otherwise editing a video in place
-    /// (same path, new bytes) keeps serving audio extracted from the file's
-    /// *previous* contents forever, with no error and no way to detect it.
     #[test]
     fn wav_cache_path_changes_when_source_file_is_modified() {
         let src = std::env::temp_dir().join(format!(
@@ -861,8 +647,6 @@ mod tests {
         std::fs::write(&src, b"version one").unwrap();
         let p1 = wav_cache_path(src.to_str().unwrap(), 0.0, None, 1.0);
 
-        // Best-effort: push the mtime forward too, in case the filesystem's
-        // mtime resolution is coarser than the write below.
         std::thread::sleep(std::time::Duration::from_millis(20));
         std::fs::write(&src, b"version two, a longer and different payload").unwrap();
         let p2 = wav_cache_path(src.to_str().unwrap(), 0.0, None, 1.0);
@@ -875,10 +659,6 @@ mod tests {
         let _ = std::fs::remove_file(&src);
     }
 
-    /// Constat #10: a failed extraction must never leave a residue file —
-    /// neither the promoted `wav_path` (a false cache hit on the next
-    /// render, per `wav_path.exists()` above) nor the `.partial` scratch
-    /// file ffmpeg wrote to along the way.
     #[test]
     fn failed_extraction_leaves_no_residue_on_disk() {
         if !ffmpeg_available() {
@@ -893,7 +673,7 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let _ = std::fs::remove_file(&missing_src); // guarantee it does not exist
+        let _ = std::fs::remove_file(&missing_src);
 
         let wav_path = wav_cache_path(missing_src.to_str().unwrap(), 0.0, None, 1.0);
         let partial_path = partial_wav_path(&wav_path);
@@ -916,8 +696,6 @@ mod tests {
         );
     }
 
-    /// Constat #10: a successful extraction promotes the `.partial` scratch
-    /// file to the real cache path and leaves no `.partial` behind.
     #[test]
     fn successful_extraction_leaves_no_partial_file_behind() {
         if !ffmpeg_available() {
@@ -971,20 +749,13 @@ mod tests {
         let _ = std::fs::remove_file(&fixture);
     }
 
-    // ── Integration test (gated on ffmpeg) ───────────────────────────────────
-
-    /// Full round-trip: generate a 1-second sine+test-video fixture with ffmpeg,
-    /// build a 2-scene scenario (video in scene 1), call collect_video_audio_tracks,
-    /// verify the returned track has the correct start offset and non-empty src.
     #[test]
     fn integration_audio_track_from_embedded_video() {
-        // Skip if ffmpeg is not available.
         if !ffmpeg_available() {
             eprintln!("integration_audio_track_from_embedded_video: ffmpeg not found — skipping");
             return;
         }
 
-        // Generate a 1s lavfi sine video fixture.
         let fixture = std::env::temp_dir().join("rustmotion_test_vidaud_fixture.mp4");
         let fixture_str = fixture.to_str().unwrap();
 
@@ -1014,7 +785,6 @@ mod tests {
             return;
         }
 
-        // Two-scene scenario: scene 0 (1s, no video), scene 1 (1s, video at start_at=0.2).
         let json = format!(
             r#"{{
             "video": {{"width": 32, "height": 32, "fps": 30}},
@@ -1033,13 +803,11 @@ mod tests {
         let scenario = load_scenario_from_source(None, Some(&json)).expect("load");
         let tracks = collect_video_audio_tracks(&scenario);
 
-        // Clean up fixture
         let _ = std::fs::remove_file(&fixture);
 
         assert_eq!(tracks.len(), 1, "expected one audio track");
         let t = &tracks[0];
 
-        // scene 1 starts at 1.0s, start_at=0.2 → abs_start = 1.2s
         assert!(
             (t.start - 1.2).abs() < 1e-9,
             "expected start=1.2, got {}",

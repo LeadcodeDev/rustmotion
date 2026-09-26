@@ -80,10 +80,6 @@ rustmotion_core::impl_traits!(Tooltip {
 });
 
 impl Tooltip {
-    /// Resolves `font-size` against a real per-frame viewport (`rem`/`vw`/
-    /// `vh` now resolve instead of silently dropping to 0px — lot B, wave
-    /// S). `em`/`%` on `font-size` itself remain approximate — see
-    /// `crate::intrinsic::font_size_ctx`'s doc comment.
     fn resolved_font_size(&self, ctx: &PaintCtx) -> f32 {
         self.style.font_size_px_ctx(
             &crate::intrinsic::font_size_ctx(ctx.video_width as f32, ctx.video_height as f32, 0.0),
@@ -111,7 +107,6 @@ impl Tooltip {
         let radius = self.style.border_radius_px_or(8.0);
         let arrow_sz = self.arrow_size;
 
-        // Compute body rect (excluding arrow area)
         let (body_x, body_y, body_w, body_h) = match self.arrow {
             TooltipArrow::Bottom => (0.0, 0.0, w, h - arrow_sz),
             TooltipArrow::Top => (0.0, arrow_sz, w, h - arrow_sz),
@@ -120,7 +115,6 @@ impl Tooltip {
             TooltipArrow::None => (0.0, 0.0, w, h),
         };
 
-        // Body rounded rect
         let body_rect = Rect::from_xywh(body_x, body_y, body_w, body_h);
         let body_rrect = skia_safe::RRect::new_rect_xy(body_rect, radius, radius);
 
@@ -129,7 +123,6 @@ impl Tooltip {
         bg_paint.set_anti_alias(true);
         canvas.draw_rrect(body_rrect, &bg_paint);
 
-        // Border
         if let Some(bc) = &self.border_color {
             let mut border_paint = paint_from_hex(bc);
             border_paint.set_style(PaintStyle::Stroke);
@@ -138,7 +131,6 @@ impl Tooltip {
             canvas.draw_rrect(body_rrect, &border_paint);
         }
 
-        // Arrow triangle
         if !matches!(self.arrow, TooltipArrow::None) {
             let mut arrow_path = PathBuilder::new();
             match self.arrow {
@@ -179,7 +171,6 @@ impl Tooltip {
             canvas.draw_path(&arrow_path.detach(), &bg_paint);
         }
 
-        // Text centered in body
         let Some(font) = self.make_font(ctx) else {
             return;
         };
@@ -239,12 +230,8 @@ mod tests {
         }
     }
 
-    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
-
     #[test]
     fn rem_font_size_paints_visible_ink() {
-        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
-        // context-free `font_size_px_or`.
         let tooltip = Tooltip {
             text: "hello".to_string(),
             arrow: TooltipArrow::None,
@@ -284,8 +271,6 @@ mod tests {
             skia_safe::image::CachingHint::Disallow,
         );
         assert!(ok, "pixel read should succeed");
-        // Text is near-white (#E2E8F0 default) on a dark #1E293B body —
-        // probe for near-white ink specifically.
         let text_ink = buf
             .as_chunks::<4>()
             .0

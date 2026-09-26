@@ -26,7 +26,6 @@ impl Chart {
 
         let angle_step = std::f32::consts::TAU / n_axes as f32;
 
-        // Draw concentric grid polygons
         let grid_levels = 4;
         for level in 1..=grid_levels {
             let r = radius * (level as f32 / grid_levels as f32);
@@ -53,7 +52,6 @@ impl Chart {
             canvas.draw_path(&grid_path.detach(), &grid_paint);
         }
 
-        // Draw axis lines
         for i in 0..n_axes {
             let angle = -std::f32::consts::FRAC_PI_2 + i as f32 * angle_step;
             let px = cx + radius * angle.cos();
@@ -65,7 +63,6 @@ impl Chart {
             canvas.draw_line((cx, cy), (px, py), &axis_paint);
         }
 
-        // Draw axis labels
         let Some(font) = self.make_label_font() else {
             return Ok(());
         };
@@ -83,11 +80,6 @@ impl Chart {
             let mut label_paint = paint_from_hex(&self.label_color);
             label_paint.set_anti_alias(true);
             let label_w = measure_text_with_fallback(label, &font, &emoji_font, 0.0);
-            // Anchor by side — centring every label pushed the east/west ones
-            // out of the component box (measured: 389 ink pixels outside a
-            // 400x400 box, reaching 28px left and 45px right of it). Labels on
-            // the right start at the vertex, labels on the left end at it, and
-            // the result is clamped into the box as a backstop.
             let cos = angle.cos();
             let anchored = if cos > 0.15 {
                 px
@@ -101,10 +93,6 @@ impl Chart {
             draw_text_with_fallback(canvas, label, &font, &emoji_font, 0.0, lx, ly, &label_paint);
         }
 
-        // One scale for every series. Normalising each polygon by its own max
-        // made a [3, 2, 1, 2] series fill nearly the same area as a [10, 8, 6,
-        // 9] one, so overlaid series could not be compared at all — the single
-        // thing a radar chart exists to do.
         let global_max = self
             .radar_data
             .iter()
@@ -112,7 +100,6 @@ impl Chart {
             .fold(0.0_f64, f64::max)
             .max(0.001);
 
-        // Draw data polygons
         for (di, rd) in self.radar_data.iter().enumerate() {
             if rd.values.len() != n_axes {
                 continue;
@@ -135,14 +122,12 @@ impl Chart {
             }
             data_path.close();
 
-            // Fill
             let mut fill_paint = paint_from_hex(color_str);
             fill_paint.set_style(PaintStyle::Fill);
             fill_paint.set_alpha_f(0.3);
             fill_paint.set_anti_alias(true);
             canvas.draw_path(&data_path.snapshot(), &fill_paint);
 
-            // Stroke
             let mut stroke_paint = paint_from_hex(color_str);
             stroke_paint.set_style(PaintStyle::Stroke);
             stroke_paint.set_stroke_width(2.0);

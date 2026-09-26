@@ -1,48 +1,3 @@
-//! Cross-node references — `node("id", "prop")` — for the expression engine
-//! (issue #328).
-//!
-//! [`crate::expr`] parses `node("id", "prop")` and resolves it through
-//! [`crate::expr::Scope::node_prop`] at eval time; this module is what a
-//! [`Scope`](crate::expr::Scope) implementor calls to actually answer it.
-//! Two problems, kept deliberately separate:
-//!
-//! - **Ordering.** A `line` whose `x2` reads `node("badge_3", "tx")` must
-//!   see `badge_3`'s transform *at the same frame*, never the previous
-//!   one. That only holds if `badge_3` is resolved before `line` on every
-//!   frame — declaration order in the JSON gives no such guarantee. [`scan_node_refs`]
-//!   finds every reference a node's own expressions make; [`DepGraph::build`]
-//!   turns those into a dependency graph, topologically sorted once at load
-//!   (Kahn's algorithm) so a per-frame resolution loop that visits ids in
-//!   [`DepGraph::order`] never reads a value that hasn't been computed yet
-//!   for the current frame.
-//! - **Reading.** Once a node's per-frame state (its resolved
-//!   [`BoxLayout`], its animated transform, its text/glyph metrics if it has
-//!   any) exists, [`ResolvedNode::prop`] is the one place that maps a
-//!   `prop` string (`"x"`, `"tx"`, `"textWidth"`, `"glyph_x:3"`, ...) onto a
-//!   number. [`ResolvedFrame`] is the progressively-filled table a caller
-//!   builds while walking [`DepGraph::order`] — filled strictly in that
-//!   order, one node at a time, and never carried over from a previous
-//!   frame (a stale carry-over is exactly the one-frame-lag bug this module
-//!   exists to make impossible).
-//!
-//! # Why text metrics are a trait, not a direct call
-//!
-//! `rustmotion-core` doesn't know about `Text`/`GradientText` — those are
-//! defined in `rustmotion-components`, which depends on this crate, not the
-//! other way around. [`TextMetricsProvider`] is this module's half of that
-//! bridge, the same role [`crate::engine::paint_pass::PaintDispatcher`]
-//! already plays for painting: `rustmotion-components` provides the
-//! concrete implementation (downcasting a node's `Arc<dyn Any>` payload to
-//! its real component type), this module only calls it.
-//!
-//! # What this module does not do
-//!
-//! It does not decide *which* JSON fields carry expressions, does not parse
-//! or evaluate `Expr` itself (that's [`crate::expr`]), and does not run the
-//! per-frame render loop (that lives in the higher-level crate). It is the
-//! dependency graph plus the read side a caller's `Scope` impl and
-//! evaluation loop are built on top of.
-
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::engine::box_tree::{BoxKind, BoxNode};
@@ -50,29 +5,12 @@ use crate::engine::layout_pass::{BoxLayout, LayoutResult};
 use crate::engine::paint_pass::animated_transform;
 use crate::engine::renderer::GlyphMetric;
 
-// ─── Reference scanning ─────────────────────────────────────────────────────
-
-/// One `node("id", "prop")` occurrence found in an expression string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeRef {
     pub id: String,
     pub prop: String,
 }
 
-/// Find every `node("id", "prop")` call in `src` (a raw scenario JSON
-/// string value — typically an `"= ..."` expression, but this scans the
-/// literal text regardless of the `=` prefix).
-///
-/// Deliberately re-implements just the string-literal grammar
-/// `crates/rustmotion-core/src/expr/lexer.rs` already defines for `node(...)`
-/// arguments (double-quoted, `\"`/`\\` escapes) instead of depending on
-/// [`crate::expr::Expr`]'s internals: `Expr` exposes [`crate::expr::Expr::free_vars`]
-/// for `$name` references but deliberately not which node ids a `node(...)`
-/// call touches (see that module's doc comment) — adding an accessor for
-/// that would be reshaping a type this workstream must leave frozen. Building
-/// the dependency graph only needs to *find* candidate references, not
-/// evaluate anything, so a syntax-aware scan over the same two-string-literal
-/// shape is sufficient and keeps this module self-contained.
 pub fn scan_node_refs(src: &str) -> Vec<NodeRef> {
     let bytes = src.as_bytes();
     let mut out = Vec::new();
@@ -106,9 +44,6 @@ fn skip_ws(bytes: &[u8], mut i: usize) -> usize {
     i
 }
 
-/// Having just consumed the identifier `node`, try to parse `(` string `,`
-/// string `)` starting at `after_ident`. Returns the reference and the byte
-/// offset right after the closing `)` on success.
 fn try_parse_node_call(src: &str, after_ident: usize) -> Option<(NodeRef, usize)> {
     let bytes = src.as_bytes();
     let mut i = skip_ws(bytes, after_ident);
@@ -130,10 +65,6 @@ fn try_parse_node_call(src: &str, after_ident: usize) -> Option<(NodeRef, usize)
     Some((NodeRef { id, prop }, i + 1))
 }
 
-/// Scan a double-quoted string literal starting at `start` (which must be
-/// the opening `"`). Mirrors `expr::lexer::tokenize`'s string handling:
-/// `\"` and `\\` are the only recognised escapes, everything else copies
-/// through verbatim (full UTF-8, not just ASCII).
 fn scan_string_literal(src: &str, start: usize) -> Option<(String, usize)> {
     let bytes = src.as_bytes();
     if bytes.get(start) != Some(&b'"') {
@@ -162,71 +93,33 @@ fn scan_string_literal(src: &str, start: usize) -> Option<(String, usize)> {
     }
 }
 
-// ─── Dependency graph ───────────────────────────────────────────────────────
-
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum DepsError {
-    /// A dependency cycle, e.g. `A -> B -> A`: `A` references `B` and `B`
-    /// (transitively) references `A` back. `chain` names every node on the
-    /// cycle in reference order, starting and ending on the same id.
     #[error("node(\"...\") dependency cycle: {}", .chain.join(" -> "))]
     Cycle { chain: Vec<String> },
-    /// `referencing` calls `node("{target}", ...)` but no node in this
-    /// scene declares that `id` — and it isn't declared in any other scene
-    /// either (see [`DepsError::CrossScene`] for that case).
     #[error(
         "node \"{referencing}\" references unknown id \"{target}\" via node(\"{target}\", ...)"
     )]
     UnknownId { referencing: String, target: String },
-    /// `referencing` calls `node("{target}", ...)` where `target` is a real
-    /// id, but declared in a *different* scene. Rejected (`reference_cross_scene`):
-    /// scenes are independent render units, so a reference across that
-    /// boundary can never resolve to a real per-frame value.
     #[error(
         "node \"{referencing}\" references \"{target}\" from another scene \
          (reference_cross_scene: scenes are independent render units)"
     )]
     CrossScene { referencing: String, target: String },
-    /// Two nodes in the same scene declare the same `id`. A node's `id`
-    /// must be unique within its scene (issue #328's own first deliverable)
-    /// — without this check, `node("dup", "x")` would silently resolve to
-    /// whichever of the two happened to be inserted into a
-    /// [`ResolvedFrame`] last, which is exactly the kind of load-time-
-    /// silent ambiguity this workstream exists to reject instead of guess
-    /// at.
     #[error("duplicate node id \"{0}\" declared more than once in the same scene")]
     DuplicateId(String),
 }
 
-/// A scene's `node("id", ...)` dependency graph, topologically sorted once
-/// at load. See the module doc for why the order matters.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DepGraph {
     order: Vec<String>,
 }
 
 impl DepGraph {
-    /// Ids in dependency-first order: every id a node references appears
-    /// before that node itself. A node that makes no references of its
-    /// own — the common case, e.g. an orbiting badge nothing else depends
-    /// on for *its own* fields — can appear anywhere consistent with that
-    /// constraint; ties are broken by declaration order in the `nodes`
-    /// slice [`DepGraph::build`] was given, so the order is deterministic
-    /// across runs of the same scenario.
     pub fn order(&self) -> &[String] {
         &self.order
     }
 
-    /// Build and topologically sort the dependency graph for one scene.
-    ///
-    /// `nodes`: every id declared in this scene, paired with the
-    /// `node(...)` references its own expressions make. An id with no
-    /// references of its own still needs an entry (with an empty `Vec`) so
-    /// it appears in [`DepGraph::order`].
-    ///
-    /// `other_scene_ids`: every id declared in *any other* scene of the
-    /// same scenario — consulted only to tell a genuinely unknown id apart
-    /// from one that exists but crosses a scene boundary.
     pub fn build(
         nodes: &[(String, Vec<NodeRef>)],
         other_scene_ids: &HashSet<String>,
@@ -238,7 +131,6 @@ impl DepGraph {
             }
         }
 
-        // `dependents[x]` = nodes that reference `x` (must resolve after x).
         let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
         let mut indegree: HashMap<&str, usize> =
             nodes.iter().map(|(id, _)| (id.as_str(), 0)).collect();
@@ -265,8 +157,6 @@ impl DepGraph {
             }
         }
 
-        // Kahn's algorithm, seeded in declaration order for determinism
-        // when several ids have no dependencies of their own.
         let mut queue: VecDeque<&str> = nodes
             .iter()
             .map(|(id, _)| id.as_str())
@@ -302,12 +192,6 @@ impl DepGraph {
     }
 }
 
-/// Walk reference edges (`id -> the ids it references`) from the first
-/// residual (unresolved) node until one repeats, and return that repeated
-/// id's cycle as a chain (`A -> B -> A`). `residual` is guaranteed non-empty
-/// by the only caller, and every node still in it has at least one
-/// reference that is also in `residual` (that's *why* Kahn's algorithm
-/// could never resolve it), so this always terminates by finding a repeat.
 fn find_cycle_chain(residual: &[&str], nodes: &[(String, Vec<NodeRef>)]) -> Vec<String> {
     let deps: HashMap<&str, Vec<&str>> = nodes
         .iter()
@@ -337,46 +221,22 @@ fn find_cycle_chain(residual: &[&str], nodes: &[(String, Vec<NodeRef>)]) -> Vec<
                 current = n;
             }
             None => {
-                // Defensive: shouldn't happen for a genuine residual set,
-                // but never loop forever if it does.
                 return path.iter().map(|s| s.to_string()).collect();
             }
         }
     }
 }
 
-// ─── Reading a resolved node ────────────────────────────────────────────────
-
-/// Text/glyph measurements for one node, computed after `layout_pass` (its
-/// wrap decision needs the node's resolved content-box width). See
-/// [`TextMetricsProvider`].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TextMetrics {
-    /// Widest wrapped line's measured width, in px.
     pub text_width: f32,
     pub cap_height: f32,
-    /// Distance from the top of the em box to the top of the tallest
-    /// glyphs, in px (font metric, wrap-independent).
     pub ascender: f32,
-    /// Y offset of the first line's baseline, relative to the node's own
-    /// content-box top, in px.
     pub baseline: f32,
-    /// Every glyph across every wrapped line, in reading order, `x`
-    /// relative to the node's own content-box left edge (line-local
-    /// position plus that line's `text-align` offset — see
-    /// [`crate::engine::renderer::GlyphMetric`]).
     pub glyphs: Vec<GlyphMetric>,
 }
 
-/// Bridges `rustmotion-core` to the concrete component types (`Text`,
-/// `GradientText`, ...) that only `rustmotion-components` knows about — see
-/// the module doc's "Why text metrics are a trait" section.
 pub trait TextMetricsProvider {
-    /// `payload` is a node's [`BoxKind::Component`]/[`BoxKind::Ghost`]
-    /// inner value; `content_box_width` is that node's own resolved
-    /// content-box width (`BoxLayout::content_box().2`, post-`layout_pass`).
-    /// Returns `None` for a non-text-bearing component, or one this
-    /// provider doesn't (yet) implement.
     fn text_metrics(
         &self,
         payload: &(dyn std::any::Any + Send + Sync),
@@ -384,9 +244,6 @@ pub trait TextMetricsProvider {
     ) -> Option<TextMetrics>;
 }
 
-/// A [`TextMetricsProvider`] that never has an answer — for callers with no
-/// text-bearing nodes to resolve, or in tests that only exercise the
-/// geometry/transform families.
 pub struct NoTextMetrics;
 
 impl TextMetricsProvider for NoTextMetrics {
@@ -399,9 +256,6 @@ impl TextMetricsProvider for NoTextMetrics {
     }
 }
 
-/// One node's per-frame resolved state — everything [`ResolvedNode::prop`]
-/// needs to answer any of the four families in issue #328's deliverable
-/// table.
 #[derive(Debug, Clone, Copy, Default)]
 struct Transform {
     tx: f32,
@@ -419,10 +273,6 @@ pub struct ResolvedNode {
 }
 
 impl ResolvedNode {
-    /// Build directly from already-resolved parts — for a caller that
-    /// doesn't have a [`BoxNode`] on hand (e.g. a test, or a synthetic
-    /// node). [`snapshot_node`] is the usual way to get one from a real box
-    /// tree.
     pub fn new(
         layout: BoxLayout,
         transform: (f32, f32, f32, f32, f32),
@@ -442,12 +292,6 @@ impl ResolvedNode {
         }
     }
 
-    /// Resolve one `prop` string against this node's state. `None` means
-    /// "this node has no such property" (an unknown geometry/transform name,
-    /// or a text/glyph property on a node with no [`TextMetrics`], or an
-    /// out-of-range glyph index) — the caller's [`crate::expr::Scope::node_prop`]
-    /// turns that into [`crate::expr::ExprError::UnknownIdent`], same as any
-    /// other unresolved reference.
     pub fn prop(&self, prop: &str) -> Option<f64> {
         match prop {
             "x" => Some(self.layout.x as f64),
@@ -473,14 +317,6 @@ impl ResolvedNode {
     }
 }
 
-/// `glyph_x:<n>` / `glyph_cx:<n>` — the glyph family's index is encoded in
-/// the `prop` string itself (see the module doc: `node(...)`'s two
-/// arguments are string literals, never sub-expressions, so there is no
-/// third-argument call syntax to add without reshaping the frozen `expr`
-/// grammar). `n` is a fixed literal the author writes, e.g.
-/// `node("sentence", "glyph_x:7")` — consistent with issue #328's own
-/// worked example (a `?` detaching from a sentence the author wrote
-/// *without* its last character, so they already know the trailing index).
 fn glyph_prop(text: Option<&TextMetrics>, prop: &str) -> Option<f64> {
     let text = text?;
     if let Some(n) = prop.strip_prefix("glyph_x:") {
@@ -494,16 +330,6 @@ fn glyph_prop(text: Option<&TextMetrics>, prop: &str) -> Option<f64> {
     None
 }
 
-/// Snapshot one [`BoxNode`]'s current-frame state — its resolved
-/// [`BoxLayout`] (must already exist in `layout`, i.e. this runs after
-/// `layout_pass`), its animated transform (decomposed from `node.css`,
-/// already resolved for the current frame — see
-/// [`crate::engine::paint_pass::animated_transform`]'s doc), and, if
-/// `text_provider` recognises the node's component payload, its text/glyph
-/// metrics.
-///
-/// Returns `None` only when `node.id` has no entry in `layout` at all (the
-/// node was never laid out — e.g. it doesn't exist in this frame's tree).
 pub fn snapshot_node(
     node: &BoxNode,
     layout: &LayoutResult,
@@ -522,11 +348,6 @@ pub fn snapshot_node(
     Some(ResolvedNode::new(box_layout, transform, text))
 }
 
-/// A single frame's progressively-filled table of resolved nodes, keyed by
-/// author `id`. Built by inserting one node at a time in [`DepGraph::order`]
-/// — never in JSON/tree order, and never reused across frames (a fresh
-/// `ResolvedFrame` every frame is what makes "no one-frame lag" structural
-/// rather than a discipline the caller has to remember).
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedFrame {
     nodes: HashMap<String, ResolvedNode>,
@@ -537,30 +358,15 @@ impl ResolvedFrame {
         Self::default()
     }
 
-    /// Record `id`'s resolved state. Called once per id, in
-    /// [`DepGraph::order`] — by the time a later id's own expressions are
-    /// evaluated (and therefore call [`Self::node_prop`]), every id it may
-    /// legally reference (per [`DepGraph::build`]'s cycle/cross-scene
-    /// checks) is already present.
     pub fn insert(&mut self, id: impl Into<String>, node: ResolvedNode) {
         self.nodes.insert(id.into(), node);
     }
 
-    /// Resolve `node("id", "prop")`. `None` if `id` hasn't been inserted
-    /// yet (out-of-order use — a caller respecting [`DepGraph::order`]
-    /// never triggers this for a legal reference) or `prop` doesn't apply
-    /// to that node.
     pub fn node_prop(&self, id: &str, prop: &str) -> Option<f64> {
         self.nodes.get(id)?.prop(prop)
     }
 }
 
-/// Minimal [`crate::expr::Scope`] adapter over a [`ResolvedFrame`] — answers
-/// `node_prop` only, `var` always `None`. A real per-frame `Scope`
-/// (combining `$t`/`$W`/config variables with node references) implements
-/// the trait itself and delegates its own `node_prop` to
-/// [`ResolvedFrame::node_prop`]; this adapter exists for tests and any
-/// caller with node references and nothing else to resolve.
 pub struct FrameScope<'a>(pub &'a ResolvedFrame);
 
 impl crate::expr::Scope for FrameScope<'_> {
@@ -672,8 +478,6 @@ mod graph_tests {
 
     #[test]
     fn a_dependent_resolves_after_its_dependency_even_when_declared_first() {
-        // `line` is declared before `badge` in the JSON, but depends on it —
-        // the graph must still put `badge` first.
         let n = nodes(&[("line", &[("badge", "tx")]), ("badge", &[])]);
         let g = DepGraph::build(&n, &HashSet::new()).unwrap();
         let pos = |id: &str| g.order().iter().position(|x| x == id).unwrap();
@@ -825,10 +629,6 @@ mod resolution_tests {
         assert_eq!(frame.node_prop("chip", "ty"), Some(-3.0));
         assert_eq!(frame.node_prop("chip", "scale"), Some(1.5));
         assert_eq!(frame.node_prop("chip", "rotation"), Some(45.0));
-        // `0.8` isn't exactly representable in binary floating point, so the
-        // f32 input promoted to f64 and an f64 literal `0.8` round
-        // differently in their last bit — compare against the *same*
-        // f32->f64 promotion rather than a fresh f64 literal.
         assert_eq!(frame.node_prop("chip", "opacity"), Some(0.8_f32 as f64));
     }
 
@@ -906,26 +706,11 @@ mod resolution_tests {
             ),
         );
         let scope = FrameScope(&frame);
-        // The acceptance example from issue #328: `x2 = node("chip3", "cx") +
-        // node("chip3", "tx")`.
         let expr = Expr::parse(r#"= node("chip3", "cx") + node("chip3", "tx")"#).unwrap();
         let got = expr.eval(&scope).unwrap();
         assert_eq!(got, 520.0 + 77.0);
     }
 
-    // ─── The trap this workstream exists to avoid: topological, not tree,
-    // order (issue #328's own acceptance bar) ──────────────────────────────
-
-    /// Builds a two-node scene ("badge" orbits, "line" reads
-    /// `node("badge", "tx"|"ty")`) across several frames, resolving strictly
-    /// in [`DepGraph::order`] every frame (a *fresh* [`ResolvedFrame`] each
-    /// time — no frame-to-frame carry-over). At every sampled frame, the
-    /// value `line`'s expression reads back must equal `badge`'s own
-    /// transform *at that same frame*, not the previous one. A resolver
-    /// that read `badge` in tree/declaration order instead of dependency
-    /// order (or reused a stale `ResolvedFrame` across frames) would report
-    /// last frame's `badge` position here — this test fails against that
-    /// implementation and passes against this module's.
     #[test]
     fn orbiting_node_reference_tracks_every_frame_with_no_one_frame_lag() {
         let n = vec![
@@ -953,8 +738,6 @@ mod resolution_tests {
         };
 
         for angle in [0.0f32, 37.0, 90.0, 181.0, 269.5, 350.0] {
-            // A brand-new frame every iteration: nothing here can leak a
-            // value from the previous angle.
             let mut frame = ResolvedFrame::new();
             for id in graph.order() {
                 match id.as_str() {
@@ -969,9 +752,6 @@ mod resolution_tests {
                         );
                     }
                     "line" => {
-                        // `line`'s own endpoint is itself an expression —
-                        // evaluated here, after `badge` (earlier in
-                        // topological order) is already in `frame`.
                         let scope = FrameScope(&frame);
                         let x2 = Expr::parse(r#"= node("badge", "tx")"#)
                             .unwrap()
@@ -1007,18 +787,9 @@ mod resolution_tests {
         }
     }
 
-    /// Same scenario, but resolved in *declaration* (tree) order instead of
-    /// [`DepGraph::order`] — `line` is declared first in this scene, so a
-    /// caller that (incorrectly) walked the JSON in document order would
-    /// try to resolve `line`'s `node("badge", ...)` reference before
-    /// `badge` has ever been inserted into `frame`. That must fail loudly
-    /// (`ExprError::UnknownIdent`), not silently reuse whatever `badge`
-    /// last resolved to — proving there is no hidden fallback that would
-    /// mask the one-frame-lag bug the topological order exists to prevent.
     #[test]
     fn resolving_in_declaration_order_instead_of_topological_order_fails_loudly() {
         let mut frame = ResolvedFrame::new();
-        // Declaration order: "line" first, "badge" second — the wrong order.
         let scope = FrameScope(&frame);
         let err = Expr::parse(r#"= node("badge", "tx")"#)
             .unwrap()
@@ -1026,8 +797,6 @@ mod resolution_tests {
             .unwrap_err();
         assert!(matches!(err, crate::expr::ExprError::UnknownIdent(_)));
 
-        // Only after inserting "badge" (i.e. respecting the dependency
-        // order) does the same expression resolve.
         frame.insert(
             "badge",
             ResolvedNode::new(

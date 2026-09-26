@@ -20,8 +20,6 @@ mod radial;
 mod scatter;
 mod waterfall;
 
-/// The engine's default series palette. `pub` so the studio can prefill an
-/// empty `colors` list with what the canvas actually renders.
 pub const DEFAULT_PALETTE: &[&str] = &[
     "#3B82F6", "#EF4444", "#22C55E", "#F59E0B", "#8B5CF6", "#EC4899", "#06B6D4", "#F97316",
 ];
@@ -113,38 +111,31 @@ pub struct Chart {
     #[serde(default)]
     pub colors: Option<Vec<String>>,
 
-    // Donut-specific
     #[serde(default = "default_inner_radius")]
     pub inner_radius: f64,
 
-    // Area-specific
     #[serde(default = "default_fill_opacity")]
     pub fill_opacity: f32,
     #[serde(default)]
     pub smooth: bool,
 
-    // Stacked bar
     #[serde(default)]
     pub categories: Vec<String>,
     #[serde(default)]
     pub series: Vec<ChartSeries>,
 
-    // Radar
     #[serde(default)]
     pub axes: Vec<String>,
     #[serde(default)]
     pub radar_data: Vec<RadarData>,
 
-    // Scatter
     #[serde(default)]
     pub points: Vec<ScatterPoint>,
 
-    // Funnel direction
     /// Direction for funnel chart: "vertical" (default) or "horizontal".
     #[serde(default)]
     pub direction: Option<ChartDirection>,
 
-    // Axes, grid, labels
     #[serde(default)]
     pub show_grid: bool,
     #[serde(default)]
@@ -218,14 +209,9 @@ impl Chart {
         if !self.animated {
             return 1.0;
         }
-        // Ramp measured from `start_at`, not from scene time zero — matches
-        // `Counter::ramp_progress`. A chart delayed with `start_at` used to
-        // read raw scene time, so it was already fully drawn on the very
-        // first frame it became visible.
         let start = self.timing.start_at.unwrap_or(0.0);
         let elapsed = (time - start).max(0.0);
         let p = (elapsed / self.animation_duration).clamp(0.0, 1.0) as f32;
-        // ease_out_cubic
         1.0 - (1.0 - p).powi(3)
     }
 
@@ -295,7 +281,6 @@ impl Chart {
         }
     }
 
-    /// Compute margins for axes/labels area.
     pub(super) fn chart_margins(&self) -> (f32, f32, f32, f32) {
         let left = if self.show_y_labels {
             self.label_font_size * 3.5
@@ -307,7 +292,6 @@ impl Chart {
         } else {
             0.0
         };
-        // top, right, bottom, left
         (8.0, 8.0, bottom + 8.0, left + 8.0)
     }
 
@@ -370,11 +354,6 @@ mod tests {
 
     #[test]
     fn progress_ramp_starts_at_start_at_not_at_scene_time_zero() {
-        // #3's exact repro: a chart delayed with `start_at: 2.0` and
-        // `animation_duration: 1.5` was already fully drawn (progress 1.0)
-        // on the very first frame it became visible, because the ramp read
-        // raw scene time instead of time-since-`start_at` — the same defect
-        // `Counter::ramp_progress` was fixed for.
         let mut chart = base_chart();
         chart.animation_duration = 1.5;
         chart.timing = TimingConfig {

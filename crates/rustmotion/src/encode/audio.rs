@@ -10,23 +10,10 @@ use symphonia::core::probe::Hint;
 use crate::error::RustmotionError;
 use crate::schema::AudioTrack;
 
-/// Sample rate `mix_audio_tracks` resamples every track to and sizes its PCM
-/// output buffer from. Both downstream muxers declare this exact rate as
-/// fixed metadata rather than reading it from the PCM itself: the ffmpeg
-/// path (`crates/rustmotion/src/encode/video/ffmpeg.rs`, PCM input `-ar`)
-/// and the minimp4 path (`crates/rustmotion/src/encode/video/mux.rs`,
-/// `init_audio(_, 44100, _)`). A mismatch here does not fail loudly — it
-/// plays back at the wrong speed and pitch, because the container reports
-/// the declared rate while decoding PCM produced at a different one
-/// (constat #2: was 48000 here vs. 44100 in both muxers, an 8.8% duration
-/// drift and a half-tone pitch shift on every video with audio). `mux.rs`
-/// is outside this fix's ownership boundary and still hardcodes `44100` as
-/// a literal — keep it in sync with this constant if either ever changes.
 pub const OUTPUT_SAMPLE_RATE: u32 = 44_100;
 const TARGET_SAMPLE_RATE: u32 = OUTPUT_SAMPLE_RATE;
 const TARGET_CHANNELS: u32 = 2;
 
-/// Decode an audio file into PCM i16 samples (stereo, 44100Hz, interleaved)
 pub(crate) fn decode_audio_file(path: &str) -> Result<(Vec<f32>, u32, u32)> {
     let file = File::open(path).map_err(|e| RustmotionError::AudioOpen {
         path: path.to_string(),
@@ -116,17 +103,6 @@ pub(crate) fn decode_audio_file(path: &str) -> Result<(Vec<f32>, u32, u32)> {
     Ok((all_samples, sample_rate, channels))
 }
 
-/// `decode_audio_file`'s `(sample_rate, channels)` return value: the actual
-/// spec of the first packet that decoded, when there was one — that's what
-/// `all_samples` was interleaved from — falling back to the container
-/// header's own declaration only when nothing ever decoded at all. Some
-/// demuxers leave the header fields absent or, for formats whose per-frame
-/// syntax can encode a channel count the container-level probe cannot see
-/// (e.g. an ADTS/AAC stream with an implicit `channel_configuration`),
-/// disagreeing with what the codec itself produces — trusting the header
-/// unconditionally there silently mis-sizes every downstream stereo/mono
-/// interpretation of `all_samples`. `44100`/`2` is the last-resort default,
-/// unchanged from before this function tracked a decoded spec at all.
 fn resolve_decoded_spec(
     decoded_spec: Option<(u32, u32)>,
     header_sample_rate: Option<u32>,
@@ -138,8 +114,6 @@ fn resolve_decoded_spec(
     ))
 }
 
-/// Duration, sample rate and channel count of a local audio file — the
-/// `rustmotion info` answer to "how long is this audio track?".
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AudioProbe {
     pub duration_secs: f64,
@@ -147,15 +121,6 @@ pub struct AudioProbe {
     pub channels: u32,
 }
 
-/// Probes a local audio file's duration/sample-rate/channel-count by calling
-/// [`decode_audio_file`] — the *exact* decode `mix_audio_tracks_segment`
-/// performs at render time, not a second, independently-drifting decode path
-/// (e.g. reading a container's declared duration without decoding, which can
-/// disagree with what the decoder actually produces for a file with an
-/// imprecise header). The cost is a full decode of the file, same as at
-/// render time; there is no cheaper header-only path in this codebase for
-/// audio (unlike image dimensions, where the underlying decoder does expose
-/// one — see `rustmotion_core::engine::renderer::probe_image_dimensions`).
 pub fn probe_audio_metadata(path: &str) -> Result<AudioProbe> {
     let (samples, sample_rate, channels) = decode_audio_file(path)?;
     let channels = channels.max(1);
@@ -168,36 +133,10 @@ pub fn probe_audio_metadata(path: &str) -> Result<AudioProbe> {
     })
 }
 
-/// Mix multiple audio tracks into a single PCM i16 buffer for minimp4.
-/// Output: interleaved i16, stereo, 44100Hz.
-///
-/// Equivalent to [`mix_audio_tracks_segment`] with `segment_start = 0.0` and
-/// `segment_duration = total_duration` — i.e. "the whole scenario is the
-/// segment". Kept as its own entry point for API stability (existing
-/// callers, this module's own unit test).
 pub fn mix_audio_tracks(tracks: &[AudioTrack], total_duration: f64) -> Result<Option<Vec<u8>>> {
     mix_audio_tracks_segment(tracks, total_duration, 0.0, total_duration)
 }
 
-/// Mix multiple audio tracks, but only materialize the samples that fall
-/// inside `[segment_start, segment_start + segment_duration)` of the
-/// *scenario's* own timeline — i.e. sample 0 of the returned buffer is
-/// `segment_start` seconds into the scenario, not into each track.
-///
-/// This is what makes a frame-range render (`rustmotion render --frames
-/// a-b`) carry the audio that actually plays at that point in the full
-/// scenario instead of the audio from t=0: without it, every segment's mux
-/// step called the same `mix_audio_tracks(tracks, segment_duration)` that
-/// the whole-video path uses, which always places sample 0 of every track
-/// at sample 0 of the output — correct for a full render, silently wrong
-/// for a segment starting anywhere past frame 0.
-///
-/// `scenario_total_duration` is deliberately a separate parameter from
-/// `segment_duration`: a track with no explicit `end` plays until the end
-/// of the *scenario*, not the end of this segment. Bounding it by
-/// `segment_duration` instead would make every segment boundary look like
-/// the track's own natural end and trigger its `fade_out` early, once per
-/// segment, instead of once at the point it actually ends.
 pub fn mix_audio_tracks_segment(
     tracks: &[AudioTrack],
     scenario_total_duration: f64,
@@ -211,14 +150,9 @@ pub fn mix_audio_tracks_segment(
     let segment_samples = (segment_duration * TARGET_SAMPLE_RATE as f64).ceil() as usize;
     let mut mix_buffer = vec![0.0f32; segment_samples * TARGET_CHANNELS as usize];
 
-    // Absolute sample index (interleaved) of the segment's first sample
-    // within the scenario's own timeline — the anchor every track's
-    // scenario-relative `start`/`end` is translated against below.
     let segment_offset_samples =
         (segment_start * TARGET_SAMPLE_RATE as f64).round() as i64 * TARGET_CHANNELS as i64;
 
-    // Bound used when a track has no explicit `end`, and a clamp on an
-    // explicit one: the scenario's own length, never this segment's.
     let scenario_samples = (scenario_total_duration * TARGET_SAMPLE_RATE as f64).ceil() as usize
         * TARGET_CHANNELS as usize;
 
@@ -227,18 +161,14 @@ pub fn mix_audio_tracks_segment(
 
         let (samples, src_rate, src_channels) = decode_audio_file(&track.src)?;
 
-        // Convert to stereo if needed
         let stereo_samples = to_stereo(&samples, src_channels);
 
-        // Resample if needed
         let resampled = if src_rate != TARGET_SAMPLE_RATE {
             resample(&stereo_samples, src_rate, TARGET_SAMPLE_RATE)
         } else {
             stereo_samples
         };
 
-        // Track start/end, in absolute samples on the *scenario* timeline
-        // (not yet translated into this segment's buffer).
         let track_start_abs =
             (track.start * TARGET_SAMPLE_RATE as f64) as usize * TARGET_CHANNELS as usize;
         let track_end_abs = track
@@ -247,29 +177,19 @@ pub fn mix_audio_tracks_segment(
             .unwrap_or(scenario_samples)
             .min(scenario_samples);
 
-        // How much of the track is ever audible in the scenario, regardless
-        // of which segment we are materializing right now. Fades are
-        // computed against this, not against the segment's own bounds.
         let src_len = resampled.len();
         let available = track_end_abs.saturating_sub(track_start_abs);
         let copy_len = src_len.min(available);
         let total_frames = copy_len / TARGET_CHANNELS as usize;
 
         for (i, &src_sample) in resampled.iter().enumerate().take(copy_len) {
-            // Absolute position of this sample on the scenario timeline,
-            // translated into this segment's own buffer coordinates.
             let abs_idx = track_start_abs as i64 + i as i64;
             let dst_idx = abs_idx - segment_offset_samples;
             if dst_idx < 0 {
-                // Before this segment's window — earlier segments (or a
-                // future re-render of an earlier range) own this sample.
                 continue;
             }
             let dst_idx = dst_idx as usize;
             if dst_idx >= mix_buffer.len() {
-                // Past this segment's window. `abs_idx` only increases as
-                // `i` does, so nothing later in this track falls inside
-                // this segment either.
                 break;
             }
 
@@ -285,7 +205,6 @@ pub fn mix_audio_tracks_segment(
         }
     }
 
-    // Convert f32 to i16 PCM (interleaved, little-endian bytes)
     let mut pcm_bytes = Vec::with_capacity(mix_buffer.len() * 2);
     for &sample in &mix_buffer {
         let clamped = sample.clamp(-1.0, 1.0);
@@ -296,14 +215,6 @@ pub fn mix_audio_tracks_segment(
     Ok(Some(pcm_bytes))
 }
 
-/// The gain applied to a track `t_in_track` seconds after its own first sample,
-/// given that `audible` seconds of it are ever heard.
-///
-/// Expressed in seconds rather than sample indices so the mixer (which works at
-/// `OUTPUT_SAMPLE_RATE` on resampled audio) and the analysis (which works at the
-/// file's own rate on the decoded source) can share it. They must: a waveform
-/// that draws an envelope the mix does not produce is the component lying about
-/// the very track it claims to react to.
 pub(crate) fn track_gain_at(
     track: &crate::schema::AudioTrack,
     t_in_track: f64,
@@ -312,7 +223,6 @@ pub(crate) fn track_gain_at(
     let mut gain = if track.volume_keyframes.is_empty() {
         track.volume
     } else {
-        // Keyframe times are on the *scenario* timeline, not the track's.
         interpolate_volume_keyframes(&track.volume_keyframes, track.start + t_in_track)
     };
 
@@ -330,7 +240,6 @@ pub(crate) fn track_gain_at(
     gain
 }
 
-/// Interpolate volume at a given time using volume keyframes with easing
 fn interpolate_volume_keyframes(keyframes: &[crate::schema::VolumeKeyframe], time: f64) -> f32 {
     if keyframes.is_empty() {
         return 1.0;
@@ -369,7 +278,6 @@ fn to_stereo(samples: &[f32], channels: u32) -> Vec<f32> {
         }
         2 => samples.to_vec(),
         n => {
-            // Downmix to stereo: take first two channels
             let mut stereo = Vec::with_capacity(samples.len() / n as usize * 2);
             for chunk in samples.chunks(n as usize) {
                 stereo.push(chunk.first().copied().unwrap_or(0.0));
@@ -406,12 +314,10 @@ fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
     let mut resampler = match SincFixedIn::<f64>::new(ratio, 2.0, params, chunk_size, channels) {
         Ok(r) => r,
         Err(_) => {
-            // Fallback to linear interpolation if rubato fails to initialize
             return resample_linear(samples, src_rate, dst_rate);
         }
     };
 
-    // Deinterleave samples into per-channel vectors
     let mut channel_data: Vec<Vec<f64>> = (0..channels)
         .map(|_| Vec::with_capacity(src_frames))
         .collect();
@@ -421,7 +327,6 @@ fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
 
     let mut output_channels: Vec<Vec<f64>> = vec![Vec::new(); channels];
 
-    // Process in chunks
     let mut pos = 0;
     while pos + chunk_size <= src_frames {
         let chunk: Vec<Vec<f64>> = channel_data
@@ -440,7 +345,6 @@ fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
         pos += chunk_size;
     }
 
-    // Process remaining samples
     if pos < src_frames {
         let remaining = src_frames - pos;
         let chunk: Vec<Vec<f64>> = channel_data
@@ -461,7 +365,6 @@ fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
         }
     }
 
-    // Re-interleave
     let out_frames = output_channels[0].len();
     let mut result = Vec::with_capacity(out_frames * channels);
     for i in 0..out_frames {
@@ -499,32 +402,6 @@ fn resample_linear(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
     result
 }
 
-// ─── Synthesised soundtrack (issue #331) ───────────────────────────────────────
-//
-// `rustmotion-core::audio` renders a declarative score into an offline f32
-// buffer with no audio file involved. The bridge here writes that buffer to
-// a cached WAV file and appends it to `ResolvedScenario::audio` as an
-// ordinary `AudioTrack` — from that point on it is indistinguishable from a
-// file a user actually supplied, and flows through `mix_audio_tracks_segment`
-// above (resampling, `--frames a-b` segment windowing, the final mux)
-// completely unmodified. This module joins that existing pipeline; it does
-// not replace any part of it.
-
-/// Cache key for a synthesised score's rendered WAV: a hash of its JSON
-/// representation plus the resolved `bpm`/`beat_offset`/duration it was
-/// rendered against. Mirrors `video_audio.rs`'s own cache-by-hash
-/// convention for its embedded-video-audio extraction.
-///
-/// `AudioConfig`/`Score`/`Voice` hold `f32`/`f64` fields and so cannot
-/// derive `Hash` directly; this goes through `serde_json::to_string`
-/// instead, re-keying `voices` (a `HashMap`, whose field order —
-/// and so its JSON string — would otherwise vary per process) through a
-/// `BTreeMap` first, so the same score hashes to the same path both within
-/// a run and across separate ones. Even if it didn't: a hash collision
-/// here is only ever a cache *miss* (a harmless re-render) or, in
-/// principle, a cache hit on the wrong content — the samples
-/// `rustmotion_core::audio::render` produces never depend on this key at
-/// all (see its doc), only on `cfg`/`ctx`/`duration_secs` themselves.
 fn synth_cache_path(
     cfg: &crate::schema::AudioConfig,
     ctx: &rustmotion_core::schema::time::TimeCtx,
@@ -534,13 +411,6 @@ fn synth_cache_path(
     use std::hash::{Hash, Hasher};
 
     let mut hasher = DefaultHasher::new();
-    // `Score::voices` is a `HashMap`, whose iteration order — and so
-    // `serde_json::to_string`'s field order — varies per process (std's
-    // default hasher is randomly seeded). Hashing that string directly
-    // would turn every fresh `rustmotion` invocation into a cache miss for
-    // the *identical* score. Re-keying through a `BTreeMap` first fixes the
-    // order deterministically, so the same score hashes to the same path
-    // both within a run and across separate ones.
     let score = cfg.as_score();
     let sorted_voices: std::collections::BTreeMap<_, _> = score.voices.iter().collect();
     if let Ok(json) = serde_json::to_string(&sorted_voices) {
@@ -559,10 +429,6 @@ fn synth_cache_path(
     std::env::temp_dir().join(format!("rustmotion_synth_{:016x}.wav", hasher.finish()))
 }
 
-/// Writes a canonical PCM WAV (16-bit, little-endian, no extension chunks) —
-/// the same header shape this module's own test fixtures already use, just
-/// as production code instead of a test helper. `symphonia`'s WAV demuxer
-/// (already exercised by [`decode_audio_file`]) reads this back byte-exact.
 fn write_wav_pcm16(
     path: &std::path::Path,
     samples: &[i16],
@@ -580,7 +446,7 @@ fn write_wav_pcm16(
     buf.extend_from_slice(b"WAVE");
     buf.extend_from_slice(b"fmt ");
     buf.extend_from_slice(&16u32.to_le_bytes());
-    buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    buf.extend_from_slice(&1u16.to_le_bytes());
     buf.extend_from_slice(&channels.to_le_bytes());
     buf.extend_from_slice(&sample_rate.to_le_bytes());
     buf.extend_from_slice(&byte_rate.to_le_bytes());
@@ -594,20 +460,6 @@ fn write_wav_pcm16(
     std::fs::write(path, &buf)
 }
 
-/// Renders `cfg`'s synthesised score (issue #331's `voices`/`score`/
-/// `master`) and appends it to `resolved.audio` as a plain [`AudioTrack`],
-/// so every downstream consumer — the resampler, `--frames a-b` segment
-/// windowing, the final mux — treats it exactly like a user-supplied file.
-/// A no-op when `cfg.has_synth()` is `false` (an object-form `audio` used
-/// only to carry `tracks`) or the scenario has zero duration.
-///
-/// `scenario_bpm`/`scenario_beat_offset` are the scenario's own grid,
-/// captured by the caller (`crate::loader`) before `include::resolve_includes`
-/// consumes the `Scenario` they came from; `cfg.bpm`/`cfg.beat_offset`
-/// override them when set. Sharing the scenario's real grid by default —
-/// not duplicating it — is deliverable #1's whole point: a score whose
-/// `every`/`from`/`to` resolve against the *same* `bpm`/`beat_offset` as
-/// `Scene::at` is what puts a kick on the same instant as a cut.
 pub fn synthesize_score_into_track(
     resolved: &mut crate::schema::ResolvedScenario,
     cfg: &crate::schema::AudioConfig,
@@ -661,29 +513,10 @@ pub fn synthesize_score_into_track(
     Ok(())
 }
 
-// ─── Unit tests ───────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ── decode_audio_file must trust the decoded spec, not the header ────────
-    //
-    // Reproducing the exact divergence through a real file needs a decoder
-    // whose *decoded* output can genuinely disagree with what the container
-    // probed ahead of time. Tracing one concrete case where this happens in
-    // the wild — `symphonia-codec-aac`'s ADTS reader leaving `codec_params.channels`
-    // `None` when `channel_configuration == 0` — into `AacDecoder::try_new`
-    // (symphonia-codec-aac 0.5.5, `aac/mod.rs`) shows that without an
-    // `extra_data`/channel-layout fallback it returns a hard
-    // `unsupported_error` instead of ever reaching a decoded packet: this
-    // crate's enabled `symphonia` features (`mp3, wav, ogg, flac, aac`, no
-    // `isomp4`) never populate that fallback for a bare ADTS stream. So this
-    // exact repro surfaces as a loud decode failure, not silent corruption —
-    // a real fixture can't exercise the discard/trust distinction at all.
-    // `resolve_decoded_spec` is exactly that distinction pulled out as a
-    // pure decision, tested directly with the divergence a real file could
-    // produce for a different codec/container pairing.
     #[test]
     fn resolve_decoded_spec_prefers_the_decoded_packets_own_spec_over_the_header() {
         let decoded = Some((48_000, 1));
@@ -710,9 +543,6 @@ mod tests {
         assert_eq!(resolve_decoded_spec(None, None, None), (44_100, 2));
     }
 
-    /// Write a minimal, hand-rolled canonical PCM WAV file (16-bit, mono) —
-    /// no ffmpeg and no extra crate needed, `symphonia`'s built-in WAV demuxer
-    /// decodes this directly.
     fn write_minimal_wav(path: &std::path::Path, sample_rate: u32, num_samples: u32) {
         let bits_per_sample: u16 = 16;
         let num_channels: u16 = 1;
@@ -726,7 +556,7 @@ mod tests {
         buf.extend_from_slice(b"WAVE");
         buf.extend_from_slice(b"fmt ");
         buf.extend_from_slice(&16u32.to_le_bytes());
-        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&1u16.to_le_bytes());
         buf.extend_from_slice(&num_channels.to_le_bytes());
         buf.extend_from_slice(&sample_rate.to_le_bytes());
         buf.extend_from_slice(&byte_rate.to_le_bytes());
@@ -734,24 +564,11 @@ mod tests {
         buf.extend_from_slice(&bits_per_sample.to_le_bytes());
         buf.extend_from_slice(b"data");
         buf.extend_from_slice(&data_size.to_le_bytes());
-        // Silence is a fine fixture: this test exercises PCM buffer sizing,
-        // not audio content.
         buf.extend(std::iter::repeat_n(0u8, data_size as usize));
 
         std::fs::write(path, &buf).expect("write fixture wav");
     }
 
-    /// Constat #2: `mix_audio_tracks` resamples to `TARGET_SAMPLE_RATE` and
-    /// sizes its output buffer from it, but both downstream muxers declare a
-    /// *different*, hardcoded rate as the PCM's metadata:
-    /// `crates/rustmotion/src/encode/video/ffmpeg.rs` ("-ar 44100") and
-    /// `crates/rustmotion/src/encode/video/mux.rs` (`init_audio(_, 44100,
-    /// _)`). A mismatch plays the mixed track back at the wrong speed and
-    /// desyncs it from the video (measured: +8.8% duration drift, pitch
-    /// shifted down a half-tone). This test ties the mixer's output size
-    /// directly to `TARGET_SAMPLE_RATE` so a regression back to a rate the
-    /// muxers don't expect fails loudly here instead of silently at
-    /// playback.
     #[test]
     fn mixed_pcm_is_sized_for_the_rate_both_muxers_declare() {
         assert_eq!(
@@ -769,8 +586,6 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        // Source at a rate different from the target, to also exercise the
-        // resampler rather than short-circuiting on a same-rate copy.
         write_minimal_wav(&wav_path, 22_050, 22_050);
 
         let track = AudioTrack {
@@ -790,7 +605,7 @@ mod tests {
 
         let expected_len = (total_duration * TARGET_SAMPLE_RATE as f64).ceil() as usize
             * TARGET_CHANNELS as usize
-            * 2; // i16 = 2 bytes/sample
+            * 2;
         assert_eq!(
             pcm.len(),
             expected_len,
@@ -802,11 +617,6 @@ mod tests {
         let _ = std::fs::remove_file(&wav_path);
     }
 
-    /// Write a mono PCM WAV with deterministic, non-silent content:
-    /// `sample[i] = ((i % 2000) - 1000) * 30`. Unlike `write_minimal_wav`'s
-    /// silence, an offset applied to this content is detectable — silence
-    /// shifted by any amount is still silence, which would make a
-    /// byte-equality check pass trivially even with a broken offset.
     fn write_tone_wav(path: &std::path::Path, sample_rate: u32, num_samples: u32) {
         let bits_per_sample: u16 = 16;
         let num_channels: u16 = 1;
@@ -820,7 +630,7 @@ mod tests {
         buf.extend_from_slice(b"WAVE");
         buf.extend_from_slice(b"fmt ");
         buf.extend_from_slice(&16u32.to_le_bytes());
-        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&1u16.to_le_bytes());
         buf.extend_from_slice(&num_channels.to_le_bytes());
         buf.extend_from_slice(&sample_rate.to_le_bytes());
         buf.extend_from_slice(&byte_rate.to_le_bytes());
@@ -836,19 +646,6 @@ mod tests {
         std::fs::write(path, &buf).expect("write fixture wav");
     }
 
-    /// The core proof of the frame-range audio fix (brief's constat #2): a
-    /// segment starting partway through the scenario must carry the audio
-    /// that actually plays at that point, not audio restarted from t=0.
-    ///
-    /// Mixing one 2.0s track for the whole scenario in a single call must
-    /// produce byte-identical PCM to mixing the *same* track in three
-    /// independent segment calls (0.7s + 0.7s + 0.6s) and concatenating the
-    /// results — each boundary lands on a whole sample count at 44100Hz
-    /// (30870 / 30870 / 26460, summing exactly to 88200), so nothing here
-    /// can hide behind rounding. `fade_in`/`fade_out` are set on the track
-    /// specifically to also prove fades key off the *scenario*'s bound, not
-    /// each segment's own edges (a segment boundary must never look like
-    /// the track's natural end and trigger an early fade-out).
     #[test]
     fn segment_mixing_concatenates_to_exactly_the_whole_scenario_mix() {
         let sample_rate = TARGET_SAMPLE_RATE;
@@ -901,8 +698,6 @@ mod tests {
              offset (the frame-range bug this function exists to close)"
         );
 
-        // The equality above is only meaningful if the fixture is not
-        // silent — otherwise it would hold trivially regardless of offsets.
         assert!(
             whole.iter().any(|&b| b != 0),
             "fixture must contain non-silent audio or the byte-equality check above proves nothing"
@@ -911,11 +706,6 @@ mod tests {
         let _ = std::fs::remove_file(&wav_path);
     }
 
-    /// A track's explicit `end` is scenario-relative. A segment sitting
-    /// entirely after that `end` must be silent — proving `track_end_abs`
-    /// clamps to the *scenario* bound (needed so a track with no `end` at
-    /// all keeps playing across segment boundaries) without also letting a
-    /// track that DOES have an end ignore it past its own segment.
     #[test]
     fn segment_mix_silences_a_track_after_its_own_explicit_end() {
         let sample_rate = TARGET_SAMPLE_RATE;
@@ -943,7 +733,6 @@ mod tests {
         };
         let tracks = [track];
 
-        // Segment [1.0, 2.0) sits entirely after the track's own end.
         let seg = mix_audio_tracks_segment(&tracks, scenario_duration, 1.0, 1.0)
             .expect("mix must succeed")
             .expect("must return Some(pcm)");
@@ -955,20 +744,6 @@ mod tests {
         let _ = std::fs::remove_file(&wav_path);
     }
 
-    /// Reproduces the brief's exact bug shape, quantified. Before
-    /// `mix_audio_tracks_segment` existed, `mux_h264_to_mp4` /
-    /// `encode_with_ffmpeg_hw` had no offset to give the mixer at all —
-    /// every segment's mux step could only call `mix_audio_tracks(tracks,
-    /// segment_duration)`, which is exactly `mix_audio_tracks_segment`
-    /// with an implicit `segment_start = 0.0`. For a second segment that
-    /// actually starts at t=0.7s in the scenario, that call mixes the
-    /// track as if the *segment itself* were the whole timeline starting
-    /// at 0 — i.e. "a segment starting at frame 300 would receive the
-    /// audio from the start of the scenario" (the brief's own framing).
-    /// This test calls the old, still-present, offset-less
-    /// `mix_audio_tracks` the way that old mux code path would have, and
-    /// shows — with an actual byte-difference count, not just "it's
-    /// different" — how far that is from the correct windowed segment.
     #[test]
     fn without_the_offset_a_second_segment_would_wrongly_replay_the_track_from_the_start() {
         let sample_rate = TARGET_SAMPLE_RATE;
@@ -996,7 +771,6 @@ mod tests {
         };
         let tracks = [track];
 
-        // Segment 2, correctly windowed: [0.7s, 2.0s) of the scenario.
         let segment_start = 0.7_f64;
         let segment_duration = 1.3_f64;
         let correct =
@@ -1004,8 +778,6 @@ mod tests {
                 .expect("mix must succeed")
                 .expect("must return Some(pcm)");
 
-        // The bug: mixing the same segment's own duration with no offset —
-        // exactly the call shape available before this fix existed.
         let buggy = mix_audio_tracks(&tracks, segment_duration)
             .expect("mix must succeed")
             .expect("must return Some(pcm)");
@@ -1037,17 +809,6 @@ mod tests {
         let _ = std::fs::remove_file(&wav_path);
     }
 
-    // ── media-io: probe_audio_metadata ──────────────────────────────────────
-    //
-    // `rustmotion info` (crates/rustmotion/src/cli/commands/info.rs) needs
-    // "how long is this audio file, at what rate/channel count" for every
-    // `audio[].src` a scenario declares. The brief for that fix is explicit:
-    // reuse `decode_audio_file` — the exact decode `mix_audio_tracks_segment`
-    // performs at render time — rather than opening a second, independently
-    // drifting decode path (e.g. reading `symphonia`'s track metadata
-    // directly without decoding, which can disagree with what actually gets
-    // decoded for a file with an imprecise container-level duration).
-
     #[test]
     fn probe_audio_metadata_reports_duration_rate_and_channels() {
         let wav_path = std::env::temp_dir().join(format!(
@@ -1058,7 +819,6 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        // 0.5s of mono audio at 22050Hz.
         write_minimal_wav(&wav_path, 22_050, 11_025);
 
         let probe = probe_audio_metadata(wav_path.to_str().unwrap()).expect("must probe wav");

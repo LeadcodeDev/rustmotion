@@ -83,10 +83,6 @@ impl Marquee {
         let w = layout_w;
         let h = layout_h;
 
-        // Resolved against a real per-frame viewport (`rem`/`vw`/`vh` now
-        // resolve instead of silently dropping to 0px — lot B, wave S).
-        // `em`/`%` on `font-size` itself remain approximate — see
-        // `crate::intrinsic::font_size_ctx`'s doc comment.
         let fs = self.style.font_size_px_ctx(
             &crate::intrinsic::font_size_ctx(ctx.video_width as f32, ctx.video_height as f32, 0.0),
             self.font_size,
@@ -113,14 +109,12 @@ impl Marquee {
         let ascent = -metrics.ascent;
         let text_y = (h + ascent) / 2.0;
 
-        // Calculate offset based on time and direction
         let offset = (time as f32 * self.speed) % text_w;
         let start_x = match self.direction {
             MarqueeDirection::Left => -offset,
             MarqueeDirection::Right => offset - text_w,
         };
 
-        // Clip to bounds
         canvas.save();
         canvas.clip_rect(
             Rect::from_xywh(0.0, 0.0, w, h),
@@ -128,7 +122,6 @@ impl Marquee {
             false,
         );
 
-        // Draw enough copies to fill the width
         let copies = ((w / text_w).ceil() as i32 + 2).max(2);
         for i in 0..copies {
             let x = start_x + i as f32 * text_w;
@@ -186,12 +179,8 @@ mod tests {
         }
     }
 
-    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
-
     #[test]
     fn rem_font_size_paints_visible_ink() {
-        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
-        // context-free `font_size_px_or`.
         let marquee = Marquee {
             content: "hello world".to_string(),
             speed: default_speed(),

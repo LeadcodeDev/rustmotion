@@ -6,8 +6,6 @@ use serde_json::Value;
 use crate::error::RustmotionError;
 use crate::schema::{VariableDefinition, VariableType};
 
-/// Whether `value`'s JSON type matches `var_type` — a `number`-typed
-/// variable's default or override must actually be a JSON number, etc.
 fn value_matches_declared_type(value: &Value, var_type: &VariableType) -> bool {
     match var_type {
         VariableType::String => value.is_string(),
@@ -39,13 +37,6 @@ fn declared_type_name(var_type: &VariableType) -> &'static str {
     }
 }
 
-/// Build the final variable map: start from defaults, then apply overrides.
-/// Returns an error if an override references a variable not in the
-/// definitions, or if a default/override's JSON type doesn't match the
-/// variable's declared `type` — the `type` field on `config` entries used to
-/// be decorative (schema/scenario.rs's own `VariableDefinition::var_type`
-/// was parsed and never read), so `{ "type": "number", "default": "oops" }`
-/// silently accepted a string. This is the sole enforcement point.
 fn merge_variables(
     definitions: &HashMap<String, VariableDefinition>,
     overrides: Option<&HashMap<String, Value>>,
@@ -53,7 +44,6 @@ fn merge_variables(
 ) -> Result<HashMap<String, Value>> {
     let mut merged = HashMap::with_capacity(definitions.len());
 
-    // Start with defaults
     for (name, def) in definitions {
         if !value_matches_declared_type(&def.default, &def.var_type) {
             return Err(RustmotionError::Generic(format!(
@@ -66,7 +56,6 @@ fn merge_variables(
         merged.insert(name.clone(), def.default.clone());
     }
 
-    // Apply overrides
     if let Some(ovr) = overrides {
         for (name, value) in ovr {
             let def = definitions
@@ -90,16 +79,6 @@ fn merge_variables(
     Ok(merged)
 }
 
-/// Recursively substitute variable references in a JSON value tree.
-///
-/// `pub(crate)` (not private) so `crate::expand` can reuse the exact same
-/// `$name` / `{"$var": "name"}` / interpolation semantics for component-param
-/// and `for-each` item/index bindings, rather than re-implementing a second,
-/// subtly-different substitution pass. Same reason `"config"` is skipped here
-/// (see the loop below): a component-template clone can itself contain a
-/// nested `use`'s `props` block — deliberately *not* named `config`, so this
-/// skip does not swallow it (see `expand.rs` module doc for why `props` was
-/// chosen over `config` for that field).
 pub(crate) fn substitute(
     value: &mut Value,
     vars: &HashMap<String, Value>,
@@ -107,24 +86,20 @@ pub(crate) fn substitute(
 ) -> Result<()> {
     match value {
         Value::String(s) => {
-            // Check for exact match "$name" (whole-string replacement, preserves type)
             if let Some(var_name) = parse_single_var_ref(s) {
                 if let Some(replacement) = vars.get(var_name) {
                     *value = replacement.clone();
                     return Ok(());
                 }
-                // Not in vars — leave as-is for find_unresolved to catch
                 return Ok(());
             }
 
-            // Check for escaped $$ or interpolation
             if s.contains('$') {
                 let result = interpolate_string(s, vars, path)?;
                 *s = result;
             }
         }
         Value::Object(map) => {
-            // Check for { "$var": "name" } pattern
             if map.len() == 1 {
                 if let Some(var_name_val) = map.get("$var") {
                     if let Some(var_name) = var_name_val.as_str() {
@@ -132,13 +107,11 @@ pub(crate) fn substitute(
                             *value = replacement.clone();
                             return Ok(());
                         }
-                        // Not found — leave as-is
                         return Ok(());
                     }
                 }
             }
 
-            // Recurse into object values, but skip "variables" key (don't substitute in definitions)
             let keys: Vec<String> = map.keys().cloned().collect();
             for key in keys {
                 if key == "config" {
@@ -159,27 +132,21 @@ pub(crate) fn substitute(
     Ok(())
 }
 
-/// Parse a string that is exactly "$name" (single variable reference, no interpolation).
-/// Returns the variable name without the leading $.
 fn parse_single_var_ref(s: &str) -> Option<&str> {
     let s = s.trim();
     if !s.starts_with('$') || s.starts_with("$$") {
         return None;
     }
     let name = &s[1..];
-    // Must be a simple identifier (alphanumeric + underscore)
     if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
         return None;
     }
-    // Only match if the entire string is just "$name" — no surrounding text
     if s.len() != 1 + name.len() {
         return None;
     }
     Some(name)
 }
 
-/// Perform string interpolation: replace $name occurrences within a larger string.
-/// Handles $$ escape sequences.
 fn interpolate_string(s: &str, vars: &HashMap<String, Value>, path: &str) -> Result<String> {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -187,11 +154,9 @@ fn interpolate_string(s: &str, vars: &HashMap<String, Value>, path: &str) -> Res
     while let Some(ch) = chars.next() {
         if ch == '$' {
             if chars.peek() == Some(&'$') {
-                // Escaped $$  → literal $
                 chars.next();
                 result.push('$');
             } else {
-                // Try to read a variable name
                 let mut name = String::new();
                 while let Some(&c) = chars.peek() {
                     if c.is_alphanumeric() || c == '_' {
@@ -202,7 +167,6 @@ fn interpolate_string(s: &str, vars: &HashMap<String, Value>, path: &str) -> Res
                     }
                 }
                 if name.is_empty() {
-                    // Lone $ not followed by identifier — keep as-is
                     result.push('$');
                 } else if let Some(val) = vars.get(&name) {
                     match val {
@@ -217,7 +181,6 @@ fn interpolate_string(s: &str, vars: &HashMap<String, Value>, path: &str) -> Res
                         }
                     }
                 } else {
-                    // Unknown variable — keep original text for find_unresolved
                     result.push('$');
                     result.push_str(&name);
                 }
@@ -230,7 +193,6 @@ fn interpolate_string(s: &str, vars: &HashMap<String, Value>, path: &str) -> Res
     Ok(result)
 }
 
-/// Scan a Value tree for unresolved $variable references after substitution.
 pub fn find_unresolved(value: &Value) -> Vec<String> {
     let mut unresolved = Vec::new();
     find_unresolved_recursive(value, &mut unresolved);
@@ -240,24 +202,6 @@ pub fn find_unresolved(value: &Value) -> Vec<String> {
 fn find_unresolved_recursive(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::String(s) => {
-            // An `"= ..."` string is an arithmetic expression (see
-            // `rustmotion_core::expr`'s module doc), not `$name` reference
-            // content this scan understands — it has its own free-variable
-            // resolution (`Scope::var`, evaluated by
-            // `crates/rustmotion/src/loader.rs`'s `fold_static_expressions`
-            // and, for included files, `include.rs`) and its own error type
-            // (`ExprError::UnknownIdent`, surfaced as a precisely-located
-            // hard error, not a warning). Scanning inside it for bare `$word`
-            // occurrences would flag every reserved scope name this
-            // substitution pass was never meant to resolve — `$W`, `$H`,
-            // `$fps`, `$duration`, `$t`, `$T`, `$beat`, and any
-            // expression-only variable an author declares — as a false
-            // "unresolved variable" on every single scenario that uses one,
-            // whether or not the expression fold that runs later actually
-            // resolves it. `Expr::parse`/`fold_static_expressions` are the
-            // authority on whether an expression's identifiers are valid;
-            // this scan defers to them entirely rather than duplicating (and
-            // getting wrong) a second, narrower opinion.
             if s.trim_start().starts_with('=') {
                 return;
             }
@@ -265,7 +209,7 @@ fn find_unresolved_recursive(value: &Value, out: &mut Vec<String>) {
             while let Some(ch) = chars.next() {
                 if ch == '$' {
                     if chars.peek() == Some(&'$') {
-                        chars.next(); // skip escaped
+                        chars.next();
                     } else {
                         let mut name = String::new();
                         while let Some(&c) = chars.peek() {
@@ -284,7 +228,6 @@ fn find_unresolved_recursive(value: &Value, out: &mut Vec<String>) {
             }
         }
         Value::Object(map) => {
-            // Check for { "$var": "name" }
             if map.len() == 1 {
                 if let Some(val) = map.get("$var") {
                     if let Some(name) = val.as_str() {
@@ -294,23 +237,6 @@ fn find_unresolved_recursive(value: &Value, out: &mut Vec<String>) {
                 }
             }
             for (key, v) in map {
-                // `config` holds the declarations themselves, never references.
-                //
-                // `template` / `props` / `components` hold the bodies of the
-                // template directives, whose `$name`s are bound by
-                // `expand::expand_directives` — which runs *after* this pass.
-                // Scanning them here reports every correct binding as an
-                // unresolved typo: the canonical `for-each` example emits six
-                // such warnings, each accusing the author of a mistake they
-                // did not make. Warnings that are reliably wrong teach the
-                // reader to ignore warnings, which would cost more than the
-                // scan is worth.
-                //
-                // Nothing is lost: `expand_directives` re-runs this same scan
-                // once expansion is done and these keys no longer exist, so a
-                // genuine typo inside a template is still reported — with the
-                // benefit of naming it after substitution, where the leftover
-                // is unambiguous.
                 if !matches!(key.as_str(), "config" | "template" | "props" | "components") {
                     find_unresolved_recursive(v, out);
                 }
@@ -325,18 +251,6 @@ fn find_unresolved_recursive(value: &Value, out: &mut Vec<String>) {
     }
 }
 
-/// Apply variable substitution to a JSON Value.
-/// Extracts the "variables" definitions, merges with optional overrides, then substitutes.
-///
-/// When a `config` block is present, overrides must reference declared variables (unknown
-/// names produce `UndefinedVariable`).
-///
-/// When there is **no** `config` block but `overrides` are provided (e.g. from the CLI for
-/// an HTML scenario that cannot carry a `config` key), the overrides are applied as raw
-/// value substitutions without type declarations — any `$name` found in the document is
-/// replaced by the override value as-is. Unresolved references after this pass are ignored
-/// (no `UnresolvedVariable` error), because the document may legitimately contain no
-/// variable references at all.
 pub fn apply_variables(
     value: &mut Value,
     overrides: Option<&HashMap<String, Value>>,
@@ -346,7 +260,6 @@ pub fn apply_variables(
 
     match definitions {
         Some(defs) => {
-            // Validate that every definition has a default
             for (name, def) in &defs {
                 if def.default.is_null() {
                     return Err(RustmotionError::VariableMissingDefault {
@@ -357,15 +270,12 @@ pub fn apply_variables(
             }
 
             let merged = merge_variables(&defs, overrides, path)?;
-            // Remove "config" key from the value so it doesn't interfere with deserialization
             if let Value::Object(map) = value {
                 map.remove("config");
             }
             substitute(value, &merged, path)?;
         }
         None => {
-            // No config block. If overrides were supplied (e.g. from the CLI for an HTML
-            // scenario), apply them as raw substitutions — no declaration required.
             if let Some(ovr) = overrides {
                 if !ovr.is_empty() {
                     substitute(value, ovr, path)?;
@@ -374,29 +284,7 @@ pub fn apply_variables(
         }
     }
 
-    // Constat #7: `find_unresolved` used to run — and hard-fail the whole
-    // render/validate on its first hit — *only* inside the `Some(defs)`
-    // branch above, so the exact same leftover `$word` (a price tag, a
-    // terminal `$PATH`, a shell `$HOME`) was harmless in a document with no
-    // `config` block and fatal the moment an unrelated `config` block
-    // existed anywhere else in the same file. `find_unresolved` cannot
-    // structurally tell a genuine unresolved-reference typo apart from
-    // incidental literal-`$` content — by construction, every name in
-    // `defs` above is always present in `merged` (defaults ∪ overrides), so
-    // `substitute` can never leave a *declared* variable name unresolved;
-    // everything `find_unresolved` can still find here is, definitionally,
-    // *not* one of the variables this document declared. So: run the same
-    // scan unconditionally (fixing the "depends on an unrelated key"
-    // inconsistency), but report it as a loud warning rather than aborting
-    // the whole document — same fail-loud-not-silent contract already used
-    // elsewhere in this workstream (see `css::units::px_or_warn`), applied
-    // here because a hard rejection would break any existing scenario that
-    // legitimately has a `$` in its content and would newly break every one
-    // of those the moment it also gained a `config` block.
     for name in find_unresolved(value) {
-        // Reuse `UnresolvedVariable`'s existing `Display` message (see
-        // `error.rs`) for the warning text instead of hand-rolling a new
-        // one — this is the same diagnostic, just no longer fatal.
         let diagnostic = RustmotionError::UnresolvedVariable {
             name,
             path: path.to_string(),
@@ -411,12 +299,10 @@ pub fn apply_variables(
     Ok(())
 }
 
-/// For standalone rendering: apply defaults only (no overrides).
 pub fn apply_defaults(value: &mut Value) -> Result<()> {
     apply_variables(value, None, "<root>")
 }
 
-/// Extract variable definitions from a JSON value (if present).
 fn extract_variable_definitions(
     value: &Value,
 ) -> Result<Option<HashMap<String, VariableDefinition>>> {
@@ -589,12 +475,6 @@ mod tests {
         assert!(unresolved.contains(&"also_missing".to_string()));
     }
 
-    /// An `"= ..."` expression is a different sub-language with its own
-    /// identifier resolution (`rustmotion_core::expr`) — this scan must not
-    /// flag `$W`/`$H`/reserved scope names, or any other expression
-    /// variable, as an unresolved `$var` reference. A leading `=` after
-    /// trimming whitespace is enough to opt the whole string out, regardless
-    /// of which names appear inside it.
     #[test]
     fn find_unresolved_does_not_scan_inside_an_expression_string() {
         let val = json!({
@@ -633,7 +513,6 @@ mod tests {
             val["scenes"][0]["children"][0]["content"],
             json!("Color is #FF0000")
         );
-        // "config" key should be removed
         assert!(val.get("config").is_none());
     }
 
@@ -648,7 +527,6 @@ mod tests {
         let mut vars = HashMap::new();
         vars.insert("name".to_string(), json!("resolved"));
         substitute(&mut val, &vars, "test").unwrap();
-        // "config" block should be untouched
         assert_eq!(val["config"]["name"]["default"], json!("$not_a_ref"));
         assert_eq!(val["text"], json!("resolved"));
     }
@@ -675,12 +553,6 @@ mod tests {
         assert_eq!(val["text"], json!("Count: 42 items"));
     }
 
-    // ---- constat #7: literal `$` fatality must not depend on an unrelated
-    // `config` key (RED first) ----
-
-    /// A document with **no** `config` block and a literal `$` in unrelated
-    /// content (a `list` item's `$PATH`) — this already succeeds today
-    /// (the bug is the *other* direction; this locks in it keeps working).
     fn doc_with_literal_dollar_no_config() -> serde_json::Value {
         json!({
             "video": { "width": 1080, "height": 1920 },
@@ -694,12 +566,6 @@ mod tests {
         })
     }
 
-    /// The exact same literal-`$` content, but the document also happens to
-    /// declare an unrelated `config` block (e.g. because it's a reusable
-    /// template with one templated field). Before the fix, this made
-    /// `apply_variables` return `Err(UnresolvedVariable)` and abort the
-    /// entire render/validate — for content the config block has nothing to
-    /// do with.
     fn doc_with_literal_dollar_and_unrelated_config() -> serde_json::Value {
         json!({
             "config": {
@@ -722,7 +588,6 @@ mod tests {
         let mut doc = doc_with_literal_dollar_no_config();
         apply_defaults(&mut doc)
             .expect("a literal '$' in list/text content with no config block must not be fatal");
-        // Content is left as-is: nothing declared these as variables.
         assert_eq!(
             doc["scenes"][0]["children"][0]["items"][0],
             json!("echo $PATH")
@@ -731,12 +596,6 @@ mod tests {
 
     #[test]
     fn literal_dollar_with_unrelated_config_block_must_not_be_fatal() {
-        // RED before the fix: this currently returns
-        // `Err(UnresolvedVariable { name: "PATH", .. })` (or "HOME", or
-        // "100", whichever `find_unresolved` reaches first) purely because
-        // *some* config block exists elsewhere in the same document — the
-        // exact inconsistency named in constat #7. The declared `$title`
-        // variable must still resolve correctly either way.
         let mut doc = doc_with_literal_dollar_and_unrelated_config();
         apply_defaults(&mut doc).expect(
             "a literal '$' in unrelated content must not become fatal just because the \
@@ -755,10 +614,6 @@ mod tests {
 
     #[test]
     fn undeclared_override_is_still_a_hard_error_unaffected_by_the_fix() {
-        // The other half of `apply_variables`'s error surface (an override
-        // key that doesn't match any declared variable) is a genuine,
-        // unambiguous user error — unrelated to the literal-`$`-in-content
-        // ambiguity — and must remain a hard error.
         let mut doc = json!({
             "config": { "title": { "type": "string", "default": "Demo" } },
             "video": { "width": 1, "height": 1 },

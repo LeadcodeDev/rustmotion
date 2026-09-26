@@ -1,14 +1,3 @@
-//! Le binaire `rustmotion` : analyse des arguments et aiguillage vers
-//! `commands`.
-//!
-//! Il n'y a pas de sous-commande `studio` ici, et c'est délibéré : le studio
-//! n'entre dans le build que derrière le feature `studio`, donc une
-//! sous-commande devrait soit disparaître du `--help` selon le feature, soit
-//! échouer à l'exécution en expliquant qu'il faut réinstaller. Il garde son
-//! binaire, `rustmotion-studio -f scenario.json`, que `cargo install
-//! --features studio` livre à côté de celui-ci. Le code, lui, vit dans cette
-//! crate depuis la fusion du paquet — voir `crate::studio`.
-
 mod claude_md;
 mod commands;
 mod skills;
@@ -452,11 +441,6 @@ pub(crate) enum OutputFormat {
     Json,
 }
 
-/// `--frames START-END`: an inclusive, 0-indexed frame range. Parsed eagerly
-/// (format + `start <= end`) by clap via `FromStr`; whether `end` actually
-/// fits the scenario's total frame count can only be checked once the
-/// scenario is loaded, so that half lives in
-/// `RustmotionError::FrameRangeOutOfRange` instead.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FrameRangeArg {
     start: u32,
@@ -487,20 +471,6 @@ impl std::str::FromStr for FrameRangeArg {
     }
 }
 
-/// Parse `--var key=value` flags into a map. Values that parse as valid JSON
-/// scalars or objects are stored as their JSON type; bare strings that are not
-/// valid JSON are stored as JSON strings.
-///
-/// Parsing rules (applied in order):
-///   1. Split on the first `=`. Keys without `=` are an error.
-///   2. Try `serde_json::from_str` on the value part.
-///   3. If that fails, treat the raw string as a JSON string value.
-///
-/// Examples:
-///   `--var count=42`        → `count: Number(42)`
-///   `--var flag=true`       → `flag: Bool(true)`
-///   `--var name=hello`      → `name: String("hello")`  (bare string, not valid JSON)
-///   `--var name='"hello"'`  → `name: String("hello")`  (explicit JSON string)
 fn parse_var_flags(vars: &[String]) -> Result<HashMap<String, serde_json::Value>> {
     let mut map = HashMap::new();
     for entry in vars {
@@ -523,7 +493,6 @@ fn parse_var_flags(vars: &[String]) -> Result<HashMap<String, serde_json::Value>
     Ok(map)
 }
 
-/// Load a `--props <file.json>` JSON object into a variable map.
 fn load_props_file(path: &PathBuf) -> Result<HashMap<String, serde_json::Value>> {
     let text = std::fs::read_to_string(path).map_err(|e| RustmotionError::FileRead {
         path: path.display().to_string(),
@@ -545,9 +514,6 @@ fn load_props_file(path: &PathBuf) -> Result<HashMap<String, serde_json::Value>>
     }
 }
 
-/// Merge `--props` and `--var` flags into a single override map.
-/// `--var` takes precedence over `--props` for the same key.
-/// Returns `None` if neither flag was supplied (no-override fast path).
 fn build_overrides(
     props: Option<&PathBuf>,
     var_flags: &[String],
@@ -562,24 +528,12 @@ fn build_overrides(
     } else {
         HashMap::new()
     };
-    // --var wins over --props
     for (k, v) in parse_var_flags(var_flags)? {
         map.insert(k, v);
     }
     Ok(Some(map))
 }
 
-/// Render frames `[frame_range.0, frame_range.1]` (inclusive, 0-indexed) of
-/// `scenario` as a standalone segment file, instead of the full video.
-///
-/// Deliberately separate from `commands::cmd_render` rather than an added
-/// parameter on it: `cmd_render` is also called from `commands::batch`,
-/// outside this change's file scope, so its signature stays untouched.
-/// Only the two output kinds `render --frames` actually supports
-/// (mp4/webm/mov, native or ffmpeg-driven) are implemented here —
-/// png-seq/gif/raw frame-range support does not exist yet (see the
-/// `--frames` help text) and this function says so instead of silently
-/// ignoring the range for those formats.
 #[allow(clippy::too_many_arguments)]
 fn render_frame_range(
     scenario: ResolvedScenario,
@@ -709,12 +663,11 @@ fn render_frame_range(
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    // Configure rayon thread pool
     if let Some(threads) = cli.threads {
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .build_global()
-            .ok(); // Ignore error if already initialized
+            .ok();
     }
 
     match cli.command {
@@ -738,7 +691,6 @@ pub fn run() -> Result<()> {
             props,
             var,
         } => {
-            // Validate codec / CRF up-front so we never spawn an encoder with bad args.
             commands::validation::check_codec(codec.as_deref())?;
             if let Some(warning) = commands::validation::check_crf(crf, hardware_acceleration)? {
                 if !cli.quiet {
@@ -933,9 +885,6 @@ pub fn run() -> Result<()> {
             jobs,
         } => {
             commands::validation::check_codec(codec.as_deref())?;
-            // `batch` has no `--hardware-acceleration` flag of its own (out of
-            // this workstream's file scope: wiring it into `cmd_batch` touches
-            // commands/batch.rs), so this combination can never fire here.
             commands::validation::check_crf(crf, false)?;
             commands::cmd_batch(
                 &file,
@@ -1006,13 +955,11 @@ fn install_completions() -> Result<()> {
 
     match shell {
         clap_complete::Shell::Zsh => {
-            // Write to ~/.zfunc/_rustmotion
             let dir = home.join(".zfunc");
             std::fs::create_dir_all(&dir)?;
             let path = dir.join("_rustmotion");
             std::fs::write(&path, &completions)?;
 
-            // Check if fpath is already configured in .zshrc
             let zshrc = home.join(".zshrc");
             let zshrc_content = std::fs::read_to_string(&zshrc).unwrap_or_default();
             if !zshrc_content.contains(".zfunc") {
@@ -1069,7 +1016,6 @@ fn uninstall_completions() -> Result<()> {
                 eprintln!("Removed {}", path.display());
             }
 
-            // Remove fpath lines from .zshrc
             let zshrc = home.join(".zshrc");
             if zshrc.exists() {
                 let content = std::fs::read_to_string(&zshrc)?;
@@ -1117,7 +1063,6 @@ mod var_parsing_tests {
     use super::*;
     use serde_json::json;
 
-    /// "42" parses as Number, not String.
     #[test]
     fn var_flag_numeric_string_parses_as_number() {
         let flags = vec!["count=42".to_string()];
@@ -1125,7 +1070,6 @@ mod var_parsing_tests {
         assert_eq!(map["count"], json!(42));
     }
 
-    /// "true" parses as Bool.
     #[test]
     fn var_flag_true_parses_as_bool() {
         let flags = vec!["flag=true".to_string()];
@@ -1133,7 +1077,6 @@ mod var_parsing_tests {
         assert_eq!(map["flag"], json!(true));
     }
 
-    /// A bare word that is not valid JSON becomes a String.
     #[test]
     fn var_flag_bare_word_is_string() {
         let flags = vec!["name=hello".to_string()];
@@ -1141,7 +1084,6 @@ mod var_parsing_tests {
         assert_eq!(map["name"], json!("hello"));
     }
 
-    /// An explicitly-quoted JSON string `'"42"'` becomes String("42").
     #[test]
     fn var_flag_quoted_number_is_string() {
         let flags = vec!["name=\"42\"".to_string()];
@@ -1149,18 +1091,14 @@ mod var_parsing_tests {
         assert_eq!(map["name"], json!("42"));
     }
 
-    /// --var wins over --props for the same key.
     #[test]
     fn var_wins_over_props_for_same_key() {
-        // Build a fake props map directly (no file I/O needed for unit test)
         let mut props_map: HashMap<String, serde_json::Value> = HashMap::new();
         props_map.insert("color".to_string(), json!("#000000"));
 
-        // Simulate merge logic that build_overrides does
         let var_flags = vec!["color=#ffffff".to_string()];
         let var_map = parse_var_flags(&var_flags).unwrap();
 
-        // --var must overwrite --props
         let mut merged = props_map;
         for (k, v) in var_map {
             merged.insert(k, v);
@@ -1168,7 +1106,6 @@ mod var_parsing_tests {
         assert_eq!(merged["color"], json!("#ffffff"));
     }
 
-    /// Missing '=' in --var is an error.
     #[test]
     fn var_flag_missing_eq_is_error() {
         let flags = vec!["noequals".to_string()];

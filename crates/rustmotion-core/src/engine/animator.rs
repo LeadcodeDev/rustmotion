@@ -4,18 +4,8 @@ use crate::schema::{
     TextAnimGranularity, WiggleConfig,
 };
 
-/// Default starting blur sigma (px) for `char_blur_in` when
-/// `CharAnimationTiming.blur` is not set. Tuned against rendered output at
-/// 120px display type (see issue #118's render proof): low enough that
-/// individual letterforms stay ghost-legible at the start of a unit's
-/// reveal (this is a *reveal*, not a smoke effect), high enough that the
-/// blur is unmistakable next to the settled, sharp frame.
 pub const DEFAULT_CHAR_BLUR_SIGMA: f32 = 14.0;
 
-/// Safe division that returns `fallback` when the denominator is too small to
-/// produce a meaningful result (within 1e-9). Use this for any calculation
-/// where a zero-or-near-zero duration could otherwise produce NaN/∞ that
-/// silently propagates into transforms or opacity.
 #[inline]
 pub fn safe_div(num: f64, denom: f64, fallback: f64) -> f64 {
     if denom.abs() < 1e-9 {
@@ -25,7 +15,6 @@ pub fn safe_div(num: f64, denom: f64, fallback: f64) -> f64 {
     }
 }
 
-/// Same as `safe_div` but for f32. Useful in render-side hot paths.
 #[inline]
 pub fn safe_div_f32(num: f32, denom: f32, fallback: f32) -> f32 {
     if denom.abs() < 1e-6 {
@@ -35,9 +24,6 @@ pub fn safe_div_f32(num: f32, denom: f32, fallback: f32) -> f32 {
     }
 }
 
-// ─── Effect extraction ──────────────────────────────────────────────────────
-
-/// Resolved char animation config ready for the text renderer.
 #[derive(Debug, Clone)]
 pub struct ResolvedCharAnimation {
     pub preset: CharAnimPreset,
@@ -47,95 +33,45 @@ pub struct ResolvedCharAnimation {
     pub easing: EasingType,
     pub delay: f32,
     pub overshoot: f32,
-    /// Starting blur sigma in px (`char_blur_in` only; 0 elsewhere).
     pub blur: f32,
-    /// Travel direction for the presets whose motion is a translate.
     pub direction: TextAnimDirection,
-    /// Multiplier on the preset's own travel distance (1.0 = as tuned).
     pub distance: f32,
-    /// Scale each unit starts at, or `None` for no scaling.
     pub scale_from: Option<f32>,
-    /// ±fraction of `stagger` each unit's start is nudged by (0 = even).
     pub jitter: f32,
-    /// Seed for the deterministic jitter offsets.
     pub seed: u32,
-    /// Colour each unit starts at before settling to the text's own.
     pub ink_from: Option<String>,
 }
 
 impl ResolvedCharAnimation {
-    /// When unit `idx` starts, in seconds, including its jitter nudge.
-    ///
-    /// The nudge is a pure function of `(idx, seed)` — deliberately not an
-    /// RNG. Frames are rendered out of order, in parallel, and sometimes in
-    /// separate processes (`--frames a-b` segments), so anything stateful
-    /// here would make a unit jump between neighbouring frames.
-    ///
-    /// It is also clamped so a unit never starts before the effect's own
-    /// `delay`: a negative start would make the first units appear already
-    /// half-animated on frame 0.
     pub fn unit_start(&self, idx: usize) -> f64 {
         let even = self.delay as f64 + idx as f64 * self.stagger as f64;
         if self.jitter.abs() < 1e-6 || self.stagger.abs() < 1e-6 {
             return even;
         }
-        // Bit-mixing hash (splitmix64's finalizer) over the unit index and
-        // seed → a well-distributed value in -1.0..1.0.
         let mut h = (idx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (self.seed as u64);
         h ^= h >> 30;
         h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
         h ^= h >> 27;
         h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
         h ^= h >> 31;
-        let unit = (h >> 11) as f64 / (1u64 << 53) as f64; // 0.0..1.0
+        let unit = (h >> 11) as f64 / (1u64 << 53) as f64;
         let nudge = (unit * 2.0 - 1.0) * self.jitter as f64 * self.stagger as f64;
         (even + nudge).max(self.delay as f64)
     }
 }
 
-/// Extracted and categorized animation effects from an AnimationEffect slice.
 pub struct ExtractedEffects<'a> {
     pub presets: Vec<(AnimationPreset, PresetConfig)>,
-    /// Every `keyframes`/`tilt_in` effect's animations, in the order their
-    /// source effects appear in `style.animation` (constat #5: this used to
-    /// be split into two buckets — routed purely by whether the effect's
-    /// `delay` happened to be nonzero — resolved and merged separately,
-    /// which made "sum vs last-wins" on a shared property depend on that
-    /// unrelated field. Now there is one bucket, resolved in one
-    /// `resolve_animations` call, so the composition rule is always
-    /// "last effect in the array wins on a shared property" — a CSS-cascade
-    /// rule, independent of `delay`).
     pub keyframe_animations: Vec<Animation>,
-    /// True when any contributing `keyframes`/`tilt_in` effect requested
-    /// `"loop": true` (constat #7). Applied uniformly to the whole
-    /// `keyframe_animations` bucket — see the doc comment on
-    /// `resolve_props_for_effects` for the same caveat presets already have
-    /// (multiple effects with different loop settings on the same property
-    /// is an unsupported edge case, not new to this fix).
     pub keyframes_loop: bool,
     pub wiggles: Vec<&'a WiggleConfig>,
     pub orbits: Vec<&'a OrbitConfig>,
-    /// Every `motion_path` effect, resolved by `apply_motion_paths` into
-    /// `translate_x`/`translate_y` (and, when `orient` is set,
-    /// `rotation`) — the same additive-into-`props` treatment `orbits`
-    /// already gets, and for the same reason: multiple path effects on one
-    /// node compose by simple vector addition, not last-wins.
     pub motion_paths: Vec<&'a MotionPathConfig>,
     pub glow: Option<&'a GlowConfig>,
     pub motion_blur: Option<f32>,
     pub char_animation: Option<ResolvedCharAnimation>,
 }
 
-/// M3: find the first `glow` effect in a list, if present.
-///
-/// `glow` is a static (non-time-varying) coloured halo — unlike every other
-/// effect `resolve_props_for_effects` resolves, it deliberately is *not*
-/// folded into `AnimatedProperties`: `GlowConfig.color` has no corresponding
-/// field there, and extending `AnimatedProperties`'s public shape is out of
-/// scope for this workstream. Callers apply the returned config directly as
-/// a CSS `filter: drop-shadow(...)` (see
-/// `rustmotion_components::box_builder::apply_glow_effect`), which is the
-/// only place that needs the raw colour string.
 pub fn find_glow_effect(effects: &[AnimationEffect]) -> Option<&GlowConfig> {
     effects.iter().find_map(|e| match e {
         AnimationEffect::Glow(cfg) => Some(cfg),
@@ -143,7 +79,6 @@ pub fn find_glow_effect(effects: &[AnimationEffect]) -> Option<&GlowConfig> {
     })
 }
 
-/// Split a slice of AnimationEffect into categorized buckets for the renderer.
 pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
     let mut result = ExtractedEffects {
         presets: Vec::new(),
@@ -176,11 +111,6 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
                         AnimationEffect::CharBounce(_) => CharAnimPreset::Bounce,
                         AnimationEffect::CharRotateIn(_) => CharAnimPreset::RotateIn,
                         AnimationEffect::CharSlideUp(_) => CharAnimPreset::SlideUp,
-                        // `char_blur_in` used to be resolved separately, off
-                        // `style.animation` inside `text.rs`'s painter, which
-                        // meant it silently missed container-level stagger
-                        // shifting and `timeline`-embedded copies. It goes
-                        // through the same door as its five siblings now.
                         AnimationEffect::CharBlurIn(_) => CharAnimPreset::BlurIn,
                         _ => unreachable!(),
                     };
@@ -211,12 +141,6 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
                     result.orbits.push(config);
                 }
                 AnimationEffect::Keyframes(config) => {
-                    // Keyframe times are absolute scene seconds; the
-                    // config-level delay shifts them (applied unconditionally
-                    // — a no-op when `delay == 0` — so every `keyframes`
-                    // effect lands in the same bucket regardless of its
-                    // delay; see the `ExtractedEffects::keyframe_animations`
-                    // doc comment for why that used to matter).
                     result
                         .keyframe_animations
                         .extend(config.keyframes.iter().map(|anim| {
@@ -261,7 +185,7 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
                 AnimationEffect::MotionPath(config) => {
                     result.motion_paths.push(config);
                 }
-                _ => {} // preset variants already handled above
+                _ => {}
             }
         }
     }
@@ -269,9 +193,6 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
     result
 }
 
-// ─── Easing functions ───────────────────────────────────────────────────────
-
-/// Apply easing function to a normalized time t (0.0..1.0)
 pub fn ease(t: f64, easing: &EasingType) -> f64 {
     let t = t.clamp(0.0, 1.0);
     match easing {
@@ -336,14 +257,8 @@ pub fn ease(t: f64, easing: &EasingType) -> f64 {
             }
         }
         EasingType::Bounce => bounce_ease_out(t),
-        EasingType::Spring => t, // Spring handled separately
+        EasingType::Spring => t,
         EasingType::CubicBezier { x1, y1, x2, y2 } => cubic_bezier_ease(t, *x1, *y1, *x2, *y2),
-        // CSS `steps(n, jump-end)`: hold at step `i`'s level (`i / n`) for
-        // the whole `[i/n, (i+1)/n)` span, then jump. `t == 1.0` always
-        // lands exactly on `1.0` — the final jump — rather than on the
-        // last held step, which the `floor` below would otherwise produce
-        // (`floor(1.0 * n) / n == 1.0` only by coincidence of exact
-        // arithmetic; guarding it explicitly avoids relying on that).
         EasingType::Steps(n) => {
             let n = (*n).max(1) as f64;
             if t >= 1.0 {
@@ -355,17 +270,12 @@ pub fn ease(t: f64, easing: &EasingType) -> f64 {
     }
 }
 
-/// Evaluate a cubic-bezier curve at parameter t using Newton's method
-/// Control points: P0=(0,0), P1=(x1,y1), P2=(x2,y2), P3=(1,1)
 fn cubic_bezier_ease(t: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
-    // Find the parameter t_curve such that bezier_x(t_curve) = t
-    // Then return bezier_y(t_curve)
     let t_curve = find_bezier_t_for_x(t, x1, x2);
     bezier_component(t_curve, y1, y2)
 }
 
 fn bezier_component(t: f64, p1: f64, p2: f64) -> f64 {
-    // B(t) = 3(1-t)^2*t*p1 + 3(1-t)*t^2*p2 + t^3
     let t2 = t * t;
     let t3 = t2 * t;
     let mt = 1.0 - t;
@@ -379,8 +289,7 @@ fn bezier_component_derivative(t: f64, p1: f64, p2: f64) -> f64 {
 }
 
 fn find_bezier_t_for_x(x: f64, x1: f64, x2: f64) -> f64 {
-    // Newton-Raphson to solve bezier_x(t) = x
-    let mut t = x; // Initial guess
+    let mut t = x;
     for _ in 0..8 {
         let current_x = bezier_component(t, x1, x2);
         let dx = bezier_component_derivative(t, x1, x2);
@@ -426,44 +335,15 @@ fn ease_in_out_cubic(t: f64) -> f64 {
     }
 }
 
-// ─── Spring solver ──────────────────────────────────────────────────────────
-
-/// Default `rest_threshold` (fraction of the 0→1 travel) used by
-/// `spring_rest_time`/the `duration` remap in `spring_value` when a
-/// `SpringConfig` does not set one explicitly. 0.5% is tight enough that
-/// "at rest" reads as visually still, without demanding the numeric search
-/// chase an asymptote that (for a critically- or over-damped spring) is
-/// never reached exactly.
 pub const DEFAULT_SPRING_REST_THRESHOLD: f64 = 0.005;
 
-/// Hard cap, in seconds, on how far into the future `spring_settle_time`
-/// searches for a rest point. A very lightly damped spring can take an
-/// arbitrarily long time to decay under `rest_threshold` — in the limit
-/// (`damping == 0`) it never does, oscillating forever at constant
-/// amplitude — so the search needs a bound or it would not terminate. When
-/// the cap is hit, the spring is reported as resting at the cap itself: a
-/// defined, tested "has not settled by then" answer (see
-/// `spring_duration_tests::undamped_spring_is_capped_not_infinite` and
-/// `spring_duration_tests::very_lightly_damped_spring_is_also_capped_when_beyond_the_bound`)
-/// rather than an unbounded loop.
 pub const MAX_SPRING_SEARCH_SECONDS: f64 = 30.0;
 
 thread_local! {
-    /// Cache for [`spring_settle_time_cached`], keyed on the exact bit
-    /// pattern of its four inputs. One `SpringConfig` is sampled once per
-    /// animated property per node per frame, always with the same
-    /// (floored) `damping`/`stiffness`/`mass`/`threshold` — the scan result
-    /// is frame-invariant, so a thread-local map turns the whole render
-    /// into one real scan per distinct spring plus O(1) lookups instead of
-    /// one scan per sample.
     static SPRING_SETTLE_TIME_CACHE: std::cell::RefCell<std::collections::HashMap<(u64, u64, u64, u64), f64>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// Memoized [`spring_settle_time`]: identical inputs always produce the
-/// identical scan result, so a cache hit skips the coarse-then-bisect
-/// search entirely. `max_t` is not part of the key because both call sites
-/// below always pass [`MAX_SPRING_SEARCH_SECONDS`].
 fn spring_settle_time_cached(damping: f64, stiffness: f64, mass: f64, threshold: f64) -> f64 {
     let key = (
         damping.to_bits(),
@@ -487,31 +367,6 @@ fn spring_settle_time_cached(damping: f64, stiffness: f64, mass: f64, threshold:
     })
 }
 
-/// Solve spring animation at time t (seconds).
-/// Returns a value between 0.0 and 1.0 representing progress.
-///
-/// Constat #6: `SpringConfig` accepts any `f64` (it's schema-level, not
-/// range-checked at parse time), and `rustmotion validate` used to check
-/// nothing about it either. `mass <= 0` or `stiffness <= 0` fed straight into
-/// `sqrt`/division below produced NaN (sqrt of a negative/undefined ratio,
-/// or division by zero), and negative `damping` flipped the decay
-/// exponent's sign so the "settling" oscillation diverged to +-infinity
-/// instead. Either poisons every transform/opacity value downstream once it
-/// merges into `AnimatedProperties`. `validate_schema.rs` now rejects these
-/// combinations as errors (belt), and this floor keeps the solver itself
-/// finite and bounded even if an out-of-band caller skips validation
-/// (suspenders) — see `spring_robustness_tests` below.
-///
-/// `duration` (issue #167 lot E, `SpringConfig::duration`): when set, `t` is
-/// linearly rescaled before it reaches the physics below — not the physical
-/// parameters themselves — so that `spring_rest_time` on the *unscaled*
-/// spring lands exactly on `duration`. The spring's shape (oscillation
-/// count, overshoot amplitude) is entirely a function of
-/// `damping`/`stiffness`/`mass`, so rescaling only the time axis preserves
-/// it; see `spring_duration_tests::duration_remap_preserves_shape`. This
-/// does *not* resize whatever keyframe segment `spring_value` is being
-/// evaluated within — see the `duration` field's doc comment on
-/// `SpringConfig` for why that is a separate, author-owned concern.
 pub fn spring_value(t: f64, config: &SpringConfig) -> f64 {
     let damping = config.damping.max(0.0);
     let stiffness = config.stiffness.max(1e-6);
@@ -522,9 +377,6 @@ pub fn spring_value(t: f64, config: &SpringConfig) -> f64 {
             let threshold = spring_rest_threshold(config);
             let natural_rest = spring_settle_time_cached(damping, stiffness, mass, threshold);
             if natural_rest < 1e-9 {
-                // Degenerate: the spring starts at distance 1.0 from its
-                // target, so in practice `natural_rest` is never this
-                // small — fall back to unscaled rather than divide by ~0.
                 spring_value_raw(t, damping, stiffness, mass)
             } else {
                 let time_scale = natural_rest / duration;
@@ -535,25 +387,18 @@ pub fn spring_value(t: f64, config: &SpringConfig) -> f64 {
     }
 }
 
-/// The physics solver itself, unscaled by any `duration` remap. Takes
-/// already-floored parameters (see `spring_value`'s constat #6 doc comment)
-/// so `spring_settle_time`'s search can call it directly without redoing
-/// the floor on every sample.
 fn spring_value_raw(t: f64, damping: f64, stiffness: f64, mass: f64) -> f64 {
     let omega = (stiffness / mass).sqrt();
     let zeta = damping / (2.0 * (stiffness * mass).sqrt());
 
     if zeta < 1.0 {
-        // Underdamped
         let omega_d = omega * (1.0 - zeta * zeta).sqrt();
         let decay = (-zeta * omega * t).exp();
         1.0 - decay * ((omega_d * t).sin() * (zeta * omega / omega_d) + (omega_d * t).cos())
     } else if (zeta - 1.0).abs() < 1e-6 {
-        // Critically damped
         let decay = (-omega * t).exp();
         1.0 - decay * (1.0 + omega * t)
     } else {
-        // Overdamped
         let s1 = -omega * (zeta - (zeta * zeta - 1.0).sqrt());
         let s2 = -omega * (zeta + (zeta * zeta - 1.0).sqrt());
         let c2 = -s1 / (s2 - s1);
@@ -562,41 +407,10 @@ fn spring_value_raw(t: f64, damping: f64, stiffness: f64, mass: f64) -> f64 {
     }
 }
 
-/// Lower bound on the number of samples `spring_settle_time` takes across
-/// `[0, max_t]` — enough to resolve slow (critically-/over-damped) decays
-/// even when the natural oscillation period doesn't drive the sample count
-/// up on its own.
 const SPRING_SETTLE_MIN_SAMPLES: usize = 2_000;
-/// Upper bound on samples, regardless of how short the oscillation period
-/// is — keeps `spring_settle_time` (called on every `spring_value` sample
-/// when `duration` is set) bounded-cost for very stiff/fast springs.
 const SPRING_SETTLE_MAX_SAMPLES: usize = 20_000;
-/// Target sample density within one oscillation period, chosen empirically
-/// (see the workstream report) to keep the coarse-then-bisect search within
-/// ~0.1% of a brute-force reference across a broad random sweep of
-/// damping/stiffness/mass. Shallow, near-tangential graze-and-return
-/// excursions across the threshold band (a spring that dips back below the
-/// line by a razor-thin margin on a secondary oscillation) can still be
-/// missed — `spring_rest_time`/`spring_settle_time` are a documented
-/// numeric approximation, not an exact guarantee.
 const SPRING_SETTLE_SAMPLES_PER_PERIOD: f64 = 48.0;
 
-/// First `t >= 0` from which `spring_value_raw` stays within `threshold` of
-/// its target (1.0) forever after. Implements the "mesure du repos" from
-/// issue #167 lot E: `spring_value_raw` is closed-form, so a coarse scan to
-/// bracket the last exceedance, refined by bisection, is enough — no need
-/// to integrate anything.
-///
-/// Two regimes get explicit handling (both required by the workstream
-/// brief, both exercised in `spring_duration_tests`):
-/// - an overdamped (or critically damped) spring never touches its target
-///   exactly, only approaches it asymptotically — the scan terminates via
-///   `threshold`, never via an exact equality check;
-/// - a very lightly damped spring can take arbitrarily long to settle (an
-///   undamped spring, `damping == 0`, never does — it oscillates forever at
-///   constant amplitude). `max_t` bounds the search; if the last sample is
-///   still outside `threshold`, `max_t` itself is returned — defined,
-///   tested behaviour instead of an unbounded search.
 fn spring_settle_time(damping: f64, stiffness: f64, mass: f64, threshold: f64, max_t: f64) -> f64 {
     let threshold = threshold.max(1e-9);
     let omega = (stiffness / mass).sqrt();
@@ -618,13 +432,9 @@ fn spring_settle_time(damping: f64, stiffness: f64, mass: f64, threshold: f64, m
     }
 
     if last_exceed_idx >= steps {
-        // Still exceeding at (or past) max_t: capped, "not settled".
         return max_t;
     }
 
-    // Refine within (last_exceed, last_exceed + dt]: the coarse scan found
-    // this as the last sample outside the threshold band, so bisect for the
-    // point within this bracket where it steps inside for good.
     let mut lo = last_exceed_idx as f64 * dt;
     let mut hi = (lo + dt).min(max_t);
     for _ in 0..40 {
@@ -638,13 +448,6 @@ fn spring_settle_time(damping: f64, stiffness: f64, mass: f64, threshold: f64, m
     hi
 }
 
-/// The `rest_threshold` a `SpringConfig` resolves to: the author's value if
-/// set, else `DEFAULT_SPRING_REST_THRESHOLD`, floored so `spring_settle_time`
-/// always has a well-defined (nonzero) target — the same belt-and-suspenders
-/// pattern `spring_value` already applies to `damping`/`stiffness`/`mass`.
-/// the CLI's `check_spring_config` rejects non-positive or absurd
-/// (`>= 1.0`) values at the author-facing layer; this floor is the
-/// solver-side backstop.
 fn spring_rest_threshold(config: &SpringConfig) -> f64 {
     config
         .rest_threshold
@@ -652,16 +455,6 @@ fn spring_rest_threshold(config: &SpringConfig) -> f64 {
         .max(1e-9)
 }
 
-/// Public "measure du repos" (issue #167 lot E): the instant, in seconds,
-/// at which this spring settles within `rest_threshold` of its target and
-/// stays there — what `rustmotion info` surfaces so an author can size a
-/// scene/preset duration around a spring instead of discovering it by
-/// trial and error.
-///
-/// When `config.duration` is set, this *is* that duration, exactly — that
-/// is the point of the time remap `spring_value` performs (see its doc
-/// comment). Otherwise it is the natural settle time computed from
-/// `damping`/`stiffness`/`mass` alone via `spring_settle_time`.
 pub fn spring_rest_time(config: &SpringConfig) -> f64 {
     match config.duration {
         Some(d) if d > 0.0 => d,
@@ -675,9 +468,6 @@ pub fn spring_rest_time(config: &SpringConfig) -> f64 {
     }
 }
 
-// ─── Animation resolver ─────────────────────────────────────────────────────
-
-/// Resolved animated properties for a single layer at a specific frame
 #[derive(Debug, Clone)]
 pub struct AnimatedProperties {
     pub opacity: f32,
@@ -687,13 +477,9 @@ pub struct AnimatedProperties {
     pub scale_y: f32,
     pub rotation: f32,
     pub blur: f32,
-    /// For typewriter effect: number of visible characters (-1 = all)
     pub visible_chars: i32,
-    /// For typewriter effect: progress 0.0→1.0 (-1.0 = unused, shows all)
     pub visible_chars_progress: f32,
-    /// Animated color override (hex string)
     pub color: Option<String>,
-    // Extended animatable properties
     pub border_radius: f32,
     pub font_size: f32,
     pub width: f32,
@@ -704,15 +490,11 @@ pub struct AnimatedProperties {
     pub shadow_blur: f32,
     pub glow_radius: f32,
     pub glow_intensity: f32,
-    // 3D perspective transforms
     pub rotate_x: f32,
     pub rotate_y: f32,
     pub perspective: f32,
-    // Path animation
     pub draw_progress: f32,
-    // Motion path progress (0.0 = start, 1.0 = end)
     pub motion_progress: f32,
-    // Char animation (from style.animation char_* variants)
     pub char_animation: Option<ResolvedCharAnimation>,
 }
 
@@ -750,11 +532,7 @@ impl Default for AnimatedProperties {
 }
 
 impl AnimatedProperties {
-    /// Merge another AnimatedProperties into self. Properties that have been
-    /// explicitly set in `other` (not sentinel -1.0) override values in self.
     pub fn merge(&mut self, other: &AnimatedProperties) {
-        // opacity: default is 1.0, so only override if other explicitly animated to non-1.0
-        // For opacity we multiply (both presets contribute)
         if (other.opacity - 1.0).abs() > 0.001 {
             self.opacity *= other.opacity;
         }
@@ -785,7 +563,6 @@ impl AnimatedProperties {
         if other.color.is_some() {
             self.color = other.color.clone();
         }
-        // Sentinel-based fields (-1.0 = not set)
         if other.border_radius >= 0.0 {
             self.border_radius = other.border_radius;
         }
@@ -816,7 +593,6 @@ impl AnimatedProperties {
         if other.glow_intensity >= 0.0 {
             self.glow_intensity = other.glow_intensity;
         }
-        // 3D perspective transforms (additive like rotation)
         if other.rotate_x.abs() > 0.01 {
             self.rotate_x += other.rotate_x;
         }
@@ -838,12 +614,6 @@ impl AnimatedProperties {
     }
 }
 
-/// High-level helper: extract `effects`, resolve presets/keyframes/wiggles/orbits,
-/// and propagate the char animation. Returns the resolved [`AnimatedProperties`]
-/// at `time` within a scene of `scene_duration` seconds.
-///
-/// Used by both the legacy render pipeline and the new paint-tree dispatcher
-/// so they share the exact same animation semantics.
 pub fn resolve_props_for_effects(
     effects: &[AnimationEffect],
     time: f64,
@@ -859,15 +629,6 @@ pub fn resolve_props_for_effects(
         let p = resolve_animations(&[], Some(preset), Some(preset_config), time, scene_duration);
         props.merge(&p);
     }
-    // Every `keyframes`/`tilt_in` effect is resolved together in one call
-    // (constat #5): within a single `resolve_animations` call, multiple
-    // `Animation`s targeting the same property are applied in list order via
-    // `apply_property` (assignment, not addition), so the *last* effect in
-    // `style.animation` wins on a shared property — deterministic, and
-    // independent of any effect's `delay`. `keyframes_loop` (constat #7)
-    // carries `"loop": true` from any contributing effect into the solver,
-    // which `resolve_animations` used to never see (it was always called
-    // with `preset_config = None`, i.e. `repeat = false`).
     if !extracted.keyframe_animations.is_empty() {
         let loop_cfg = PresetConfig {
             repeat: extracted.keyframes_loop,
@@ -900,7 +661,6 @@ pub fn resolve_props_for_effects(
     props
 }
 
-/// Resolve animations for a layer at a specific time (seconds) within the scene
 pub fn resolve_animations(
     animations: &[Animation],
     preset: Option<&AnimationPreset>,
@@ -913,10 +673,8 @@ pub fn resolve_animations(
     let config = preset_config.cloned().unwrap_or_default();
     let should_loop = config.repeat;
 
-    // First, expand preset into animations
     let preset_animations = preset.map(|p| expand_preset(p, &config, scene_duration));
 
-    // Merge preset animations with explicit animations (explicit wins on conflict)
     let all_animations: Vec<&Animation> = preset_animations
         .as_ref()
         .map(|pa| pa.iter().collect::<Vec<_>>())
@@ -945,22 +703,6 @@ pub fn resolve_animations(
     props
 }
 
-/// Maps `time` into the animation's own repeat cycle, honouring
-/// `config.repeat_count` (finite vs. infinite), `config.yoyo` (ping-pong
-/// direction) and `config.repeat_delay` (a pause held at each cycle's
-/// resting value) — issue #330's generalisation of what used to be a
-/// bare infinite modulo wrap. Only called when `config.repeat` is already
-/// known true (see `resolve_animations`'s `should_loop` gate); a
-/// non-looping animation never reaches this function.
-///
-/// The default case — `repeat: true`, no `repeat_count`, `yoyo: false`,
-/// `repeat_delay: 0.0` — reduces algebraically to `period == duration` and
-/// `cycle_index` always even (never backward), so `within_cycle` is
-/// exactly `(time - start) % duration` and the result is exactly
-/// `start + (elapsed % duration)`: the old `loop_time` formula this
-/// function replaces, byte-identical (see
-/// `tests::repeat_true_with_no_new_fields_is_byte_identical_to_legacy_loop_time`
-/// below).
 fn cycle_time(anim: &Animation, time: f64, config: &PresetConfig) -> f64 {
     let keyframes = &anim.keyframes;
     if keyframes.len() < 2 {
@@ -973,9 +715,6 @@ fn cycle_time(anim: &Animation, time: f64, config: &PresetConfig) -> f64 {
         return time;
     }
 
-    // `repeat_delay` pads every cycle with a held pause before the next
-    // one starts — the period the clock wraps on is longer than the
-    // motion itself by exactly that pause.
     let period = duration + config.repeat_delay.max(0.0);
     if period < 1e-9 {
         return time;
@@ -987,8 +726,6 @@ fn cycle_time(anim: &Animation, time: f64, config: &PresetConfig) -> f64 {
         cycle_index = 0;
     }
 
-    // A finite `repeat_count` freezes on the resting value of its last
-    // play once `time` runs past it, instead of continuing to cycle.
     if let Some(count) = config.repeat_count {
         let last_index = (count.max(1) - 1) as i64;
         if cycle_index > last_index {
@@ -996,9 +733,6 @@ fn cycle_time(anim: &Animation, time: f64, config: &PresetConfig) -> f64 {
         }
     }
 
-    // Time spent inside this cycle's own motion window, clamped to
-    // `duration` — once past it, we're in the `repeat_delay` pause (or,
-    // for the clamped final cycle above, held there indefinitely).
     let within_cycle = (elapsed - cycle_index as f64 * period)
         .min(duration)
         .max(0.0);
@@ -1011,27 +745,11 @@ fn cycle_time(anim: &Animation, time: f64, config: &PresetConfig) -> f64 {
     }
 }
 
-/// Result of resolving an animation value — either a number or a color
 enum ResolvedValue {
     Number(f64),
     Color(String),
 }
 
-/// Public wrapper around `resolve_animation_value_full` for callers outside
-/// this module that want to reuse the exact segment/easing/spring
-/// interpolation math (ordering, per-keyframe easing override, clamping at
-/// the ends) on a synthetic `Animation` they built themselves, without
-/// routing the result through `AnimatedProperties`/`apply_property`.
-///
-/// This is how `box_builder.rs`'s `style.transition` smoothing for
-/// `border-radius`/`background` is implemented: those two properties are
-/// paint-time `CssStyle` fields that every painter already reads directly
-/// (via `paint_pass.rs`, frozen) — there is no `AnimatedProperties` field
-/// for them to land in that anything downstream would ever look at, so
-/// resolving through the generic effects pipeline the way `opacity`/`color`
-/// do would be a dead end. Calling this directly and writing the resolved
-/// `CssStyle` field by hand instead reuses the proven interpolation math
-/// while staying entirely inside `box_builder.rs`'s own file scope.
 pub fn resolve_keyframe_track(anim: &Animation, time: f64) -> KeyframeValue {
     match resolve_animation_value_full(anim, time) {
         ResolvedValue::Number(n) => KeyframeValue::Number(n),
@@ -1079,7 +797,6 @@ fn resolve_animation_value_full(anim: &Animation, time: f64) -> ResolvedValue {
 
             let local_t = (time - kf0.time) / segment_duration;
 
-            // Use per-keyframe easing if specified, otherwise fall back to animation-level easing
             let segment_easing = kf0.easing.as_ref().unwrap_or(&anim.easing);
 
             let progress = match segment_easing {
@@ -1090,7 +807,6 @@ fn resolve_animation_value_full(anim: &Animation, time: f64) -> ResolvedValue {
                 other => ease(local_t, other),
             };
 
-            // Check if both keyframes are colors
             if let (KeyframeValue::Color(c0), KeyframeValue::Color(c1)) = (&kf0.value, &kf1.value) {
                 return ResolvedValue::Color(lerp_color(c0, c1, progress));
             }
@@ -1107,13 +823,11 @@ fn resolve_animation_value_full(anim: &Animation, time: f64) -> ResolvedValue {
     }
 }
 
-/// Parse hex color to (r, g, b, a) as f64 components (0-255)
 fn parse_hex_components(hex: &str) -> (f64, f64, f64, f64) {
     let (r, g, b, a) = super::renderer::parse_hex_color(hex);
     (r as f64, g as f64, b as f64, a as f64)
 }
 
-/// Interpolate between two hex colors
 pub fn lerp_color(c1: &str, c2: &str, t: f64) -> String {
     let (r1, g1, b1, a1) = parse_hex_components(c1);
     let (r2, g2, b2, a2) = parse_hex_components(c2);
@@ -1158,34 +872,19 @@ fn apply_property(props: &mut AnimatedProperties, property: &str, value: f64) {
         "perspective" => props.perspective = value as f32,
         "draw_progress" => props.draw_progress = value as f32,
         "motion_progress" => props.motion_progress = value as f32,
-        _ => {} // Unknown property, ignore
+        _ => {}
     }
 }
 
-// Note: an earlier workstream (constat #4, `schema/video.rs`) already closed
-// the "unrecognized `Animation.property` is a silent no-op" gap this
-// function's catch-all (`_ => {}` above) would otherwise hide —
-// `KeyframesConfig.keyframes` deserializes through
-// `deserialize_validated_keyframes`/`validate_motion_property`, which
-// rejects any `property` outside `KNOWN_MOTION_PROPERTIES` (with a
-// did-you-mean suggestion) at parse time, before a scenario ever reaches
-// `validate`/render. This workstream verified that gap is closed rather
-// than reopening it with a second, redundant "known properties" list here;
-// see the workstream report's "generic interpolation" write-up.
-
-// ─── Wiggle resolution ──────────────────────────────────────────────────────
-
-/// Simple noise function based on sine waves with seed for pseudo-random behavior
 fn simplex_noise_1d(x: f64, seed: u64) -> f64 {
     use std::f64::consts::TAU;
     let s = seed as f64;
 
     (x * TAU + s * 0.1234).sin() * 0.6
         + (x * TAU * 1.7 + s * 0.5678).sin() * 0.3
-        + (x * TAU * 2.9 + s * 0.9012).sin() * 0.1 // roughly -1..1
+        + (x * TAU * 2.9 + s * 0.9012).sin() * 0.1
 }
 
-/// Parameterized noise function with configurable octaves
 fn simplex_noise_1d_ext(x: f64, seed: u64, octaves: u32) -> f64 {
     use std::f64::consts::TAU;
     let s = seed as f64;
@@ -1206,7 +905,6 @@ fn simplex_noise_1d_ext(x: f64, seed: u64, octaves: u32) -> f64 {
     }
 }
 
-/// Apply wiggle offsets additively to animated properties
 pub fn apply_wiggles(props: &mut AnimatedProperties, wiggles: &[WiggleConfig], time: f64) {
     for wiggle in wiggles {
         let has_extras = wiggle.octaves.is_some()
@@ -1228,7 +926,6 @@ pub fn apply_wiggles(props: &mut AnimatedProperties, wiggles: &[WiggleConfig], t
             simplex_noise_1d(input, wiggle.seed)
         };
 
-        // Apply easing: normalize [-1,1] → [0,1], ease, remap to [-1,1]
         if let Some(ref easing) = wiggle.easing {
             let normalized = (noise_val + 1.0) * 0.5;
             let eased = ease(normalized, easing);
@@ -1237,7 +934,6 @@ pub fn apply_wiggles(props: &mut AnimatedProperties, wiggles: &[WiggleConfig], t
 
         let mut amp = wiggle.amplitude;
 
-        // Apply exponential decay
         if let Some(decay) = wiggle.decay {
             amp *= (-decay * time).exp();
         }
@@ -1251,8 +947,6 @@ pub fn apply_wiggles(props: &mut AnimatedProperties, wiggles: &[WiggleConfig], t
     }
 }
 
-/// Apply orbit effects additively to animated properties.
-/// Creates circular/elliptical motion with pseudo-3D depth via scale and opacity modulation.
 pub fn apply_orbits(props: &mut AnimatedProperties, orbits: &[OrbitConfig], time: f64) {
     use std::f64::consts::{PI, TAU};
 
@@ -1263,33 +957,22 @@ pub fn apply_orbits(props: &mut AnimatedProperties, orbits: &[OrbitConfig], time
 
         let theta = TAU * orbit.speed * time + angle_offset + phase_offset;
 
-        // Elliptical orbit position
         let raw_x = orbit.radius_x * theta.cos();
         let raw_y = orbit.radius_y * theta.sin();
 
-        // Apply tilt: compress Y axis and add depth effect
         let x_offset = raw_x;
         let y_offset = raw_y * tilt_rad.cos();
 
         props.translate_x += x_offset as f32;
         props.translate_y += y_offset as f32;
 
-        // Pseudo-depth: when "behind" (sin < 0), scale down and reduce opacity
         if orbit.depth > 0.0 {
-            // depth_factor goes from (1 - depth) to (1 + depth) based on orbit position
-            let depth_sin = if tilt_rad.abs() > 0.01 {
-                // With tilt, depth is based on the untilted Y (how far "back" the object is)
-                theta.sin()
-            } else {
-                // Without tilt, use Y component for depth
-                theta.sin()
-            };
+            let depth_sin = theta.sin();
             let scale_factor = 1.0 + orbit.depth * depth_sin;
             props.scale_x *= scale_factor as f32;
             props.scale_y *= scale_factor as f32;
         }
 
-        // Opacity modulation for depth
         if orbit.opacity_depth > 0.0 {
             let depth_sin = theta.sin();
             let opacity_factor = 1.0 - orbit.opacity_depth * (1.0 - depth_sin) * 0.5;
@@ -1298,32 +981,8 @@ pub fn apply_orbits(props: &mut AnimatedProperties, orbits: &[OrbitConfig], time
     }
 }
 
-// ─── Motion path ────────────────────────────────────────────────────────────
-
-/// Below this measured path length (in px), a `motion_path` is treated as
-/// the "zero length" degenerate case: the component holds at its single
-/// point instead of travelling, and `orient` contributes no rotation (a
-/// tangent is undefined at zero length). Not `0.0` exactly — `PathMeasure`
-/// is a numeric approximation, and a path whose segments collapse onto one
-/// point within float precision (e.g. two near-coincident cubic control
-/// points) should degrade the same defined way a literal single-point path
-/// does, rather than pass through as a very short, jittery "real" travel.
 pub const MOTION_PATH_MIN_LENGTH: f32 = 1e-3;
 
-/// Parse `path_data` and measure its length, in px — the shared primitive
-/// `apply_motion_paths` (render time) and `validate_schema.rs`'s advisory
-/// zero-length check (author time) both build on, so the two never
-/// disagree about what "degenerate" means.
-///
-/// Returns `None` when `path_data` is empty or not valid SVG path data.
-/// Every `motion_path` effect reachable through `AnimationEffect` already
-/// has this ruled out at JSON-parse time
-/// (`schema/video.rs::deserialize_motion_path_data`), so in practice `None`
-/// only fires if a caller builds a `MotionPathConfig` directly in Rust,
-/// bypassing that gate. `Some(0.0)` (or a value below
-/// `MOTION_PATH_MIN_LENGTH`) is returned for a syntactically valid path
-/// with (near-)zero measured length — a well-defined, distinct case from
-/// "invalid", per `MotionPathConfig`'s "Degenerate paths" doc section.
 pub fn motion_path_length(path_data: &str) -> Option<f32> {
     let path = skia_safe::Path::from_svg(path_data)?;
     if path.count_points() == 0 {
@@ -1333,21 +992,6 @@ pub fn motion_path_length(path_data: &str) -> Option<f32> {
     Some(measure.length())
 }
 
-/// Progress along a `motion_path` effect's own timeline, already eased, in
-/// `[0, 1]`. Mirrors the delay/duration semantics every other timed effect
-/// in this file uses: before `delay`, progress is pinned to `0.0` (the path
-/// hasn't started — the component sits at the path's start point, the same
-/// "hold at the entrance state" every preset already does before its own
-/// delay elapses); at/after `delay + duration` it is pinned to `1.0` (holds
-/// at the path's end) unless `repeat` wraps it back into `[0, 1)` instead.
-///
-/// `safe_div`'s fallback (`1.0`) makes a non-positive `duration` behave as
-/// "already complete the instant `delay` elapses" — finite and defined,
-/// never a NaN/∞ division — the same belt-and-suspenders posture
-/// `spring_value` already takes on its own denominators.
-/// `validate_schema.rs::check_motion_path_config` additionally rejects
-/// `duration <= 0` as an author-facing error, so this fallback is a second
-/// line of defence, not the only one.
 fn motion_path_progress(cfg: &MotionPathConfig, time: f64) -> f64 {
     let elapsed = time - cfg.delay;
     if elapsed <= 0.0 {
@@ -1362,34 +1006,12 @@ fn motion_path_progress(cfg: &MotionPathConfig, time: f64) -> f64 {
     ease(progress, &cfg.easing)
 }
 
-/// One `motion_path` effect's contribution at `time`: a translate delta (in
-/// the component-local coordinate space `MotionPathConfig` documents) and a
-/// tangent-derived rotation in degrees (`0.0` when `orient` is unset, or
-/// when the path is the zero-length degenerate case).
 struct MotionPathSample {
     dx: f32,
     dy: f32,
     angle_deg: f32,
 }
 
-/// Sample a `motion_path` effect at `time`. Never returns a NaN/infinite
-/// component, for any input — the three degenerate cases the workstream
-/// brief names are each handled explicitly rather than falling through to
-/// whatever the underlying float operation happens to produce:
-///
-/// - **empty/unparsable path**: `AnimationEffect::MotionPath` cannot carry
-///   one past `schema/video.rs::deserialize_motion_path_data`'s parse-time
-///   rejection, but this function stays defensive anyway (`(0.0, 0.0,
-///   0.0)`, i.e. no displacement) rather than assuming that gate always ran
-///   — e.g. a future direct `MotionPathConfig` construction in Rust code
-///   would bypass serde entirely.
-/// - **single point** (`"M50,50"`) and **zero-length** (every segment
-///   collapses onto one point, e.g. `"M10,10 L10,10"`): both measure to
-///   (near-)zero length. Position holds at that single point (read via
-///   `Path::get_point(0)`) for the entire timeline; orientation is `0.0`
-///   regardless of `orient` — a tangent is undefined at zero length, so
-///   `atan2(0.0, 0.0)`'s technically-zero-but-meaningless result is never
-///   computed or relied on.
 fn motion_path_sample(cfg: &MotionPathConfig, time: f64) -> MotionPathSample {
     let zero = MotionPathSample {
         dx: 0.0,
@@ -1406,13 +1028,6 @@ fn motion_path_sample(cfg: &MotionPathConfig, time: f64) -> MotionPathSample {
     let mut measure = skia_safe::PathMeasure::new(&path, false, None);
     let length = measure.length();
 
-    // Verified empirically (not just assumed): `PathMeasure::pos_tan` on a
-    // zero-length contour returns `None` in this skia-safe build, which the
-    // `None` arm below would also catch — this early return is kept anyway
-    // as the one place the degenerate case is *named*, rather than an
-    // undocumented cross-version PathMeasure behaviour a reader would have
-    // to intuit, and it skips constructing/querying the measure entirely
-    // for the single most common degenerate input (a single-point path).
     if length <= MOTION_PATH_MIN_LENGTH {
         let (x, y) = path.points().first().map_or((0.0, 0.0), |p| (p.x, p.y));
         return MotionPathSample {
@@ -1438,10 +1053,6 @@ fn motion_path_sample(cfg: &MotionPathConfig, time: f64) -> MotionPathSample {
                 angle_deg,
             }
         }
-        // `0 <= distance <= length` on a >0-length path should always
-        // report a position; if Skia ever declines anyway, hold at the
-        // path's start rather than let a missing sample surface as a jump
-        // to the component's untranslated origin or a NaN.
         None => {
             let (x, y) = path.points().first().map_or((0.0, 0.0), |p| (p.x, p.y));
             MotionPathSample {
@@ -1453,17 +1064,6 @@ fn motion_path_sample(cfg: &MotionPathConfig, time: f64) -> MotionPathSample {
     }
 }
 
-/// Apply every `motion_path` effect additively to `props.translate_x`/
-/// `translate_y` (and, when `orient` is set, `props.rotation`) — the same
-/// treatment `apply_orbits`/`apply_wiggles` already give their own
-/// continuous effects, and critically, fields `css::animation::
-/// apply_animated_props` already bridges into `css.transform`'s
-/// `translate`/`rotate` functions. That bridge — not a new one — is what
-/// makes a `motion_path` excursion past the viewport visible to
-/// `--strict-anim` (`rustmotion::cli::commands::geometry::
-/// apply_static_node_transform`, which folds `css.transform` to detect
-/// overflow): this function must never write position/orientation anywhere
-/// else, or that detection silently stops seeing it.
 pub fn apply_motion_paths(props: &mut AnimatedProperties, paths: &[MotionPathConfig], time: f64) {
     for cfg in paths {
         let sample = motion_path_sample(cfg, time);
@@ -1502,11 +1102,6 @@ fn get_property_value(props: &AnimatedProperties, property: &str) -> f64 {
     }
 }
 
-// ─── Preset expansion ───────────────────────────────────────────────────────
-
-/// Properties eligible for the preset-level `spring` override: motion only.
-/// Opacity keeps its ease (an alpha overshoot flashes), blur/draw_progress
-/// would go out of range on overshoot.
 fn is_motion_property(property: &str) -> bool {
     matches!(
         property,
@@ -1523,37 +1118,6 @@ fn is_motion_property(property: &str) -> bool {
     )
 }
 
-/// Apply a user-provided spring to a preset's motion animations (issue #88).
-///
-/// Implementation note: a single generic post-processing pass was chosen over
-/// editing each of the ~40 preset builders — the eligibility rules are uniform
-/// and the builders stay oblivious to springs. Rules per animation:
-/// - non-motion property (opacity, blur, …): untouched;
-/// - 2 keyframes: easing → `Spring` with the given config. For `bounce_in` /
-///   `elastic_in` this *overrides* their built-in spring, which thereby acts
-///   as the default when no user config is provided;
-/// - more than 2 keyframes with different endpoints (manual-overshoot
-///   entrances like `scale_in`): collapsed to [first, last] + spring — the
-///   spring supplies the overshoot itself, keeping the manual peak would
-///   double it;
-/// - more than 2 keyframes with identical endpoints (continuous oscillators:
-///   pulse, shake, float): untouched — a spring toward the same value is a
-///   no-op and would freeze the effect.
-///
-/// `spring.duration` (issue #167 lot E) is *not* consulted here to resize
-/// the keyframe pair's own span: the pair's `[delay, end]` still comes from
-/// `AnimationTiming::delay`/`duration` (the same preset-level timing every
-/// other easing uses), untouched by whatever `SpringConfig::duration` says.
-/// `spring_value` — not this function — is where `duration` acts, by
-/// rescaling the *physics* time axis it is fed. Consequently, if the
-/// preset's own `duration` is shorter than `spring.duration`, the segment
-/// still ends (and the property still snaps to its final keyframe value) at
-/// the preset's `end`, before the spring has visually settled — exactly the
-/// pre-existing behaviour for any other easing curve given too short a
-/// segment. Pin `AnimationTiming::duration` (or the `keyframes` effect's own
-/// keyframe span, for the other call site in `resolve_animation_value_full`)
-/// to at least `spring_rest_time` to avoid that cutoff; `rustmotion info`
-/// reports `spring_rest_time` for exactly this purpose.
 fn apply_spring_to_motion(animations: &mut [Animation], spring: &SpringConfig) {
     for anim in animations.iter_mut() {
         if !is_motion_property(&anim.property) || anim.keyframes.len() < 2 {
@@ -1563,7 +1127,7 @@ fn apply_spring_to_motion(animations: &mut [Animation], spring: &SpringConfig) {
             let first = anim.keyframes.first().unwrap().clone();
             let last = anim.keyframes.last().unwrap().clone();
             if (first.value.as_f64() - last.value.as_f64()).abs() < 1e-9 {
-                continue; // oscillator — leave its shape alone
+                continue;
             }
             anim.keyframes = vec![first, last];
         }
@@ -1590,7 +1154,6 @@ fn expand_preset_inner(preset: &AnimationPreset, config: &PresetConfig) -> Vec<A
     let end = delay + dur;
 
     match preset {
-        // ── Entrées ──────────────────────────────────────────────────────
         AnimationPreset::FadeIn => vec![kf_anim(
             "opacity",
             delay,
@@ -1762,10 +1325,6 @@ fn expand_preset_inner(preset: &AnimationPreset, config: &PresetConfig) -> Vec<A
             vec![kf_anim_spring_underdamped("scale", delay, 0.0, end, 1.0)]
         }
         AnimationPreset::PopIn => {
-            // Two beats, not one: the back-out scale places the element, then
-            // a short pulse draws the eye back to it. Collapsing them into a
-            // single overshooting curve reads as one wobble instead — the
-            // second beat has to land *after* the element has visibly settled.
             let pulse = 1.0 + config.overshoot.unwrap_or(0.18);
             let placed = delay + dur * 0.6;
             let peak = delay + dur * 0.8;
@@ -1808,7 +1367,6 @@ fn expand_preset_inner(preset: &AnimationPreset, config: &PresetConfig) -> Vec<A
             ]
         }
 
-        // ── Sorties ──────────────────────────────────────────────────────
         AnimationPreset::FadeOut => {
             vec![kf_anim("opacity", delay, 1.0, end, 0.0, EasingType::EaseIn)]
         }
@@ -1943,13 +1501,6 @@ fn expand_preset_inner(preset: &AnimationPreset, config: &PresetConfig) -> Vec<A
             kf_anim("scale", delay, 1.0, end, 0.5, EasingType::EaseInCubic),
         ],
 
-        // ── Effets continus ──────────────────────────────────────────────
-        // `delay`/`duration` used to be decorative here: the keyframes were
-        // pinned to literal times 0.0/0.25/0.5/1.0 regardless of what the
-        // scenario authored (constat #2), so every pulsing/floating/shaking/
-        // spinning element in a scene shared one hardcoded 1-second cycle
-        // starting at t=0. `delay` now shifts the cycle's start and
-        // `duration` sets its length, exactly like every other preset.
         AnimationPreset::Pulse => vec![kf_anim_3kf_over(
             "scale",
             delay,
@@ -1987,7 +1538,6 @@ fn expand_preset_inner(preset: &AnimationPreset, config: &PresetConfig) -> Vec<A
             EasingType::Linear,
         )],
 
-        // ── 3D ───────────────────────────────────────────────────────────
         AnimationPreset::FlipInX => vec![
             kf_anim(
                 "opacity",
@@ -2058,17 +1608,7 @@ fn expand_preset_inner(preset: &AnimationPreset, config: &PresetConfig) -> Vec<A
             kf_anim("scale", delay, 0.9, end, 1.0, EasingType::EaseOutCubic),
         ],
 
-        // ── Floating/orbit ────────────────────────────────────────────
         AnimationPreset::Float3d => {
-            // The cycle spans delay..delay+duration, so `duration` sets the
-            // period and `delay` shifts the phase.
-            //
-            // Both were previously inert: the keyframes were pinned to 0.0 /
-            // 0.5 / 1.0 seconds, so every floating element in a scene shared
-            // one 1-second cycle and moved in lockstep no matter what the
-            // scenario asked for. A row of cards bobbing in unison reads as a
-            // dance; the same cards on different phases and travels read as
-            // depth, which is the point of the preset.
             let amp = config.amplitude.unwrap_or(12.0);
             let tilt = amp / 12.0;
             vec![
@@ -2110,7 +1650,6 @@ fn expand_preset_inner(preset: &AnimationPreset, config: &PresetConfig) -> Vec<A
             ]
         }
 
-        // ── Spéciaux ────────────────────────────────────────────────────
         AnimationPreset::DrawIn => vec![kf_anim(
             "draw_progress",
             delay,
@@ -2208,8 +1747,6 @@ fn kf_anim_spring_underdamped(property: &str, t0: f64, v0: f64, t1: f64, v1: f64
     }
 }
 
-/// Three-keyframe oscillation laid out over an explicit `start..end` window,
-/// so the caller controls both when it begins and how long one cycle lasts.
 fn kf_anim_3kf_over(
     property: &str,
     start: f64,
@@ -2227,9 +1764,6 @@ fn kf_anim_3kf_over(
     }
 }
 
-/// Four-keyframe oscillation (quarter/half/end split) laid out over an
-/// explicit `start..end` window — the `shake` counterpart to
-/// `kf_anim_3kf_over`.
 #[allow(clippy::too_many_arguments)]
 fn kf_anim_4kf_over(
     property: &str,
@@ -2257,8 +1791,6 @@ fn kf_anim_4kf_over(
 
 #[cfg(test)]
 mod spring_preset_tests {
-    //! TDD tests for issue #88: spring easing on any preset via
-    //! `AnimationTiming.spring`.
 
     use super::*;
     use crate::schema::AnimationEffect;
@@ -2281,7 +1813,6 @@ mod spring_preset_tests {
         }
     }
 
-    /// Sample translate_y and opacity over the animation window.
     fn sample(effects: &[AnimationEffect], duration: f64) -> Vec<(f64, f64, f64)> {
         let steps = 80;
         (0..=steps)
@@ -2295,7 +1826,6 @@ mod spring_preset_tests {
 
     #[test]
     fn fade_in_up_spring_overshoots_position() {
-        // Without spring: translate_y eases 60 → 0, never negative.
         let plain = sample(&[AnimationEffect::FadeInUp(timing(0.8, None))], 0.8);
         let min_plain = plain.iter().map(|(_, y, _)| *y).fold(f64::MAX, f64::min);
         assert!(
@@ -2303,8 +1833,6 @@ mod spring_preset_tests {
             "without spring translate_y must never overshoot below 0, got min {min_plain}"
         );
 
-        // With an underdamped spring: the position overshoots past the final
-        // value (goes measurably negative) somewhere inside the window.
         let sprung = sample(
             &[AnimationEffect::FadeInUp(timing(0.8, Some(underdamped())))],
             0.8,
@@ -2315,7 +1843,6 @@ mod spring_preset_tests {
             "with spring translate_y must overshoot below 0, got min {min_sprung}"
         );
 
-        // At ~70% of the duration the two positions differ measurably.
         let y_plain_70 = plain[56].1;
         let y_sprung_70 = sprung[56].1;
         assert!(
@@ -2338,7 +1865,6 @@ mod spring_preset_tests {
                 "opacity must be identical with/without spring at sample {i}: {a_plain} vs {a_sprung}"
             );
         }
-        // And alpha stays monotone non-decreasing (no overshoot flashes).
         for w in sprung.windows(2) {
             assert!(
                 w[1].2 >= w[0].2 - 1e-6,
@@ -2355,8 +1881,6 @@ mod spring_preset_tests {
             let fx = [AnimationEffect::BounceIn(timing(0.8, spring))];
             resolve_props_for_effects(&fx, t, 5.0).scale_x as f64
         };
-        // Default (damping 12/stiffness 100) vs a heavily overdamped custom
-        // spring must produce different scales mid-flight.
         let overdamped = SpringConfig {
             damping: 40.0,
             stiffness: 100.0,
@@ -2373,9 +1897,6 @@ mod spring_preset_tests {
 
     #[test]
     fn scale_in_spring_collapses_manual_overshoot() {
-        // ScaleIn's 3-keyframe manual overshoot (0 → 1.08 → 1) collapses to a
-        // 2-keyframe spring (0 → 1): the spring provides the overshoot itself,
-        // so scale must exceed 1.0 somewhere (underdamped) and converge to 1.
         let fx = [AnimationEffect::ScaleIn(timing(0.8, Some(underdamped())))];
         let mut max_scale = f64::MIN;
         for i in 0..=80 {
@@ -2383,9 +1904,6 @@ mod spring_preset_tests {
             let s = resolve_props_for_effects(&fx, t, 5.0).scale_x as f64;
             max_scale = max_scale.max(s);
         }
-        // The manual overshoot keyframe peaks at exactly 1.08; the collapsed
-        // underdamped spring (damping 8 / stiffness 120) peaks well above it —
-        // this discriminates the spring path from the manual keyframe path.
         assert!(
             max_scale > 1.12,
             "spring scale_in must overshoot past the manual 1.08 peak, got max {max_scale}"
@@ -2399,9 +1917,6 @@ mod spring_preset_tests {
 
     #[test]
     fn pulse_oscillator_ignores_spring() {
-        // Pulse's scale loop (1 → 1.05 → 1) has identical endpoints — a
-        // spring toward the same value would freeze the effect, so the
-        // oscillator keeps its own shape.
         let at = |spring: Option<SpringConfig>, t: f64| -> f64 {
             let fx = [AnimationEffect::Pulse(timing(1.0, spring))];
             resolve_props_for_effects(&fx, t, 5.0).scale_x as f64
@@ -2429,12 +1944,10 @@ mod spring_preset_tests {
         assert_eq!(s.stiffness, 120.0);
         assert_eq!(s.mass, 1.0, "mass defaults to 1");
 
-        // Round-trip.
         let re = serde_json::to_string(&fx).unwrap();
         let back: AnimationEffect = serde_json::from_str(&re).unwrap();
         assert_eq!(fx, back);
 
-        // Absent spring stays absent.
         let plain: AnimationEffect = serde_json::from_str(r#"{ "name": "fade_in_up" }"#).unwrap();
         let AnimationEffect::FadeInUp(t) = &plain else {
             panic!("wrong variant");
@@ -2445,11 +1958,6 @@ mod spring_preset_tests {
 
 #[cfg(test)]
 mod glow_tests {
-    //! M3: `find_glow_effect` extraction (issue #109). The colour/filter
-    //! side of the fix lives in
-    //! `rustmotion_components::box_builder::apply_glow_effect`, which is
-    //! covered in that crate's own tests since it needs `CssStyle`/`FilterFn`
-    //! (not available to this crate).
 
     use super::*;
     use crate::schema::{AnimationEffect, AnimationTiming, GlowConfig};
@@ -2481,13 +1989,6 @@ mod glow_tests {
 
     #[test]
     fn resolve_props_for_effects_does_not_touch_glow_radius_or_intensity() {
-        // Deliberate: the named `glow` effect is applied directly as a CSS
-        // filter by `box_builder::apply_glow_effect` (using the raw
-        // `GlowConfig.color`, which `AnimatedProperties` has no field for),
-        // not through this resolver. This guards against a future change
-        // accidentally routing it through `AnimatedProperties` too, which
-        // would double up into two stacked drop-shadows (see the doc comment
-        // on `apply_glow_effect`).
         let effects = vec![glow("#5C39EE", 12.0, 1.0)];
         let props = resolve_props_for_effects(&effects, 0.0, 1.0);
         assert_eq!(
@@ -2504,16 +2005,9 @@ mod glow_tests {
 
 #[cfg(test)]
 mod float3d_amplitude_tests {
-    //! Constat #1: `PresetConfig::amplitude` is read by `expand_preset_inner`
-    //! (`config.amplitude.unwrap_or(12.0)`) but `AnimationTiming::to_preset_config`
-    //! used to hardcode `amplitude: None`, so any author-supplied amplitude on
-    //! a `float_3d` effect never reached the solver — every element bobbed by
-    //! the same hardcoded 12px regardless of what was authored.
     use super::*;
     use crate::schema::AnimationEffect;
 
-    /// Peak absolute `translate_y` reached while sampling densely across one
-    /// cycle — proxy for the oscillation's amplitude actually resolved.
     fn peak_translate_y(effects: &[AnimationEffect], window: f64) -> f64 {
         let mut peak = 0.0f64;
         let steps = 200;
@@ -2529,9 +2023,6 @@ mod float3d_amplitude_tests {
 
     #[test]
     fn author_supplied_amplitude_reaches_the_solver() {
-        // Parsed from raw JSON, not built in Rust — proves the value survives
-        // serde all the way to the resolver, not merely that the struct has a
-        // field for it.
         let default_fx: AnimationEffect =
             serde_json::from_str(r#"{ "name": "float_3d", "duration": 1.0 }"#).unwrap();
         let big_fx: AnimationEffect =
@@ -2555,11 +2046,6 @@ mod float3d_amplitude_tests {
 
 #[cfg(test)]
 mod continuous_preset_timing_tests {
-    //! Constat #2: `pulse` / `float` / `shake` / `spin` used to fabricate
-    //! keyframes at literal times 0.0/0.25/0.5/1.0, ignoring `config.delay`
-    //! and `config.duration` entirely — every element sharing one of these
-    //! presets moved in lockstep on a fixed 1-second cycle no matter what the
-    //! scenario authored.
     use super::*;
     use crate::schema::AnimationEffect;
 
@@ -2567,8 +2053,6 @@ mod continuous_preset_timing_tests {
         AnimationTimingFixture { delay, duration }
     }
 
-    /// Minimal JSON round-trip helper — keeps every case going through serde,
-    /// like the author's JSON would.
     struct AnimationTimingFixture {
         delay: f64,
         duration: f64,
@@ -2587,12 +2071,6 @@ mod continuous_preset_timing_tests {
     fn pulse_honours_delay_and_duration() {
         let t = timing(1.0, 2.0);
         let fx: AnimationEffect = serde_json::from_str(&t.json("pulse")).unwrap();
-        // Before its delay, the cycle has not started: the resolver clamps to
-        // the first keyframe's value (the 0.95 trough) at every pre-delay
-        // instant — it must be identical at two different pre-delay times,
-        // not moving. Before the fix, delay/duration were ignored and the
-        // preset ran its own literal 0..1s cycle regardless, so t=0.1 and
-        // t=0.9 fell in different oscillation phases and disagreed.
         let early = resolve_props_for_effects(std::slice::from_ref(&fx), 0.1, 10.0).scale_x as f64;
         let late = resolve_props_for_effects(std::slice::from_ref(&fx), 0.9, 10.0).scale_x as f64;
         assert!(
@@ -2604,7 +2082,6 @@ mod continuous_preset_timing_tests {
             (early - 0.95).abs() < 0.01,
             "pulse before its delay must clamp to the first keyframe (0.95), got {early}"
         );
-        // At the midpoint of its cycle (delay + duration/2 = 2.0): near the peak (1.05).
         let mid = resolve_props_for_effects(&[fx], 2.0, 10.0).scale_x as f64;
         assert!(
             mid > 1.03,
@@ -2639,7 +2116,6 @@ mod continuous_preset_timing_tests {
             before.abs() < 0.1,
             "shake at t=0.5 (before delay=1.0) must be at rest x=0, got {before}"
         );
-        // Quarter point of the cycle (delay + duration/4 = 1.5): near +10 peak.
         let quarter = resolve_props_for_effects(&[fx], 1.5, 10.0).translate_x as f64;
         assert!(
             quarter > 8.0,
@@ -2657,7 +2133,6 @@ mod continuous_preset_timing_tests {
             before.abs() < 0.1,
             "spin at t=0.5 (before delay=1.0) must be at rest rotation=0, got {before}"
         );
-        // Halfway through its own cycle (delay + duration/2 = 2.0): ~180deg.
         let mid = resolve_props_for_effects(&[fx], 2.0, 10.0).rotation as f64;
         assert!(
             (mid - 180.0).abs() < 5.0,
@@ -2668,27 +2143,9 @@ mod continuous_preset_timing_tests {
 
 #[cfg(test)]
 mod keyframes_composition_tests {
-    //! Constat #5: two `keyframes` effects targeting the same property used
-    //! to be routed into one of two buckets purely by whether `delay != 0`
-    //! (`owned_keyframes` vs `keyframes` in `extract_effects`), each bucket
-    //! resolved by its own `resolve_animations` call and combined via
-    //! `AnimatedProperties::merge` — which *sums* additive properties like
-    //! `translate_x` across buckets, while two effects landing in the *same*
-    //! bucket instead overwrite (last one in the list wins, since
-    //! `apply_property` assigns rather than adds). So the composition rule
-    //! depended entirely on an incidental field (`delay`) with no relation to
-    //! authoring intent.
-    //!
-    //! Chosen semantic: every `keyframes`/`tilt_in` effect is resolved
-    //! together in one `resolve_animations` call, in the order the effects
-    //! appear in `style.animation` — like a CSS cascade, the *last* effect
-    //! in the array wins on a shared property. This is deterministic and
-    //! independent of `delay`.
     use super::*;
     use crate::schema::{Animation, AnimationEffect, Keyframe, KeyframeValue, KeyframesConfig};
 
-    /// A `keyframes` effect with one property ramping `0 -> value` over
-    /// `[0, 1]` (pre-shift), then shifted by `delay`.
     fn ramp(property: &str, value: f64, delay: f64) -> AnimationEffect {
         AnimationEffect::Keyframes(KeyframesConfig {
             keyframes: vec![Animation {
@@ -2716,7 +2173,6 @@ mod keyframes_composition_tests {
 
     #[test]
     fn last_declared_effect_wins_regardless_of_which_one_carries_the_delay() {
-        // Case 1: A (delay=0) declared first, B (delay=0.5) declared second.
         let a1 = ramp("translate_x", 100.0, 0.0);
         let b1 = ramp("translate_x", 40.0, 0.5);
         let combined_1 = resolve_props_for_effects(&[a1, b1.clone()], 1.0, 5.0).translate_x as f64;
@@ -2726,10 +2182,6 @@ mod keyframes_composition_tests {
             "B (declared last) must alone determine translate_x at t=1.0: combined={combined_1}, B-alone={b1_alone}"
         );
 
-        // Case 2: swap which one carries the delay, keep declaration order
-        // (A first, B second) — the outcome must be identical in shape: B
-        // (still last) wins alone, this time using B's own (now delay=0)
-        // timing.
         let a2 = ramp("translate_x", 100.0, 0.5);
         let b2 = ramp("translate_x", 40.0, 0.0);
         let combined_2 = resolve_props_for_effects(&[a2, b2.clone()], 1.0, 5.0).translate_x as f64;
@@ -2740,9 +2192,6 @@ mod keyframes_composition_tests {
              combined={combined_2}, B-alone={b2_alone}"
         );
 
-        // The two cases must NOT collapse to the same number (sanity check
-        // that this test isn't vacuous — B's own resolved value genuinely
-        // differs between the two delay assignments).
         assert!(
             (combined_1 - combined_2).abs() > 1.0,
             "sanity: the two cases must differ (B's own timing changed): {combined_1} vs {combined_2}"
@@ -2752,13 +2201,6 @@ mod keyframes_composition_tests {
 
 #[cfg(test)]
 mod keyframes_loop_tests {
-    //! Constat #7: `"loop": true` on a `keyframes` effect or on `tilt_in`
-    //! never reached the solver. `resolve_props_for_effects` always called
-    //! `resolve_animations(&kfs, None, None, ...)` for both keyframe buckets
-    //! — passing `preset_config = None` means `resolve_animations` falls back
-    //! to `PresetConfig::default()`, whose `repeat` is `false`, so
-    //! `loop_time` was never invoked no matter what `KeyframesConfig::repeat`
-    //! / `TiltInConfig::repeat` said.
     use super::*;
     use crate::schema::{Animation, AnimationEffect, Keyframe, KeyframeValue, KeyframesConfig};
 
@@ -2786,10 +2228,6 @@ mod keyframes_loop_tests {
             duration: 0.8,
             repeat: true,
         });
-        // t=2.5 is past the keyframe's own last time (1.0). Without looping,
-        // the resolver clamps to the last keyframe's value (1.0) forever.
-        // With looping (start=0, end=1, duration=1), t=2.5 wraps to 0.5 ->
-        // opacity should be ~0.5, not 1.0.
         let opacity = resolve_props_for_effects(&[looping], 2.5, 5.0).opacity as f64;
         assert!(
             (opacity - 0.5).abs() < 0.05,
@@ -2807,9 +2245,6 @@ mod keyframes_loop_tests {
             serde_json::from_str(r#"{ "name": "tilt_in", "delay": 0.0, "duration": 0.4 }"#)
                 .unwrap();
 
-        // Well past the settle time (0.4s): without loop, scale is pinned at
-        // the final resting value (1.0). With loop (cycle 0..0.4), t=1.0
-        // wraps to local t=0.2 (t=1.0 % 0.4 = 0.2), mid-tilt, scale != 1.0.
         let settled_scale = resolve_props_for_effects(&[settled], 1.0, 5.0).scale_x as f64;
         let looping_scale = resolve_props_for_effects(&[looping_tilt], 1.0, 5.0).scale_x as f64;
 
@@ -2826,13 +2261,6 @@ mod keyframes_loop_tests {
 
 #[cfg(test)]
 mod spring_robustness_tests {
-    //! Constat #6: `spring_value` fed `mass`/`stiffness`/`damping` straight
-    //! into `sqrt`/division with no floor, so `mass <= 0` or `stiffness <= 0`
-    //! produced NaN (division by zero or sqrt of a negative number), and
-    //! negative `damping` flipped the decay exponent's sign, diverging to
-    //! +-infinity instead of settling. A NaN/inf progress value then flows
-    //! into transform math (translate/scale) and contaminates the whole
-    //! subtree it touches.
     use super::*;
 
     #[test]
@@ -2890,16 +2318,8 @@ mod spring_robustness_tests {
 
 #[cfg(test)]
 mod spring_duration_tests {
-    //! Issue #167 lot E: `SpringConfig::duration` forces a spring to settle
-    //! (see `rest_threshold`) at exactly that many seconds by rescaling the
-    //! time axis fed to the physics solver; `spring_rest_time` is the
-    //! public "measure du repos" `rustmotion info` surfaces.
     use super::*;
 
-    /// Reference settle time via a fine linear scan of the actual
-    /// implemented formula (`spring_value_raw`), independent of
-    /// `spring_settle_time`'s coarse-then-bisect implementation — these
-    /// tests check the algorithm against ground truth, not against itself.
     fn brute_force_settle_time(
         damping: f64,
         stiffness: f64,
@@ -2921,21 +2341,6 @@ mod spring_duration_tests {
 
     #[test]
     fn red_phase_duration_is_ignored_by_the_raw_physical_solver() {
-        // Captured red-phase numbers (issue #167 lot E, before `duration`
-        // existed on `SpringConfig`): a spring's settle time was purely
-        // emergent from damping/stiffness/mass. `spring_value_raw` is
-        // exactly that pre-existing, unscaled solver — by construction it
-        // does not know about `duration`.
-        //
-        // damping=6, stiffness=120, mass=1 (the same "underdamped" preset
-        // this file already uses for elastic_in / kf_anim_spring_underdamped)
-        // at t=0.8s: spring_value_raw(0.8, 6, 120, 1) ~= 1.027616 — 2.76%
-        // past the target, well outside any reasonable rest_threshold
-        // (default 0.5%). An author asking this spring to "finish at 0.8s"
-        // got a value nowhere near rest. Reference recomputed for RM-09
-        // (issue #220): the solver's underdamped branch fed the wrong
-        // argument to its sine term, so this captured value moved when that
-        // was corrected.
         let v = spring_value_raw(0.8, 6.0, 120.0, 1.0);
         assert!(
             (v - 1.027616).abs() < 1e-5,
@@ -2960,9 +2365,6 @@ mod spring_duration_tests {
         };
         let threshold = DEFAULT_SPRING_REST_THRESHOLD;
 
-        // Green phase: the same (damping, stiffness, mass) that the
-        // red-phase test above showed is 2.76% off at t=0.8s without a
-        // `duration` must now be within `threshold` of rest at t=0.8s.
         let v_at_duration = spring_value(0.8, &config);
         assert!(
             (v_at_duration - 1.0).abs() <= threshold,
@@ -2971,9 +2373,6 @@ mod spring_duration_tests {
             (v_at_duration - 1.0).abs()
         );
 
-        // And it must not already be at rest well before `duration` —
-        // this is a genuine rescale, not "duration happens to be late
-        // enough not to matter".
         let v_at_half = spring_value(0.4, &config);
         assert!(
             (v_at_half - 1.0).abs() > threshold,
@@ -3037,9 +2436,6 @@ mod spring_duration_tests {
 
     #[test]
     fn overdamped_spring_never_reaches_target_exactly_but_settle_time_is_found() {
-        // Pitfall called out in the brief: an overdamped spring approaches
-        // its target asymptotically and never touches it. The search must
-        // terminate via `rest_threshold`, not by looking for an exact hit.
         let config = SpringConfig {
             damping: 200.0,
             stiffness: 100.0,
@@ -3053,8 +2449,6 @@ mod spring_duration_tests {
             "expected a finite, non-degenerate settle time, got {t}"
         );
 
-        // Confirm it genuinely never hits exactly 1.0 — the asymptotic
-        // property `rest_threshold` exists to work around.
         for i in 1..=200 {
             let sample_t = t + i as f64 * 0.1;
             let v = spring_value_raw(sample_t, 200.0, 100.0, 1.0);
@@ -3067,9 +2461,6 @@ mod spring_duration_tests {
 
     #[test]
     fn undamped_spring_is_capped_not_infinite() {
-        // Pitfall: damping=0 means the spring oscillates forever at
-        // constant amplitude — it never settles. The search must return the
-        // defined cap (`MAX_SPRING_SEARCH_SECONDS`), not loop forever.
         let config = SpringConfig {
             damping: 0.0,
             stiffness: 100.0,
@@ -3086,11 +2477,6 @@ mod spring_duration_tests {
 
     #[test]
     fn very_lightly_damped_spring_is_also_capped_when_beyond_the_bound() {
-        // Not literally undamped, but damped so lightly it does not reach a
-        // 0.5% rest threshold within the search bound — same defined-cap
-        // behaviour as the fully undamped case, exercised with nonzero
-        // damping so the `zeta == 0` special case isn't the only path
-        // that's actually bounded.
         let config = SpringConfig {
             damping: 0.05,
             stiffness: 100.0,
@@ -3107,13 +2493,6 @@ mod spring_duration_tests {
 
     #[test]
     fn duration_remap_preserves_shape() {
-        // The whole point of a spring's `duration` is to keep its shape —
-        // oscillation count, overshoot amplitude — and only rescale how
-        // fast it plays back. Compare the natural (no-duration) curve to a
-        // duration-remapped curve of the *same* underlying spring, sampled
-        // at matching fractions of each one's own settle time: if the remap
-        // were instead clipping the tail (shortening, not rescaling), these
-        // would diverge.
         let damping = 6.0;
         let stiffness = 120.0;
         let mass = 1.0;
@@ -3126,7 +2505,7 @@ mod spring_duration_tests {
         };
         let natural_rest = spring_rest_time(&natural);
 
-        let pinned_duration = 2.5; // deliberately different from natural_rest
+        let pinned_duration = 2.5;
         let pinned = SpringConfig {
             damping,
             stiffness,
@@ -3147,9 +2526,6 @@ mod spring_duration_tests {
             let v_natural = spring_value(frac * natural_rest, &natural);
             let v_pinned = spring_value(frac * pinned_duration, &pinned);
 
-            // Same fraction of each spring's own settle time must produce
-            // the same progress value — that is the shape being preserved,
-            // only the clock speed differs.
             assert!(
                 (v_natural - v_pinned).abs() < 1e-9,
                 "shape mismatch at fraction {frac}: natural={v_natural} pinned={v_pinned}"
@@ -3186,11 +2562,6 @@ mod spring_duration_tests {
 
     #[test]
     fn duration_does_not_change_delay_semantics() {
-        // `spring_value`'s `t` argument is already local to the enclosing
-        // segment (time since the segment/keyframe start — `delay` is
-        // baked into where that segment begins, upstream of this call).
-        // `duration` must not reinterpret that: t=0 must still be the
-        // spring's own start regardless of `duration`.
         let config = SpringConfig {
             damping: 6.0,
             stiffness: 120.0,
@@ -3221,18 +2592,6 @@ mod motion_path_tests {
         }
     }
 
-    // ─── The decisive property: on the curve, not the chord ──────────────
-
-    /// A bent two-segment polyline ("M0,0 L100,0 L100,100", total length
-    /// 200) makes this trivial to prove without any bezier arithmetic:
-    /// halfway along the *path* (distance 100) lands exactly on the corner
-    /// (100, 0). The *chord* between the two endpoints (0,0)→(100,100) has
-    /// its own midpoint at (50, 50) — a linear interpolation between
-    /// endpoints (what a buggy "lerp the bounding box" implementation would
-    /// produce) would land there instead. Asserting the real result is far
-    /// from (50, 50) and exactly at (100, 0) is what distinguishes "walks
-    /// the path" from "interpolates the endpoints" — checking only t=0/t=1
-    /// bounds would pass either implementation.
     #[test]
     fn mid_path_progress_lands_on_the_curve_not_on_the_endpoint_chord() {
         let c = cfg("M0,0 L100,0 L100,100");
@@ -3262,8 +2621,6 @@ mod motion_path_tests {
         );
     }
 
-    // ─── Endpoints, as a sanity boundary (not the decisive test on its own) ──
-
     #[test]
     fn progress_zero_and_one_land_on_the_paths_own_endpoints() {
         let c = cfg("M10,20 L310,20 L310,220");
@@ -3274,12 +2631,6 @@ mod motion_path_tests {
         assert!((end.dx - 310.0).abs() < 0.5 && (end.dy - 220.0).abs() < 0.5);
     }
 
-    // ─── Coordinate space: deltas relative to the laid-out position ──────
-
-    /// The path's own coordinates are used literally as the translate delta
-    /// — not normalized so the path's first point becomes (0,0). A path
-    /// that starts away from the origin therefore starts the component
-    /// already displaced by that much, on top of wherever layout placed it.
     #[test]
     fn path_coordinates_are_used_literally_as_the_translate_delta() {
         let c = cfg("M100,50 L300,50");
@@ -3292,8 +2643,6 @@ mod motion_path_tests {
         );
     }
 
-    // ─── The channel: translate_x/translate_y/rotation, additive ─────────
-
     #[test]
     fn apply_motion_paths_writes_translate_and_rotation_additively() {
         let mut props = AnimatedProperties {
@@ -3305,19 +2654,13 @@ mod motion_path_tests {
         c.orient = true;
         apply_motion_paths(&mut props, &[c], 0.0);
 
-        // Path start is (0,0), so translate ends up unchanged from the
-        // pre-existing (5, -5) contribution — proves this is additive, not
-        // an overwrite.
         assert!((props.translate_x - 5.0).abs() < 0.5);
         assert!((props.translate_y - (-5.0)).abs() < 0.5);
-        // Horizontal rightward tangent ⇒ 0 degrees.
         assert!(props.rotation.abs() < 0.5, "got {}", props.rotation);
     }
 
     #[test]
     fn orient_false_never_touches_rotation() {
-        // A vertical segment has a 90°-ish tangent; if `orient` leaked
-        // through despite being false, rotation would move off 0.
         let c = cfg("M0,0 L0,100");
         let mut props = AnimatedProperties::default();
         apply_motion_paths(&mut props, &[c], 0.5);
@@ -3329,7 +2672,6 @@ mod motion_path_tests {
         let mut vertical = cfg("M0,0 L0,100");
         vertical.orient = true;
         let sample = motion_path_sample(&vertical, 0.5);
-        // Downward tangent (Skia is Y-down): atan2(1, 0) = 90°.
         assert!(
             (sample.angle_deg - 90.0).abs() < 1.0,
             "got {}",
@@ -3345,8 +2687,6 @@ mod motion_path_tests {
             offset_sample.angle_deg
         );
     }
-
-    // ─── Degenerate cases: defined, finite, never NaN ─────────────────────
 
     #[test]
     fn single_point_path_holds_position_and_never_produces_nan() {
@@ -3375,9 +2715,6 @@ mod motion_path_tests {
 
     #[test]
     fn empty_path_data_never_panics_or_produces_nan() {
-        // Bypasses `deserialize_motion_path_data`'s parse-time rejection on
-        // purpose (constructed directly in Rust) — the runtime sampler must
-        // still be safe on its own, defence in depth.
         let c = cfg("");
         let sample = motion_path_sample(&c, 0.5);
         assert_eq!((sample.dx, sample.dy, sample.angle_deg), (0.0, 0.0, 0.0));
@@ -3425,15 +2762,11 @@ mod motion_path_tests {
         assert!((len - 100.0).abs() < 0.5, "got {len}");
     }
 
-    // ─── Loop semantics ────────────────────────────────────────────────────
-
     #[test]
     fn looping_wraps_progress_back_toward_the_start() {
         let mut c = cfg("M0,0 L100,0 L100,100");
         c.repeat = true;
         c.duration = 1.0;
-        // 1.5s in, with a 1s loop period, is equivalent to t=0.5 within the
-        // loop — same corner-of-the-L assertion as the non-looping test.
         let sample = motion_path_sample(&c, 1.5);
         assert!((sample.dx - 100.0).abs() < 0.5 && (sample.dy - 0.0).abs() < 0.5);
     }
@@ -3446,8 +2779,6 @@ mod motion_path_tests {
         assert_eq!(at_end.dx, past_end.dx);
         assert_eq!(at_end.dy, past_end.dy);
     }
-
-    // ─── Determinism: same time in, same result out ───────────────────────
 
     #[test]
     fn sampling_is_deterministic_across_repeated_calls() {
@@ -3505,7 +2836,6 @@ mod char_animation_tuning_tests {
         let a = anim(0.2, 0.0, 0);
         for i in 0..6 {
             let expected = 0.5 + i as f64 * 0.2;
-            // f32 fields widened to f64 — compare at f32 precision.
             assert!(
                 (a.unit_start(i) - expected).abs() < 1e-6,
                 "unit {i} should start at {expected}, got {}",
@@ -3516,10 +2846,6 @@ mod char_animation_tuning_tests {
 
     #[test]
     fn jitter_is_a_pure_function_of_index_and_seed() {
-        // Frames are rendered out of order, in parallel, and across separate
-        // processes (`--frames a-b` segments). If the nudge came from an RNG,
-        // a word would land at a different time in each of those, i.e. jump
-        // between neighbouring frames of the same video.
         let a = anim(0.2, 0.6, 42);
         let b = anim(0.2, 0.6, 42);
         for i in 0..32 {
@@ -3559,8 +2885,6 @@ mod char_animation_tuning_tests {
 
     #[test]
     fn no_unit_starts_before_the_effects_own_delay() {
-        // A negative nudge on the first unit would have it appear already
-        // half-animated on frame 0 — the one artefact the clamp exists for.
         let a = anim(0.2, 2.0, 99);
         for i in 0..64 {
             assert!(
@@ -3573,8 +2897,6 @@ mod char_animation_tuning_tests {
 
     #[test]
     fn a_zero_stagger_is_unaffected_by_jitter() {
-        // Nothing to spread out: every unit shares one start time, and
-        // `jitter` scales off `stagger`, so it has nothing to scale.
         let a = anim(0.0, 1.0, 3);
         for i in 0..8 {
             assert!((a.unit_start(i) - 0.5).abs() < 1e-9);
@@ -3584,10 +2906,6 @@ mod char_animation_tuning_tests {
 
 #[cfg(test)]
 mod easing_steps_tests {
-    //! Issue #330: `EasingType::Steps(n)` — a caret that jumps rather than
-    //! fades. `steps(1)` is the acceptance criterion's own example: hold
-    //! the start value for the whole segment, then jump to the end
-    //! exactly at `t = 1.0`.
     use super::*;
 
     #[test]
@@ -3628,12 +2946,8 @@ mod easing_steps_tests {
 
 #[cfg(test)]
 mod repeat_cycle_tests {
-    //! Issue #330: `PresetConfig::{repeat_count, yoyo, repeat_delay}` widen
-    //! what used to be a bare infinite-or-nothing `bool repeat`, resolved
-    //! by `cycle_time` (this module's private `loop_time` replacement).
     use super::*;
 
-    /// A single property ramping 0.0 -> 1.0 linearly over `[0, duration]`.
     fn ramp(duration: f64) -> Animation {
         kf_anim("x", 0.0, 0.0, duration, 1.0, EasingType::Linear)
     }
@@ -3650,9 +2964,6 @@ mod repeat_cycle_tests {
 
     #[test]
     fn repeat_true_with_no_new_fields_is_byte_identical_to_legacy_loop_time() {
-        // The exact formula the old `loop_time` used, kept here verbatim
-        // (not by calling `cycle_time`) as the independent reference this
-        // test checks `cycle_time` against.
         fn legacy_loop_time(start: f64, duration: f64, time: f64) -> f64 {
             if duration < 1e-9 || time < start {
                 return time;
@@ -3680,9 +2991,6 @@ mod repeat_cycle_tests {
     fn a_finite_repeat_count_freezes_on_the_last_plays_resting_value() {
         let duration = 1.0;
         let anim = ramp(duration);
-        // 3 plays total: cycles [0,1), [1,2), [2,3). Past t=3 it must hold
-        // exactly the value cycle index 2 ends on (the ramp's own end, 1.0
-        // in `x`-progress terms — checked here as resolved cycle_time).
         let cfg = config(Some(3), false, 0.0);
         let frozen_at = cycle_time(&anim, 3.0, &cfg);
         for t in [3.0, 3.5, 10.0, 1_000.0] {
@@ -3692,8 +3000,6 @@ mod repeat_cycle_tests {
                 "t={t} must stay frozen at the last play's end ({frozen_at}), got {got}"
             );
         }
-        // And the first two plays must still have actually cycled (not
-        // frozen from the start).
         assert!((cycle_time(&anim, 0.5, &cfg) - 0.5).abs() < 1e-9);
         assert!((cycle_time(&anim, 1.5, &cfg) - 0.5).abs() < 1e-9);
     }
@@ -3715,21 +3021,14 @@ mod repeat_cycle_tests {
         let duration = 1.0;
         let anim = ramp(duration);
         let cfg = config(None, true, 0.0);
-        // Cycle 0 (forward): local time == elapsed.
         assert!((cycle_time(&anim, 0.25, &cfg) - 0.25).abs() < 1e-9);
-        // Cycle 1 (backward, elapsed in [1,2)): mapped time counts back
-        // down from the end (1.0) instead of up from the start.
         assert!((cycle_time(&anim, 1.25, &cfg) - 0.75).abs() < 1e-9);
         assert!((cycle_time(&anim, 1.75, &cfg) - 0.25).abs() < 1e-9);
-        // Cycle 2 (forward again): back to counting up from the start.
         assert!((cycle_time(&anim, 2.25, &cfg) - 0.25).abs() < 1e-9);
     }
 
     #[test]
     fn yoyo_produces_a_continuous_value_at_every_cycle_boundary() {
-        // A ping-pong must never visibly jump at the seam between two
-        // cycles — the resolved value approaching a boundary from either
-        // side must converge to the same number.
         let duration = 1.0;
         let anim = ramp(duration);
         let cfg = config(None, true, 0.0);
@@ -3747,25 +3046,16 @@ mod repeat_cycle_tests {
     fn repeat_delay_holds_the_resting_value_between_plays() {
         let duration = 1.0;
         let anim = ramp(duration);
-        let cfg = config(None, false, 0.5); // period = 1.5
-                                            // Motion window [0,1): still animating.
+        let cfg = config(None, false, 0.5);
         assert!((cycle_time(&anim, 0.5, &cfg) - 0.5).abs() < 1e-9);
-        // Pause window [1,1.5): held at the end of the motion window (1.0).
         assert!((cycle_time(&anim, 1.0, &cfg) - 1.0).abs() < 1e-9);
         assert!((cycle_time(&anim, 1.3, &cfg) - 1.0).abs() < 1e-9);
-        // Next cycle starts fresh at 1.5.
         assert!((cycle_time(&anim, 1.5, &cfg) - 0.0).abs() < 1e-9);
         assert!((cycle_time(&anim, 2.0, &cfg) - 0.5).abs() < 1e-9);
     }
 
     #[test]
     fn resolve_animations_actually_applies_yoyo_and_repeat_count_end_to_end() {
-        // Same scenario at the public `resolve_animations` entry point
-        // (not just the private `cycle_time` helper), proving the fields
-        // reach the solver through `PresetConfig` for a real `Animation`
-        // list, not only for presets. `translate_x` is used instead of
-        // `ramp`'s own `"x"` property, which `apply_property` doesn't
-        // recognise.
         let animations = vec![kf_anim(
             "translate_x",
             0.0,
@@ -3784,7 +3074,6 @@ mod repeat_cycle_tests {
             "yoyo'd second play: {}",
             at(1.25)
         );
-        // repeat_count: 2 -> only 2 plays; past t=2 it holds frozen.
         let frozen = at(2.0);
         assert!(
             (at(5.0) - frozen).abs() < 1e-4,

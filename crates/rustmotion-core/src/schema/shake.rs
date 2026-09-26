@@ -1,13 +1,3 @@
-//! Declarative camera shake (issue #330): a list of beat-synced impacts
-//! instead of a hand-generated camera keyframe track — the reel this
-//! feature was built for spent 155 sampled keyframes (a Python loop
-//! evaluating a damped sine, pasted into the JSON) on what six `{at,
-//! amplitude}` pairs now express directly.
-//!
-//! See [`SceneShake`] for the damped-oscillation formula and
-//! `crate::engine::shake::shake_offset` for the function that evaluates it
-//! at a given time.
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

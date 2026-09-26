@@ -63,18 +63,7 @@ rustmotion_core::impl_traits!(Svg {
     Styled => style,
 });
 
-// ────────────────────────────────────────────────────────────────────────────
-// usvg → Skia path conversion
-// ────────────────────────────────────────────────────────────────────────────
-
-/// Convert a `tiny_skia::Path` (from usvg) with an `abs_transform` into a
-/// `skia_safe::Path`, applying the transform inline. The resulting path is in
-/// SVG-space coordinates (pre-layout-scale); callers apply the layout scale via
-/// a canvas save/scale.
 fn tiny_path_to_skia(tsp: &tiny_skia::Path, abs_transform: tiny_skia::Transform) -> Path {
-    // Build the absolute-transform matrix for Skia.
-    // tiny_skia::Transform { sx, ky, kx, sy, tx, ty } (column-major) → Skia Matrix:
-    // new_all(scale_x, skew_x, trans_x, skew_y, scale_y, trans_y, pers0, pers1, pers2)
     let t = abs_transform;
     let matrix = Matrix::new_all(t.sx, t.kx, t.tx, t.ky, t.sy, t.ty, 0.0, 0.0, 1.0);
 
@@ -108,8 +97,6 @@ fn tiny_path_to_skia(tsp: &tiny_skia::Path, abs_transform: tiny_skia::Transform)
     skia_path.detach()
 }
 
-/// Recursively collect (skia_path, skia_color, stroke_width) for each visible
-/// path in the usvg tree.
 fn collect_paths(
     group: &usvg::Group,
     draw_stroke_width: f32,
@@ -125,8 +112,6 @@ fn collect_paths(
                     continue;
                 }
                 let skia_path = tiny_path_to_skia(p.data(), p.abs_transform());
-                // Determine stroke color and width: prefer the SVG stroke; fall
-                // back to the fill color with `draw_stroke_width`.
                 let (color, sw) = if let Some(stroke) = p.stroke() {
                     let sw = stroke.width().get();
                     let c = match stroke.paint() {
@@ -134,7 +119,6 @@ fn collect_paths(
                             let alpha = (stroke.opacity().get() * 255.0) as u8;
                             skia_safe::Color::from_argb(alpha, col.red, col.green, col.blue)
                         }
-                        // Gradients/patterns: fall back to white
                         _ => skia_safe::Color::WHITE,
                     };
                     (c, sw)
@@ -152,16 +136,11 @@ fn collect_paths(
                 };
                 out.push((skia_path, color, sw));
             }
-            // Image, Text and other node kinds are skipped in draw-on mode.
             _ => {}
         }
     }
 }
 
-/// Recursively collect each visible path's geometry (with its SVG fill rule
-/// applied), for use as a reveal mask in `reveal: fill` mode. Color/stroke
-/// don't matter here: the mask only gates which pixels of the already
-/// fully-painted raster (gradients included) get copied to the canvas.
 fn collect_paths_for_fill(group: &usvg::Group, out: &mut Vec<Path>) {
     for node in group.children() {
         match node {
@@ -185,12 +164,6 @@ fn collect_paths_for_fill(group: &usvg::Group, out: &mut Vec<Path>) {
     }
 }
 
-/// Reveal the SVG progressively at `draw_progress` (0..=1) by sweeping a clip
-/// mask across each path's full, already fully-painted shape (`full_image`,
-/// gradients and all) instead of tracing a stroked contour. Paths are
-/// revealed one after another (or with overlap), using the same per-path
-/// length-weighted windowing as `paint_draw_on` so the sequential ordering
-/// matches the stroke mode.
 fn paint_fill_reveal(
     canvas: &Canvas,
     group: &usvg::Group,
@@ -261,8 +234,6 @@ fn paint_fill_reveal(
         canvas.clip_path(path, None, true);
 
         if local_t < 1.0 {
-            // Sweep left-to-right: reveal a growing slice of this path's own
-            // bounding box, intersected with the path shape itself above.
             let bounds = path.bounds();
             let revealed_w = bounds.width() * local_t;
             let sweep = Rect::from_ltrb(
@@ -279,8 +250,6 @@ fn paint_fill_reveal(
     }
 }
 
-/// Draw the SVG paths progressively at `draw_progress` (0..=1).
-/// Uses a dash PathEffect to reveal each path sequentially (or with overlap).
 fn paint_draw_on(
     canvas: &Canvas,
     group: &usvg::Group,
@@ -292,7 +261,6 @@ fn paint_draw_on(
 ) {
     let progress = progress.clamp(0.0, 1.0);
 
-    // Collect all paths with their colors.
     let mut paths_with_colors: Vec<(Path, skia_safe::Color, f32)> = Vec::new();
     collect_paths(group, draw_stroke_width, &mut paths_with_colors);
 
@@ -300,7 +268,6 @@ fn paint_draw_on(
         return;
     }
 
-    // Scale canvas from SVG coordinate space to layout box dimensions.
     let scale_x = if svg_size.width() > 0.0 {
         layout.width / svg_size.width()
     } else {
@@ -315,8 +282,6 @@ fn paint_draw_on(
     canvas.save();
     canvas.scale((scale_x, scale_y));
 
-    // Measure path lengths in SVG space (paths already carry the abs_transform).
-    // We measure in SVG space, scaling the lengths to account for the canvas scale.
     let lengths: Vec<f32> = paths_with_colors
         .iter()
         .map(|(path, _, _)| {
@@ -331,18 +296,7 @@ fn paint_draw_on(
         return;
     }
 
-    // overlap in [0,1]: 0 = sequential, 1 = all parallel.
     let overlap = draw_overlap.clamp(0.0, 1.0);
-
-    // Each path occupies a window [start_fraction, end_fraction] within [0,1].
-    // Window size for path i (proportional to its length fraction):
-    //   base_fraction[i] = lengths[i] / total_length
-    // With overlap:
-    //   window_size[i] = base_fraction[i] + overlap * (1.0 - base_fraction[i])
-    //                  = base_fraction[i] * (1 - overlap) + overlap
-    // The window start is placed so that at progress=1 all paths are fully drawn:
-    //   start[i] = cumulative_fraction[i] * (1 - overlap)  (cumulative before path i)
-    //   end[i]   = start[i] + window_size[i]
 
     let mut cumulative = 0.0f32;
     for ((path, color, sw), length) in paths_with_colors.iter().zip(lengths.iter()) {
@@ -351,8 +305,6 @@ fn paint_draw_on(
         let start_frac = cumulative * (1.0 - overlap);
         cumulative += base_frac;
 
-        // How much of this path is revealed:
-        // local_t = (progress - start_frac) / window_size, clamped to [0,1]
         let local_t = if window_size > 0.0 {
             ((progress - start_frac) / window_size).clamp(0.0, 1.0)
         } else {
@@ -364,7 +316,6 @@ fn paint_draw_on(
         };
 
         if local_t <= 0.0 {
-            // Nothing yet for this path.
             continue;
         }
 
@@ -378,21 +329,12 @@ fn paint_draw_on(
 
         if local_t < 1.0 && draw_len > 0.0 {
             let remaining = length - draw_len;
-            // Add a tiny epsilon to avoid gap at exact end.
             let intervals = [draw_len, remaining + 0.01];
             if let Some(dash) = skia_safe::PathEffect::dash(&intervals, 0.0) {
                 paint.set_path_effect(dash);
             }
         }
-        // If local_t == 1.0, draw the full path with no dash effect.
 
-        // Suppress scale effect on stroke width: we applied scale on the canvas,
-        // so the stroke width would be magnified. Compensate by dividing.
-        // Actually, skia already does local transform → stroke is in canvas units,
-        // not SVG units. The canvas is scaled by scale_x/scale_y, so the stroke
-        // rendered in canvas (pixel) space will be sw * scale_x. We want sw in
-        // pixel space, so we divide by scale here.
-        // Use the geometric mean for uniform compensation.
         let scale_avg = (scale_x * scale_y).sqrt();
         if scale_avg > 0.0 {
             paint.set_stroke_width(sw / scale_avg);
@@ -415,11 +357,9 @@ impl Painter for Svg {
         let draw_active = self.draw || (props.draw_progress >= 0.0 && props.draw_progress < 1.0);
 
         if draw_active {
-            // Draw-on mode: walk the usvg tree and trace paths progressively.
             let progress = if props.draw_progress >= 0.0 {
                 props.draw_progress
             } else {
-                // draw: true without animation → show complete trace (static)
                 1.0
             };
 
@@ -446,7 +386,6 @@ impl Painter for Svg {
             let svg_size = tree.size();
 
             if progress >= 1.0 {
-                // At completion, fall through to normal resvg render so fills are shown.
                 self.paint_resvg(canvas, layout, &svg_data, &tree, svg_size);
             } else if self.reveal == SvgReveal::Fill {
                 let Some(full_image) = self.cached_full_image(layout) else {
@@ -473,14 +412,12 @@ impl Painter for Svg {
                 );
             }
         } else {
-            // Normal static mode: use cached resvg rasterization.
             self.paint_static(canvas, layout);
         }
     }
 }
 
 impl Svg {
-    /// Normal static render via cached resvg bitmap.
     fn paint_static(&self, canvas: &Canvas, layout: &BoxLayout) {
         let Some(img) = self.cached_full_image(layout) else {
             return;
@@ -491,10 +428,6 @@ impl Svg {
         canvas.draw_image_rect(img, None, dst, &paint);
     }
 
-    /// Resolve (and cache) the fully rasterized SVG — fills, gradients and
-    /// all — at the layout's pixel size. Shared by `paint_static` and the
-    /// `reveal: fill` draw-on mode, which clips this same raster per path
-    /// instead of re-deriving flat per-path colors.
     fn cached_full_image(&self, layout: &BoxLayout) -> Option<skia_safe::Image> {
         let target_w_opt: Option<u32> = if layout.width > 0.0 {
             Some(layout.width as u32)
@@ -567,7 +500,6 @@ impl Svg {
         Some(decoded)
     }
 
-    /// Render via resvg when draw-on completes (progress == 1.0).
     fn paint_resvg(
         &self,
         canvas: &Canvas,
@@ -617,7 +549,7 @@ impl Svg {
         let paint = Paint::default();
         canvas.draw_image_rect(img, None, dst, &paint);
 
-        let _ = svg_data; // only used to accept the lifetime; tree holds the parsed data
+        let _ = svg_data;
     }
 }
 
@@ -696,9 +628,6 @@ mod tests {
 
     #[test]
     fn fill_reveal_paints_interior_pixels_at_partial_progress() {
-        // A fully-filled 80x80 rect with no stroke. At draw_progress = 0.5 the
-        // `fill` reveal mode must show painted interior pixels (a swept solid
-        // region), not just a thin traced outline.
         let svg = filled_square_svg();
         let layout = test_layout();
         let props = AnimatedProperties {
@@ -713,9 +642,6 @@ mod tests {
             svg.paint_content(canvas, &layout, &props, &ctx);
         }
 
-        // x=30 is well inside the rect's left half (revealed at progress 0.5
-        // under a left-to-right sweep) and far from the outline; a stroke-only
-        // trace would leave it fully transparent.
         let (r, g, b, a) = red_alpha_at(&mut surface, 30, 50);
         assert!(
             a > 200 && r > 200 && g < 50 && b < 50,
@@ -725,9 +651,6 @@ mod tests {
 
     #[test]
     fn stroke_reveal_default_leaves_interior_unfilled_at_partial_progress() {
-        // The default `reveal: stroke` behavior must be unchanged: at partial
-        // draw_progress, only a thin traced outline is visible, so a deep
-        // interior pixel stays unpainted.
         let mut svg = filled_square_svg();
         svg.reveal = SvgReveal::Stroke;
         let layout = test_layout();

@@ -1,19 +1,10 @@
-//! Low-level, dependency-free DSP primitives: the four oscillator
-//! waveforms, a white-noise generator, a biquad filter (RBJ "Audio EQ
-//! Cookbook" coefficients), an ADSR envelope, and the two master-bus
-//! processors (compressor, limiter). Nothing here knows about [`super::voices::Voice`]
-//! or [`super::score::Score`] — those layer the JSON schema and the
-//! event timeline on top of these plain functions.
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// One period of phase, `[0, 1)`, mapped to a bipolar sample in `[-1, 1]`.
 pub fn sine(phase: f32) -> f32 {
     (phase * std::f32::consts::TAU).sin()
 }
 
-/// 50% duty cycle: `+1` for the first half of the period, `-1` for the second.
 pub fn square(phase: f32) -> f32 {
     if phase < 0.5 {
         1.0
@@ -22,15 +13,10 @@ pub fn square(phase: f32) -> f32 {
     }
 }
 
-/// A rising ramp from `-1` to `+1` across the period. Naive (not
-/// band-limited) — acceptable aliasing for a small synth with no
-/// broadcast-grade anti-aliasing requirement.
 pub fn saw(phase: f32) -> f32 {
     2.0 * phase - 1.0
 }
 
-/// `-1` at `phase = 0`, rising linearly to `+1` at `phase = 0.5`, falling
-/// back to `-1` at `phase = 1`.
 pub fn triangle(phase: f32) -> f32 {
     if phase < 0.5 {
         4.0 * phase - 1.0
@@ -39,19 +25,12 @@ pub fn triangle(phase: f32) -> f32 {
     }
 }
 
-/// Deterministic white-noise source: a 32-bit xorshift PRNG (Marsaglia),
-/// seeded explicitly so two renders of the same score reproduce the exact
-/// same noise samples — a `rand`-style thread-seeded generator would break
-/// the "two renders are byte-identical" guarantee this whole module exists
-/// to uphold.
 #[derive(Debug, Clone, Copy)]
 pub struct Xorshift32 {
     state: u32,
 }
 
 impl Xorshift32 {
-    /// A seed of `0` is a fixed point of xorshift (it would only ever
-    /// produce `0`), so it is remapped to a fixed nonzero constant.
     pub fn new(seed: u32) -> Self {
         Xorshift32 {
             state: if seed == 0 { 0x9E37_79B9 } else { seed },
@@ -67,7 +46,6 @@ impl Xorshift32 {
         x
     }
 
-    /// A sample uniformly distributed in `[-1, 1]`.
     pub fn next_f32(&mut self) -> f32 {
         (self.next_u32() as f32 / u32::MAX as f32) * 2.0 - 1.0
     }
@@ -99,12 +77,6 @@ pub enum FilterKind {
     Notch,
 }
 
-/// A biquad's per-sample memory (Direct Form I): the last two inputs and
-/// the last two outputs. Separate from [`BiquadCoeffs`] so one coefficient
-/// set could in principle drive several independent states — not needed
-/// today (each [`super::voices::Voice`] owns exactly one filter), but it
-/// keeps "what changes per sample" and "what is fixed for the voice"
-/// apart.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BiquadState {
     x1: f32,
@@ -113,8 +85,6 @@ pub struct BiquadState {
     y2: f32,
 }
 
-/// Normalized (`a0 = 1`) biquad coefficients for one of [`FilterKind`]'s
-/// four topologies, computed from the RBJ "Audio EQ Cookbook" formulas.
 #[derive(Debug, Clone, Copy)]
 pub struct BiquadCoeffs {
     b0: f32,
@@ -125,12 +95,6 @@ pub struct BiquadCoeffs {
 }
 
 impl BiquadCoeffs {
-    /// `freq` is clamped below Nyquist and `q` away from zero so a
-    /// carelessly authored score (a filter freq at or above half the
-    /// sample rate, or `q: 0`) cannot divide by zero or fold the
-    /// coefficients into `NaN` — it is silently made safe rather than
-    /// rejected, the same posture [`super::voices::Voice::render_grain`]
-    /// takes for its own inputs.
     pub fn design(kind: FilterKind, freq: f32, q: f32, sample_rate: f32) -> Self {
         let freq = freq.clamp(1.0, sample_rate * 0.499);
         let q = q.max(0.01);
@@ -170,7 +134,6 @@ impl BiquadCoeffs {
         }
     }
 
-    /// Direct Form I: `y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]`.
     pub fn process(&self, state: &mut BiquadState, x: f32) -> f32 {
         let y = self.b0 * x + self.b1 * state.x1 + self.b2 * state.x2
             - self.a1 * state.y1
@@ -183,16 +146,6 @@ impl BiquadCoeffs {
     }
 }
 
-/// An attack/decay/sustain/hold/release envelope, in seconds (`sustain` is
-/// a level, `0..=1`). There is no note-off in this synth's score model
-/// (every score event is a trigger instant, never an on/off pair — see
-/// `super::score::ScoreEvent`), so `hold` stands in for "how long to sit
-/// at the sustain level" before `release` brings it back to zero: a voice
-/// always finishes on its own, which is what lets
-/// [`super::voices::Voice::render_grain`] size a finite buffer up front.
-/// The common case (`sustain: 0`, `hold: 0`, `release: 0`, the drum-machine
-/// defaults `super::voices::Voice` gives every field but `decay`) collapses
-/// this to a plain attack/decay percussive shape.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Adsr {
     pub attack: f32,
@@ -207,7 +160,6 @@ impl Adsr {
         self.attack.max(0.0) + self.decay.max(0.0) + self.hold.max(0.0) + self.release.max(0.0)
     }
 
-    /// The envelope's linear gain at `t` seconds after the trigger.
     pub fn level_at(&self, t: f32) -> f32 {
         if t < 0.0 {
             return 0.0;
@@ -238,11 +190,6 @@ impl Adsr {
     }
 }
 
-/// `master.compressor` (deliverable #1's `{"threshold": -14, "ratio": 4}`):
-/// a standard feedforward compressor, `threshold`/gain in dB, `ratio` as
-/// `N:1`. `attack`/`release` are exposed as knobs but not part of the
-/// issue's example — [`super::score::CompressorConfig`] defaults them to
-/// 5ms/50ms.
 #[derive(Debug, Clone, Copy)]
 pub struct CompressorParams {
     pub threshold_db: f32,
@@ -259,9 +206,6 @@ fn lin_to_db(lin: f32) -> f32 {
     20.0 * lin.max(1e-9).log10()
 }
 
-/// One-pole envelope-follower smoothing coefficient for a given time
-/// constant: the classic `exp(-1 / (time_seconds * sample_rate))`. `ms
-/// <= 0` is instantaneous (no smoothing at all).
 fn time_const_coeff(ms: f32, sample_rate: f32) -> f32 {
     if ms <= 0.0 {
         0.0
@@ -270,10 +214,6 @@ fn time_const_coeff(ms: f32, sample_rate: f32) -> f32 {
     }
 }
 
-/// Feedforward compressor, applied in place to a mono buffer. A peak
-/// envelope follower (fast on the way up per `attack_ms`, slow on the way
-/// down per `release_ms`) drives the gain-reduction curve above
-/// `threshold_db`.
 pub fn apply_compressor(buffer: &mut [f32], params: CompressorParams, sample_rate: u32) {
     let sr = sample_rate as f32;
     let attack_coeff = time_const_coeff(params.attack_ms, sr);
@@ -306,22 +246,8 @@ pub fn apply_compressor(buffer: &mut [f32], params: CompressorParams, sample_rat
     }
 }
 
-/// The ceiling [`apply_limiter`] holds every sample under. Deliberately
-/// below the issue's own "-0.1 dBTP" acceptance bound (not equal to it):
-/// this is a sample-peak limiter, not a true-peak (oversampled) one, so a
-/// reconstruction filter downstream can still overshoot a ceiling set
-/// exactly at the bound. -0.3 dB gives that margin.
 pub const LIMITER_CEILING_DB: f32 = -0.3;
 
-/// Master-bus peak limiter, applied in place to a mono buffer — deliverable
-/// #4/#5: on by default, and the reason it exists at all (the SVG reel's
-/// author found his first mix clipping at 0 dB only by reading `ffmpeg`
-/// output after the fact). A fast attack / slower release envelope
-/// follower drives a soft gain reduction, and every sample is *also* hard
-/// clamped to `[-ceiling, ceiling]` afterwards — belt and braces: the
-/// smoothed gain alone cannot guarantee zero overshoot on a sample that
-/// jumps before the envelope catches up, and this function's entire
-/// purpose is that guarantee, not an approximation of it.
 pub fn apply_limiter(buffer: &mut [f32], sample_rate: u32) {
     let ceiling = db_to_lin(LIMITER_CEILING_DB);
     let sr = sample_rate as f32;

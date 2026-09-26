@@ -14,20 +14,8 @@ impl Chart {
         let chart_w = w - ml - mr;
         let chart_h = h - mt - mb;
 
-        // A bar chart's baseline is zero, not the smallest datum, so the scale
-        // has to span [min(0, min), max(0, max)]. Scaling by `max` alone drew
-        // negative bars downward from the bottom edge, straight out of the
-        // component box (measured: values [10, -6, 4] in a 800x500 box put
-        // 58072 ink pixels outside it, reaching 243px past the bottom).
-        // All-positive data is unaffected: min_val stays 0 and the arithmetic
-        // reduces to the previous `value / max_val`.
         let (min_val, max_val, range) = self.value_extent();
 
-        // One slot per data point, unlabeled points included as `""`.
-        // `draw_axes` positions label `i` at slot `i` of `n = x_labels.len()`
-        // — a `filter_map` that dropped unlabeled points compacted the list,
-        // so `n` no longer matched `self.data.len()` and every surviving
-        // label slid onto the wrong bar as soon as one point had no label.
         let x_labels: Vec<String> = self
             .data
             .iter()
@@ -56,7 +44,6 @@ impl Chart {
 
             let rect = Rect::from_xywh(x, y, bar_w, bar_h);
             let radius = (bar_w * 0.15).min(8.0);
-            // Round the end away from the baseline.
             let round = (radius, radius).into();
             let square = (0.0, 0.0).into();
             let radii = if negative {
@@ -71,8 +58,6 @@ impl Chart {
         Ok(())
     }
 
-    /// `(min, max, range)` for a zero-anchored value axis over `self.data`.
-    /// The range is never zero, so callers can divide by it unconditionally.
     pub(super) fn value_extent(&self) -> (f64, f64, f64) {
         let min_val = self
             .data
@@ -105,10 +90,6 @@ impl Chart {
         let ascent = -metrics.ascent;
         let measure = |s: &str| measure_text_with_fallback(s, &font, &emoji_font, 0.0);
 
-        // `chart_margins()` sizes the left gutter for *numeric* tick labels
-        // (3.5em), which is the wrong axis here: on a horizontal bar chart the
-        // vertical axis is categorical. Size the gutter to the widest category
-        // name instead, and cap it so the bars keep the majority of the width.
         let mt = 8.0;
         let mr = 8.0;
         let mb = if self.show_x_labels {
@@ -150,10 +131,6 @@ impl Chart {
             let y = mt + gap + i as f32 * (row_h + gap);
             let radius = (row_h * 0.15).min(8.0);
 
-            // Track behind every row. Without it a zero-valued row is simply
-            // absent — the defect that made a "6 vs 0" comparison unreadable —
-            // and short bars have nothing to be read against. Matches the
-            // track `radial_bar` already draws for the same reason.
             let mut track_paint = paint_from_hex("#FFFFFF");
             track_paint.set_style(PaintStyle::Fill);
             track_paint.set_anti_alias(true);
@@ -172,7 +149,6 @@ impl Chart {
             paint.set_anti_alias(true);
 
             let rect = Rect::from_xywh(x, y, bar_len, row_h);
-            // Round the end away from the baseline.
             let round = (radius, radius).into();
             let square = (0.0, 0.0).into();
             let radii = if negative {
@@ -184,8 +160,6 @@ impl Chart {
 
             let baseline_y = y + row_h / 2.0 + ascent / 2.0;
 
-            // Value annotation, right-aligned in the track so it never depends
-            // on how long the bar happens to be.
             let mut value_left = ml + chart_w;
             if self.show_labels {
                 let text = format_number(dp.value);
@@ -214,8 +188,6 @@ impl Chart {
             let Some(label) = &dp.label else { continue };
 
             if gutter > 0.0 {
-                // Category names live in the left gutter, right-aligned against
-                // the bars — the classic ranking layout.
                 let mut label_paint = paint_from_hex(&self.label_color);
                 label_paint.set_anti_alias(true);
                 let lx = (gutter - measure(label)).max(0.0);
@@ -230,10 +202,6 @@ impl Chart {
                     &label_paint,
                 );
             } else if self.show_labels || self.show_x_labels {
-                // Inside the bar when it fits, otherwise just past its end in
-                // the label colour. Drawing it inside unconditionally left the
-                // text of a zero-length bar floating on the background in a
-                // colour picked for contrast against a bar that isn't there.
                 let label_w = measure(label);
                 let fits = bar_len >= label_w + 20.0;
                 let (lx, color_hex) = if fits {
@@ -241,7 +209,6 @@ impl Chart {
                 } else {
                     (x + bar_len + 10.0, self.label_color.clone())
                 };
-                // Never run into the value annotation.
                 if lx + label_w <= value_left - 6.0 || fits {
                     let mut label_paint = paint_from_hex(&color_hex);
                     label_paint.set_anti_alias(true);
@@ -278,18 +245,6 @@ impl Chart {
         let chart_h = h - mt - mb;
 
         let n_cats = self.categories.len();
-        // A stacked total can go negative — either every series is negative
-        // (e.g. an all-cost breakdown) or the series mix signs within one
-        // category (revenue vs. cost). Scale from the true signed extent —
-        // positive segments stack above zero, negative segments stack below
-        // — the same zero-anchored contract `value_extent` gives
-        // `render_bar`. Scaling by the largest *positive* total alone
-        // (previously `max_val = ... .max(0.001)`, floored to 0.001 when
-        // every total was negative) sent every segment's height through a
-        // near-zero divisor and painted it thousands of chart-heights
-        // outside the box; even a bounded mixed-sign case (revenue stacked
-        // as if `max_val` were the net total) pushed the positive segment
-        // taller than the whole chart.
         let totals: Vec<(f64, f64)> = (0..n_cats)
             .map(|ci| {
                 self.series
@@ -319,9 +274,6 @@ impl Chart {
 
         for ci in 0..n_cats {
             let x = ml + gap + ci as f32 * (bar_w + gap);
-            // Positive segments stack upward from `zero_y`; negative
-            // segments stack downward from it, independently — each
-            // direction has its own running edge.
             let mut pos_top = zero_y;
             let mut neg_bottom = zero_y;
             let last_pos_si =
@@ -355,9 +307,6 @@ impl Chart {
                 paint.set_anti_alias(true);
 
                 let rect = Rect::from_xywh(x, y, bar_w, seg_h);
-                // Round the outer edge of each stack: the top of the
-                // topmost positive segment, the bottom of the bottommost
-                // negative segment.
                 let is_outer_edge = if negative {
                     Some(si) == last_neg_si
                 } else {
@@ -427,9 +376,6 @@ mod tests {
         }
     }
 
-    /// Bounding box (min_x, max_x, min_y, max_y) of every non-transparent
-    /// pixel on the surface, or `None` if nothing was painted. Mirrors the
-    /// helper `stat.rs`/`caption.rs` already use for the same kind of proof.
     fn ink_bounds(
         surface: &mut skia_safe::Surface,
         w: i32,
@@ -465,9 +411,6 @@ mod tests {
         (minx <= maxx).then_some((minx, maxx, miny, maxy))
     }
 
-    /// Column-wise ink centers: for each x with any ink, returns the
-    /// vertical midpoint of the ink found in that column. Used to find the
-    /// horizontal center of a run of colored pixels (a bar or a label).
     fn colored_columns(
         surface: &mut skia_safe::Surface,
         w: i32,
@@ -507,18 +450,6 @@ mod tests {
         cols
     }
 
-    /// Paint a stacked-bar chart for a `box_w`x`box_h` box, but into a
-    /// canvas with `MARGIN` px of headroom above and below it, and return
-    /// the ink's vertical extent in *box-local* coordinates (0 = box top).
-    ///
-    /// A same-size canvas hides the bug this exists to catch: an
-    /// overflowing segment's `Rect::from_xywh` gets a huge *negative*
-    /// height, which skia normalizes when drawing, so a coincidental sliver
-    /// of the inverted rect can still land inside a same-size canvas even
-    /// though the segment as a whole is nowhere near the box. Margin on
-    /// both sides catches overflow in either direction; local coordinates
-    /// let the assertion read directly as "outside the box" without redoing
-    /// the offset math at every call site.
     fn stacked_bar_ink_local_range(chart: &Chart, box_w: i32, box_h: i32, time: f64) -> (i32, i32) {
         const MARGIN: i32 = 300;
         let surface_h = box_h + MARGIN * 2;
@@ -538,10 +469,6 @@ mod tests {
 
     #[test]
     fn stacked_bar_with_all_negative_totals_stays_inside_the_box() {
-        // #2's exact repro: every category totals negative, so the old
-        // `max_val = ... .max(0.001)` floor made `seg_h` divide by a
-        // near-zero value and blew the segment thousands of chart-heights
-        // past the bottom of the box.
         let mut chart = base_chart(ChartType::StackedBar);
         chart.categories = vec!["Q1".to_string(), "Q2".to_string()];
         chart.series = vec![ChartSeries {
@@ -559,10 +486,6 @@ mod tests {
 
     #[test]
     fn stacked_bar_with_mixed_sign_series_stays_inside_the_box() {
-        // Revenue/cost style stack: mixed signs within the same category.
-        // `max_val` alone (the pre-fix scale) ignored the negative side
-        // entirely, so the cost segment was scaled as if it were tiny and
-        // painted far below the box.
         let mut chart = base_chart(ChartType::StackedBar);
         chart.categories = vec!["Q1".to_string(), "Q2".to_string()];
         chart.series = vec![
@@ -587,10 +510,6 @@ mod tests {
 
     #[test]
     fn bar_x_labels_align_with_their_own_bar_when_some_points_are_unlabeled() {
-        // #5's exact repro: with `filter_map` compacting the label list, the
-        // 2 surviving labels ("AAA", "DDD") were spread across only 2 of the
-        // 4 slots `draw_axes` computes from `x_labels.len()`, sliding every
-        // label onto the wrong bar.
         let mut chart = base_chart(ChartType::Bar);
         chart.show_x_labels = true;
         chart.data = vec![
@@ -626,10 +545,6 @@ mod tests {
                 .expect("paint must not error");
             colored_columns(&mut surface, W, H, |r, g, b| r < 40 && g < 40 && b > 200)
         };
-        // The bar (blue) columns split into 4 contiguous runs (gaps between
-        // them). The label (red) columns should center within a small
-        // distance of the *first* and *last* runs' centers, not drift onto
-        // neighboring slots.
         assert!(!bar_cols.is_empty(), "no bars painted");
         let mut runs: Vec<(i32, i32)> = vec![];
         for x in bar_cols {
@@ -650,7 +565,6 @@ mod tests {
                 .paint(canvas, W as f32, H as f32, 10.0)
                 .expect("paint must not error");
             colored_columns(&mut label_surface, W, H, |r, g, b| {
-                // label_color default #888888
                 (120..160).contains(&r) && (120..160).contains(&g) && (120..160).contains(&b)
             })
         };

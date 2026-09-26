@@ -105,8 +105,6 @@ impl Gauge {
         if !self.animated {
             return 1.0;
         }
-        // Measure from `start_at`, like every other animated component: driving
-        // the ramp off raw scene time makes a delayed gauge arrive already full.
         let start = self.timing.start_at.unwrap_or(0.0);
         let elapsed = (time - start).max(0.0);
         let p = (elapsed / self.animation_duration).clamp(0.0, 1.0) as f32;
@@ -125,7 +123,6 @@ impl Gauge {
         let oval = Rect::from_xywh(cx - radius, cy - radius, radius * 2.0, radius * 2.0);
         let total_sweep = self.end_angle - self.start_angle;
 
-        // Track arc
         let mut track_paint = paint_from_hex(&self.track_color);
         track_paint.set_style(PaintStyle::Stroke);
         track_paint.set_stroke_width(self.track_width);
@@ -133,7 +130,6 @@ impl Gauge {
         track_paint.set_anti_alias(true);
         canvas.draw_arc(oval, self.start_angle, total_sweep, false, &track_paint);
 
-        // Fill arc
         let range = (self.max - self.min).max(0.001);
         let value_ratio = ((self.value - self.min) / range).clamp(0.0, 1.0) as f32;
         let fill_sweep = total_sweep * value_ratio * progress;
@@ -145,7 +141,6 @@ impl Gauge {
         fill_paint.set_anti_alias(true);
         canvas.draw_arc(oval, self.start_angle, fill_sweep, false, &fill_paint);
 
-        // Value text
         if self.show_value {
             let display_val = self.min + (self.value - self.min) * progress as f64;
             let text = format!("{}", display_val.round() as i64);
@@ -179,7 +174,6 @@ impl Gauge {
             );
         }
 
-        // Label text
         if let Some(label) = &self.label {
             let font_size = (radius * 0.18).max(10.0);
             let font_style = skia_safe::FontStyle::normal();

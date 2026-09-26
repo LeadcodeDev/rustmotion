@@ -1,14 +1,3 @@
-//! Regression tests for the `video` component's dead-field fixes: `fit`,
-//! `trim_end`, `loop_video`, and the straight-vs-premultiplied alpha bug on
-//! its cached-frame draw path.
-//!
-//! Every case populates `video_frame_cache()` directly with hand-built RGBA
-//! frames rather than shelling out to a real ffmpeg decode: the field this
-//! module exercises (`Video::paint_content`) is one call away from the
-//! cache, and driving it that way keeps these tests hermetic and fast while
-//! still going through the real, public `Painter` implementation — no
-//! private items from `rustmotion-components` are touched.
-
 use std::sync::Arc;
 
 use rustmotion_components::Video;
@@ -74,9 +63,6 @@ fn solid_rgba(color: [u8; 4], w: u32, h: u32) -> Vec<u8> {
     buf
 }
 
-/// Paints `video` into a fresh `w`×`h` surface (background transparent if
-/// `transparent_bg`, opaque black otherwise) and reads the composited pixels
-/// back as straight (unpremultiplied) RGBA.
 fn paint_and_read(video: &Video, ctx: &PaintCtx, w: i32, h: i32, transparent_bg: bool) -> Vec<u8> {
     let mut surface = skia_safe::surfaces::raster_n32_premul((w, h)).expect("raster surface");
     let bg = if transparent_bg {
@@ -110,13 +96,6 @@ fn px(buf: &[u8], w: i32, x: i32, y: i32) -> [u8; 4] {
     buf[i..i + 4].try_into().expect("pixel in bounds")
 }
 
-// ─── `fit` was declared, documented, and never read ────────────────────────
-
-/// A 10×20 source into a 40×40 box under `contain` must letterbox — scale
-/// is `min(40/10, 40/40) = 1`, so the drawn region is 10 wide, centred with
-/// a 15px empty margin on each side. Before the fix, the painter always
-/// stretched to the full box regardless of `fit`, so every pixel — margins
-/// included — came out opaque.
 #[test]
 fn contain_fit_letterboxes_instead_of_stretching() {
     let src = unique_src("fit-contain");
@@ -153,9 +132,6 @@ fn contain_fit_letterboxes_instead_of_stretching() {
     );
 }
 
-/// `fill` (the CSS default `object-fit: fill` behaviour) must still stretch
-/// to cover the whole box exactly as before — the fix must not regress the
-/// one mode that already matched the pre-fix behaviour.
 #[test]
 fn fill_fit_still_stretches_to_the_whole_box() {
     let src = unique_src("fit-fill");
@@ -187,15 +163,6 @@ fn fill_fit_still_stretches_to_the_whole_box() {
     );
 }
 
-// ─── `trim_end` was honoured only on the extracted audio ───────────────────
-
-/// Frames beyond `trim_end` sit in the cache (simulating a preextraction
-/// window, or a direct extraction, wider than the intended trim), so the
-/// picture path must never pick one of them once `trim_end` is set: past
-/// `trim_end`, playback holds on the last in-window frame. Before the fix,
-/// `source_time` had no upper bound at all — querying past `trim_end` on a
-/// cache/source that extends further would draw whatever sits further
-/// along the source, not the frame at the trim boundary.
 #[test]
 fn trim_end_clamps_playback_instead_of_running_past_it() {
     let src = unique_src("trimend");
@@ -221,17 +188,6 @@ fn trim_end_clamps_playback_instead_of_running_past_it() {
     );
 }
 
-// ─── `loop_video` made neither the picture nor the audio loop ─────────────
-
-/// Cache frames only cover `[0.0, 1.0)`; `trim_end: Some(1.0)` gives
-/// `loop_video` a window to wrap within without needing a real source file
-/// to probe. Querying at `ctx.time = 2.1` (raw source time 2.1s, i.e. "2
-/// full loops plus 0.1s") must land near 0.1s once wrapped — nearest to
-/// that among `{0.0, 0.25, 0.5, 0.75}` is red. Before this fix, the same
-/// query — with the trim-end clamp from the previous test already in place
-/// but no loop branch yet — clamped to `min(2.1, 1.0) = 1.0`, whose nearest
-/// cached frame is yellow: a clearly different pixel, which is what proves
-/// this test is exercising the loop path and not being masked by the clamp.
 #[test]
 fn loop_video_wraps_playback_within_the_trim_window() {
     let src = unique_src("loop");
@@ -256,9 +212,6 @@ fn loop_video_wraps_playback_within_the_trim_window() {
     );
 }
 
-/// Without `loop_video`, a `trim_end`-bounded video must still clamp
-/// (unaffected by the loop branch existing) rather than wrap — the same
-/// scenario as the wrap test above, minus the flag.
 #[test]
 fn without_loop_video_playback_still_clamps_not_wraps() {
     let src = unique_src("no-loop");
@@ -282,22 +235,6 @@ fn without_loop_video_playback_still_clamps_not_wraps() {
     );
 }
 
-// ─── cached-frame draw path mistagged straight alpha as premultiplied ──────
-
-/// ffmpeg's `-pix_fmt rgba` output — what fills the video-frame cache — is
-/// straight (unpremultiplied) alpha. Tagging that buffer `AlphaType::Premul`
-/// makes Skia treat the RGB channels as already scaled by alpha instead of
-/// scaling them itself, which brightens (here: doubles) every
-/// semi-transparent pixel's channels once composited.
-///
-/// A straight-alpha (200, 100, 50, 128) pixel, composited over black:
-/// correctly tagged `Unpremul`, Skia premultiplies it to
-/// (200×128/255, 100×128/255, 50×128/255) ≈ (100, 50, 25) before compositing
-/// over black, landing there almost exactly (the `(1 - alpha) * 0` background
-/// term vanishes either way). Mistagged `Premul`, Skia uses the raw channel
-/// values directly as if already scaled — (200, 100, 50) — composited over
-/// black with no further scaling, landing at roughly double the correct
-/// result.
 #[test]
 fn cached_frame_straight_alpha_composites_correctly_not_doubled() {
     let src = unique_src("alpha");

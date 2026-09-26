@@ -1,15 +1,3 @@
-//! End-to-end pixel tests for `text-autofit` through the *real* render
-//! pipeline (box_builder → run_layout → paint_tree), not just the
-//! `TextIntrinsic`/`Text::paint` unit-level tests in `intrinsic.rs`/
-//! `text.rs`. Routes a `text` component through the same
-//! `build_scene_with_anim` → `run_layout` → `paint_tree` sequence
-//! `render_with_new_pipeline_iter` runs once per rendered frame in the real
-//! encoder. This is the strongest available proof that `TextIntrinsic::
-//! measure` (which determines the box `run_layout` reserves) and
-//! `Text::paint` (which draws into whatever box that pass assigned) agree
-//! on the real render path, and that nothing about the resolved size drifts
-//! frame to frame.
-
 use rustmotion_components::box_builder::{build_scene_with_anim, BuildAnimationCtx};
 use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
 use rustmotion_components::{ChildComponent, Component, PositionMode};
@@ -99,8 +87,6 @@ fn render_at(content: &str, autofit: bool, time: f64) -> Vec<u8> {
     pixels
 }
 
-/// Rightmost column (absolute, full-surface coordinates) with any painted
-/// (non-zero-alpha) ink.
 fn max_ink_x(pixels: &[u8]) -> Option<i32> {
     let mut max_x: Option<i32> = None;
     for y in 0..H as i32 {
@@ -117,9 +103,6 @@ fn max_ink_x(pixels: &[u8]) -> Option<i32> {
 
 #[test]
 fn without_autofit_the_nowrap_line_bleeds_past_the_box_through_the_real_pipeline() {
-    // Control: a 90px `white-space: nowrap` line in a 300px-wide box, no
-    // `text-autofit` — must bleed well past the box's right edge, exactly
-    // as it always has (nowrap's existing, unmodified contract).
     let pixels = render_at("the quick brown fox jumps over the lazy dog", false, 0.0);
     let ink_right = max_ink_x(&pixels).expect("text must paint some ink");
     let box_right = (BOX_X + BOX_W) as i32;
@@ -132,12 +115,6 @@ fn without_autofit_the_nowrap_line_bleeds_past_the_box_through_the_real_pipeline
 
 #[test]
 fn with_autofit_the_same_line_stays_inside_the_box_through_the_real_pipeline() {
-    // Same fixture as the control above, `text-autofit: true` added. The
-    // box `run_layout` reserves (via `TextIntrinsic::measure`, invoked by
-    // taffy inside `run_layout`) and the pixels `paint_tree` actually draws
-    // (via `Text::paint`, invoked by `LegacyPaintDispatcher`) must agree —
-    // if they disagreed, the box would still be 300px wide but the ink
-    // would still bleed past it exactly like the control test above.
     let pixels = render_at("the quick brown fox jumps over the lazy dog", true, 0.0);
     let ink_right = max_ink_x(&pixels).expect("text must paint some ink");
     let box_right = (BOX_X + BOX_W) as i32;
@@ -150,10 +127,6 @@ fn with_autofit_the_same_line_stays_inside_the_box_through_the_real_pipeline() {
 
 #[test]
 fn autofit_end_to_end_is_stable_across_frames_for_fixed_content() {
-    // Temporal stability through the real per-frame pipeline (the box tree
-    // and layout are rebuilt fresh every frame in the real encoder, exactly
-    // like this test does via `build_scene_with_anim` at two different
-    // `time`s): static content, static box → must be pixel-identical.
     let frame_a = render_at("the quick brown fox jumps over the lazy dog", true, 0.0);
     let frame_b = render_at("the quick brown fox jumps over the lazy dog", true, 2.0);
     assert_eq!(

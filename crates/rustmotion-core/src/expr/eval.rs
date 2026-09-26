@@ -1,30 +1,3 @@
-//! Lowers an [`Ast`] into a flat program of [`Op`]s once, and runs that
-//! program against a [`Scope`] as many times as needed afterwards.
-//!
-//! This is the piece that makes the two-tier evaluation model in the
-//! [`crate::expr`] module doc actually cheap: [`compile`] walks the tree a
-//! single time, at [`crate::expr::Expr::parse`] time, and everything it
-//! produces — the op list, the interned variable-name table, the interned
-//! node-reference table — is owned by the resulting [`Expr`](super::Expr)
-//! and never rebuilt. [`run`] then executes that fixed program using a
-//! stack-allocated `[f64; MAX_STACK]` array: no `Vec`, no `String`, no heap
-//! traffic of any kind on the per-frame path, however many times a frame
-//! loop calls it.
-//!
-//! Arithmetic (`Num`, `Var`, unary/binary operators, builtin calls) compiles
-//! to genuinely flat, linear bytecode executed by a simple push/pop
-//! interpreter over that array — a real stack machine for the part of the
-//! grammar that has no branching. [`Op::Ternary`] is the one construct that
-//! must *not* evaluate eagerly (a condition guards a division by zero, or a
-//! branch none reads a node that doesn't exist this frame — evaluating both
-//! sides unconditionally would surface an error the author's own branching
-//! was written to avoid), so it holds its three arms as their own
-//! independently-compiled flat programs and `run` recurses into exactly one
-//! of them. That recursion is bounded by the same nesting cap `parser.rs`
-//! already enforces at parse time, so it can never run deeper than
-//! `MAX_DEPTH` stack frames — nowhere near enough to threaten the native
-//! stack.
-
 use super::ast::{Ast, BinOp, UnOp};
 use super::builtins::Builtin;
 use super::{ExprError, Scope};
@@ -32,7 +5,6 @@ use super::{ExprError, Scope};
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Op {
     Num(f64),
-    /// Index into the compiled [`Expr`](super::Expr)'s variable-name table.
     Var(u16),
     Neg,
     Add,
@@ -46,12 +18,8 @@ pub(crate) enum Op {
     Le,
     Gt,
     Ge,
-    /// Pops `argc` values (in argument order), pushes one result.
     Call(Builtin, u8),
-    /// Index into the compiled [`Expr`](super::Expr)'s node-reference table.
     NodeProp(u16),
-    /// `(cond, then, else)`, each its own flat program — see the module doc
-    /// on why this can't be three ordinary operands on the value stack.
     Ternary(Box<[Op]>, Box<[Op]>, Box<[Op]>),
 }
 
@@ -63,13 +31,6 @@ pub(crate) struct Compiled {
     pub is_static: bool,
 }
 
-/// Names that can never be folded at load time because their value is only
-/// known once the frame loop actually starts (or, for `duration`, because
-/// computing it soundly at this stage would mean re-deriving the transition
-/// arithmetic `crates/rustmotion/src/encode` owns — see
-/// `crates/rustmotion/src/loader.rs`'s fold pass for where that arithmetic
-/// actually lives). An expression naming any of these is never static,
-/// regardless of what else it references.
 fn is_dynamic_var_name(name: &str) -> bool {
     matches!(name, "t" | "T" | "beat" | "duration")
 }
@@ -170,13 +131,6 @@ pub(crate) fn compile(ast: &Ast) -> Compiled {
     }
 }
 
-/// Bound on the value stack `run` uses. Every op is compiled from an AST
-/// whose nesting is itself capped at parse time (`parser::MAX_DEPTH`, 64),
-/// and no single grammar construct pushes more than a small constant number
-/// of pending values per nesting level, so this is never approached by any
-/// expression that made it past `parse` — it exists purely so a bug in that
-/// invariant fails loudly (an `ExprError`) instead of indexing out of
-/// bounds.
 const MAX_STACK: usize = 256;
 
 pub(crate) fn run(
@@ -275,7 +229,7 @@ pub(crate) fn run(
             }
             Op::Call(builtin, argc) => {
                 let n = *argc as usize;
-                let mut args = [0.0_f64; 3]; // max builtin arity is 3 (clamp/lerp/smoothstep)
+                let mut args = [0.0_f64; 3];
                 for slot in args.iter_mut().take(n).rev() {
                     *slot = pop!();
                 }

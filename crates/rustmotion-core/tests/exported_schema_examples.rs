@@ -1,20 +1,3 @@
-//! Constat #5: `rustmotion schema` used to export a `Scene`/`View` with
-//! `additionalProperties: false` (from `deny_unknown_fields`) but no
-//! `background` property (from `#[schemars(skip)]` on a field with no
-//! `JsonSchema` impl for its type). The two combined meant the exported
-//! schema declared *every* scenario in `examples/` that uses `background`
-//! invalid — the schema is exactly what generators (LLMs) are meant to
-//! target, so this is the sink 3 users can't work around.
-//!
-//! This test is a minimal, dependency-free (no external JSON-Schema crate —
-//! adding one is out of this workstream's file scope) structural validator:
-//! it understands exactly the subset of JSON Schema draft-07 that
-//! `schemars` 0.8 actually emits for this codebase (`$ref`, `definitions`,
-//! `type`, `properties`/`additionalProperties`/`required`, `items`,
-//! `oneOf`/`anyOf`/`allOf`, `enum`). It is not a general-purpose validator,
-//! but it is precise about the one thing constat #5 is about:
-//! `additionalProperties: false` combined with a missing declared property.
-
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -23,7 +6,6 @@ fn examples_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples")
 }
 
-/// Resolve a `$ref` like `#/definitions/Scene` against the schema root.
 fn resolve<'a>(root: &'a Value, ref_str: &str) -> &'a Value {
     let path = ref_str.strip_prefix("#/").unwrap_or(ref_str);
     let mut cur = root;
@@ -35,12 +17,7 @@ fn resolve<'a>(root: &'a Value, ref_str: &str) -> &'a Value {
     cur
 }
 
-/// Validate `instance` against `schema` (a node within `root`). Appends a
-/// human-readable message to `errors` for every violation found, prefixed
-/// with `path`. This intentionally does not stop at the first violation
-/// (matches how the equivalent Python `jsonschema` run was cross-checked).
 fn check(root: &Value, schema: &Value, instance: &Value, path: &str, errors: &mut Vec<String>) {
-    // `true` / `{}` accept anything.
     if schema.as_bool() == Some(true) {
         return;
     }
@@ -71,7 +48,7 @@ fn check(root: &Value, schema: &Value, instance: &Value, path: &str, errors: &mu
             let mut sub_errors = Vec::new();
             check(root, variant, instance, path, &mut sub_errors);
             if sub_errors.is_empty() {
-                return; // one matching variant is enough
+                return;
             }
             if best.as_ref().is_none_or(|b| sub_errors.len() < b.len()) {
                 best = Some(sub_errors);
@@ -153,17 +130,6 @@ fn check(root: &Value, schema: &Value, instance: &Value, path: &str, errors: &mu
     }
 }
 
-/// Every `examples/*.json` file must validate against the schema
-/// `rustmotion schema` exports (i.e. `generate_json_schema()` — the CLI
-/// command only additionally wires `Scene.children` to the `Component`
-/// union, which is irrelevant to constat #5's `background` defect and out
-/// of this workstream's file scope to reproduce here).
-///
-/// `ferriskey-presentation.json` is excluded: it fails plain `rustmotion
-/// validate` today for an unrelated, pre-existing geometry overflow (issue
-/// #157, out of this workstream's scope) — but per the baseline run below,
-/// it has zero *schema* violations even before this fix, so excluding it
-/// from the loop changes nothing about what this test proves.
 #[test]
 fn all_examples_validate_against_the_exported_schema() {
     let schema = rustmotion_core::schema::generate_json_schema();
@@ -208,11 +174,6 @@ fn all_examples_validate_against_the_exported_schema() {
     );
 }
 
-/// Narrower, more direct regression lock for the exact defect: `Scene` and
-/// `View` must both declare `background` as a property in the exported
-/// schema. Kept alongside the full-document check above because this is
-/// the precise structural fact constat #5 is about, independent of whatever
-/// else may be in the document.
 #[test]
 fn scene_and_view_schema_both_declare_a_background_property() {
     let schema = rustmotion_core::schema::generate_json_schema();

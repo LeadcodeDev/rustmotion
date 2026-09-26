@@ -8,28 +8,12 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::commands::validation::{self, ValidationSource};
 
-/// Every process-global decode cache a `--watch` iteration must forget
-/// before re-rendering, so an edited asset is never served from a stale
-/// entry keyed only on its path. `ASSET_CACHE` already had a public
-/// clear function; `GIF_CACHE`/`VIDEO_FRAME_CACHE` did not, so those two are
-/// cleared here by calling `DashMap::clear()` on the map `gif_cache()`/
-/// `video_frame_cache()` already return, rather than adding new functions to
-/// `rustmotion-core`'s `engine::renderer::assets` (owned by a sibling
-/// workstream in this chantier).
 fn clear_all_media_caches() {
     engine::clear_asset_cache();
     engine::gif_cache().clear();
     engine::video_frame_cache().clear();
 }
 
-/// Load + validate a scenario for watch mode. On validation failure prints the
-/// report and returns the typed error so the caller can decide how to handle it.
-///
-/// `strict_attrs` is accepted for CLI-surface parity with `validate` (M5,
-/// issue #110) but is a no-op in practice: unknown component attributes
-/// block by default now (`ValidationReport::is_blocking`), and `--watch`
-/// mode never writes a `--report` JSON file, so there is no bucket left for
-/// `promote_attr_warnings` to affect.
 #[allow(clippy::too_many_arguments)]
 fn load_for_watch(
     input: &Path,
@@ -67,12 +51,6 @@ pub fn cmd_render(
     transparent: bool,
     hardware_acceleration: bool,
 ) -> Result<()> {
-    // Refuse a codec the container cannot hold before rendering anything:
-    // ffmpeg otherwise discovers it after every frame is done, and reports it
-    // as a raw -22 with no output file.
-    //
-    // `--frame` is exempt: it writes a PNG still through `render_single_frame`
-    // and never reaches an encoder, so the codec is not part of that operation.
     if frame.is_none() {
         let container = format
             .as_deref()
@@ -82,12 +60,10 @@ pub fn cmd_render(
 
     let start = std::time::Instant::now();
 
-    // Load custom fonts if defined
     if !scenario.fonts.is_empty() {
         engine::renderer::load_custom_fonts(&scenario.fonts);
     }
 
-    // Create parent directories if they don't exist
     if let Some(parent) = output.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
@@ -95,7 +71,6 @@ pub fn cmd_render(
     }
 
     if let Some(frame_num) = frame {
-        // Single frame render to PNG
         let png_path = if output.extension().map(|e| e == "mp4").unwrap_or(false) {
             output.with_extension("png")
         } else {
@@ -106,7 +81,6 @@ pub fn cmd_render(
             eprintln!("Frame {} saved to {}", frame_num, png_path.display());
         }
     } else {
-        // Determine output format
         let fmt = format
             .as_deref()
             .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("mp4"));
@@ -118,7 +92,6 @@ pub fn cmd_render(
                 path: output.to_string_lossy().into_owned(),
             })?;
 
-        // Helper: create TUI and wrap encode call with progress
         let make_tui = |codec_label: &str| -> Option<tui::TuiProgress> {
             if quiet {
                 return None;
@@ -279,8 +252,6 @@ pub fn cmd_watch(
     use notify::{RecursiveMode, Watcher};
     use std::sync::mpsc;
 
-    // Refuse a codec the container cannot hold before rendering anything (see
-    // `cmd_render`; `--frame` is exempt for the same reason).
     if frame.is_none() {
         let container = format
             .as_deref()
@@ -288,13 +259,6 @@ pub fn cmd_watch(
         encode::check_codec_container(codec.as_deref().unwrap_or("h264"), container)?;
     }
 
-    // Determine if we can use incremental rendering (native h264 only).
-    // Hardware acceleration is an ffmpeg-only feature (see
-    // `encode::video::encode_with_ffmpeg_hw`): the incremental/native path
-    // never shells out to ffmpeg at all, so routing a hardware-acceleration
-    // request there would silently do nothing. Forcing `use_ffmpeg` here
-    // keeps that request meaningful under `--watch` too, same as it already
-    // is for `codec`/`format`/`transparent`.
     let fmt = format
         .as_deref()
         .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("mp4"));
@@ -312,23 +276,18 @@ pub fn cmd_watch(
         })?
         .to_string();
 
-    // State for incremental rendering
     let mut prev_segments: Option<Vec<encode::SceneSegment>> = None;
     let mut prev_config_hash: Option<u64> = None;
 
-    // Initialize TUI for watch mode
     let codec_label = codec.as_deref().unwrap_or("h264");
     let mut tui_watch: Option<tui::TuiWatch> = None;
 
-    // Track included file paths for watch mode
     let mut initial_includes: Vec<PathBuf> = Vec::new();
 
-    // Initial render
     match load_for_watch(input, no_validate, lenient, strict_anim, strict_attrs) {
         Ok(scenario) => {
             initial_includes = scenario.included_paths.clone();
 
-            // Load custom fonts if defined
             if !scenario.fonts.is_empty() {
                 engine::renderer::load_custom_fonts(&scenario.fonts);
             }
@@ -424,21 +383,17 @@ pub fn cmd_watch(
 
     watcher.watch(input.as_ref(), RecursiveMode::NonRecursive)?;
 
-    // Watch included files from initial render
     let mut watched_includes: Vec<PathBuf> = initial_includes;
     for inc in &watched_includes {
         let _ = watcher.watch(inc.as_ref(), RecursiveMode::NonRecursive);
     }
 
-    // Debounce: wait for changes, then re-render
     let mut last_err_repr: Option<String> = None;
     let mut consecutive_err_count: u32 = 0;
     let mut suppressed = false;
     loop {
-        // Block until a change event
         rx.recv().map_err(|_| RustmotionError::WatcherClosed)?;
 
-        // Drain any additional events (debounce)
         std::thread::sleep(std::time::Duration::from_millis(100));
         while rx.try_recv().is_ok() {}
 
@@ -446,14 +401,12 @@ pub fn cmd_watch(
             Ok(scenario) => {
                 clear_all_media_caches();
 
-                // Reset error backoff on a successful load
                 if consecutive_err_count > 0 && suppressed {
                     eprintln!("Recovered from previous errors.");
                 }
                 last_err_repr = None;
                 consecutive_err_count = 0;
                 suppressed = false;
-                // Update watched includes: unwatch old, watch new
                 for old in &watched_includes {
                     let _ = watcher.unwatch(old.as_ref());
                 }
@@ -464,14 +417,12 @@ pub fn cmd_watch(
 
                 if can_incremental {
                     let config_hash = encode::hash_video_config(&scenario.video);
-                    // If video config changed (resolution/fps), do full re-render
                     let use_prev = if prev_config_hash == Some(config_hash) {
                         prev_segments.as_deref()
                     } else {
                         None
                     };
 
-                    // Count changed scenes for the TUI
                     let view0_scenes = scenario.views.first().map(|v| &v.scenes[..]).unwrap_or(&[]);
                     let num_scenes = view0_scenes.len();
                     let scene_hashes: Vec<u64> = view0_scenes
@@ -590,10 +541,6 @@ fn render_single_frame(
     frame_num: u32,
     output: &PathBuf,
 ) -> Result<()> {
-    // Use the same task pipeline as the encoder so `--frame N` always shows
-    // exactly what frame N of the rendered MP4 contains. Summing scene
-    // durations directly would skip transition overlaps and drift the
-    // numbering by `transition_duration * fps` per scene boundary.
     let config = &scenario.video;
     let tasks = encode::build_frame_tasks(scenario);
     let total = tasks.len() as u32;
@@ -627,15 +574,6 @@ mod tests {
         )
     }
 
-    /// `--watch` only ever called `engine::clear_asset_cache()`, and
-    /// only conditionally in the incremental branch (when the video config
-    /// hash changed). `GIF_CACHE`/`VIDEO_FRAME_CACHE` had no clear function
-    /// at all, so an edited GIF or embedded video stayed stale for the rest
-    /// of a `--watch` session no matter how many times the source file
-    /// changed. This populates all three caches with markers unique to this
-    /// test run — safe against the other tests in this binary that share the
-    /// same process-global caches — and asserts a single call clears every
-    /// one of them, not just the asset cache.
     #[test]
     fn clear_all_media_caches_clears_gif_and_video_caches_not_just_images() {
         let marker = unique_marker("clear-all");

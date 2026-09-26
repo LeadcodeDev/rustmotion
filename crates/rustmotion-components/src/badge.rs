@@ -34,7 +34,6 @@ pub enum BadgeSize {
 
 impl BadgeSize {
     fn params(&self) -> (f32, f32, f32, f32) {
-        // (font_size, h_padding, v_padding, icon_size)
         match self {
             BadgeSize::Sm => (12.0, 8.0, 4.0, 14.0),
             BadgeSize::Md => (14.0, 12.0, 6.0, 18.0),
@@ -99,9 +98,6 @@ fn default_badge_style() -> CssStyle {
     }
 }
 
-/// Deserializes `style` normally, then defaults `align-self` to
-/// `flex-start` when the author didn't set it explicitly — see the doc
-/// comment on [`Badge::style`].
 fn deserialize_no_stretch_style<'de, D>(deserializer: D) -> Result<CssStyle, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -120,10 +116,6 @@ rustmotion_core::impl_traits!(Badge {
 });
 
 impl Badge {
-    /// Resolves `font-size` against a real per-frame viewport (`rem`/`vw`/
-    /// `vh` now resolve instead of silently dropping to 0px — lot B, wave
-    /// S). `em`/`%` on `font-size` itself remain approximate — see
-    /// `crate::intrinsic::font_size_ctx`'s doc comment.
     fn resolved_font_size(&self, ctx: &PaintCtx) -> f32 {
         self.style.font_size_px_ctx(
             &crate::intrinsic::font_size_ctx(ctx.video_width as f32, ctx.video_height as f32, 0.0),
@@ -131,9 +123,6 @@ impl Badge {
         )
     }
 
-    /// Returns (h_padding, v_padding, icon_size) scaled proportionally
-    /// to the resolved font size. If style.font_size overrides the default,
-    /// padding and icon scale with it.
     fn resolved_params(&self, ctx: &PaintCtx) -> (f32, f32, f32) {
         let (default_fs, h_pad, v_pad, icon_size) = self.badge_size.params();
         let actual_fs = self.resolved_font_size(ctx);
@@ -161,7 +150,6 @@ impl Badge {
         let h = layout_h;
         let radius = h / 2.0;
 
-        // Background / outline
         let rect = Rect::from_xywh(0.0, 0.0, w, h);
         let rrect = RRect::new_rect_xy(rect, radius, radius);
 
@@ -180,7 +168,6 @@ impl Badge {
             }
         }
 
-        // Icon
         let mut x_offset = h_pad;
         if let Some(icon_id) = &self.icon {
             let icon_color = if matches!(self.variant, BadgeVariant::Solid) {
@@ -243,7 +230,6 @@ impl Badge {
             x_offset += icon_size + 6.0 * ratio;
         }
 
-        // Text
         let text_color = if matches!(self.variant, BadgeVariant::Solid) {
             "#FFFFFF"
         } else {
@@ -259,7 +245,6 @@ impl Badge {
 
         let (_, metrics) = font.metrics();
         let ascent = -metrics.ascent;
-        // Use cap height for visual centering (excludes descenders like g, p, y)
         let cap_h = if metrics.cap_height > 0.0 {
             metrics.cap_height
         } else {
@@ -278,14 +263,12 @@ impl Badge {
             &text_paint,
         );
 
-        // Dot indicator (top-right)
         if self.dot {
             let dot_r = font_size * 0.3;
             let dot_cx = w - dot_r * 0.5;
             let dot_cy = dot_r * 0.5;
             let dot_color = self.dot_color.as_deref().unwrap_or(color);
 
-            // Pulse ring animation
             if self.pulse {
                 let phase = (time * 2.0).fract() as f32;
                 let pulse_r = dot_r * (1.0 + phase * 1.5);
@@ -303,7 +286,6 @@ impl Badge {
             canvas.draw_circle((dot_cx, dot_cy), dot_r, &dot_paint);
         }
 
-        // Count badge (top-right, outside bounds)
         if let Some(count) = self.count {
             let count_text = if count > 99 {
                 "99+".to_string()
@@ -327,7 +309,6 @@ impl Badge {
             let badge_x = w - badge_w * 0.5;
             let badge_y = -badge_h * 0.3;
 
-            // Red background pill
             let badge_rect = Rect::from_xywh(badge_x, badge_y, badge_w, badge_h);
             let badge_rrect = RRect::new_rect_xy(badge_rect, badge_h / 2.0, badge_h / 2.0);
             let mut count_bg = paint_from_hex("#EF4444");
@@ -335,7 +316,6 @@ impl Badge {
             count_bg.set_anti_alias(true);
             canvas.draw_rrect(badge_rrect, &count_bg);
 
-            // Count text
             let mut count_paint = paint_from_hex("#FFFFFF");
             count_paint.set_anti_alias(true);
             let (_, count_metrics) = count_font.metrics();
@@ -377,20 +357,12 @@ mod tests {
 
     #[test]
     fn style_defaults_to_flex_start_when_absent() {
-        // #127: `align-items: stretch` (the flex column default) was
-        // winning over `BadgeIntrinsic`, stretching every badge in a card
-        // to the container's full width. No `style` key at all in the
-        // JSON is the common case — this must still default away from
-        // stretch.
         let badge = parse(r#"{"type":"badge","text":"v1"}"#);
         assert_eq!(badge.style.align_self, Some(AlignSelf::FlexStart));
     }
 
     #[test]
     fn style_defaults_to_flex_start_with_other_style_keys_present() {
-        // Same fix, but exercised through the `deserialize_with` path
-        // (some `style` object present, just not `align-self`) rather
-        // than the field-level `default` path (`style` entirely absent).
         let badge = parse(r##"{"type":"badge","text":"v1","style":{"background":"#f00"}}"##);
         assert_eq!(badge.style.align_self, Some(AlignSelf::FlexStart));
         assert_eq!(badge.style.background_color_str(), Some("#f00"));
@@ -401,8 +373,6 @@ mod tests {
         let badge = parse(r#"{"type":"badge","text":"v1","style":{"align-self":"center"}}"#);
         assert_eq!(badge.style.align_self, Some(AlignSelf::Center));
     }
-
-    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
 
     fn test_ctx() -> PaintCtx {
         PaintCtx {
@@ -419,8 +389,6 @@ mod tests {
 
     #[test]
     fn rem_font_size_paints_visible_ink() {
-        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
-        // context-free `font_size_px_or`.
         let mut badge = parse(r#"{"type":"badge","text":"v1"}"#);
         badge.style.font_size = Some(rustmotion_core::css::Length::String("2rem".into()));
         const W: i32 = 200;
@@ -446,8 +414,6 @@ mod tests {
             skia_safe::image::CachingHint::Disallow,
         );
         assert!(ok, "pixel read should succeed");
-        // Solid variant text is always white — probe for white ink
-        // specifically, since the pill background paints regardless.
         let text_ink = buf
             .as_chunks::<4>()
             .0

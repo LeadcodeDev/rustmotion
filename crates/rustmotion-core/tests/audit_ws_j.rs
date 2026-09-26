@@ -1,6 +1,3 @@
-//! Regression tests for the workstream J (layout pass & CSS unit resolution)
-//! audit findings: RM-26, RM-27.
-
 use std::sync::{Arc, Mutex};
 
 use rustmotion_core::css::style::{CssStyle, Edges, Size as CSize};
@@ -9,13 +6,6 @@ use rustmotion_core::css::units::{Length, LengthPercentage as CLP};
 use rustmotion_core::engine::box_tree::{AvailableSpace, BoxNode, IntrinsicMeasure};
 use rustmotion_core::engine::layout_pass::run_layout;
 
-// ---- RM-26: `em` on layout properties must resolve against the element's
-// own (inherited) font-size, not a constant 16px ----
-
-/// A card sized by its parent's explicit `font-size` (48px) inherits that
-/// font-size down to its own layout resolution even though it never sets
-/// `font-size` itself. Its `padding: "1em"` must therefore resolve to 48px
-/// (`1 * inherited_font_size`), not the pre-fix constant 16px.
 #[test]
 fn em_padding_resolves_against_inherited_font_size_not_a_constant_16px() {
     let mut root = BoxNode::container(
@@ -48,9 +38,6 @@ fn em_padding_resolves_against_inherited_font_size_not_a_constant_16px() {
     assert_eq!(content_w, 200.0 - 2.0 * 48.0);
 }
 
-// ---- RM-27: a leaf's `IntrinsicMeasure::measure` must receive `known` and
-// `available` in the same (content-box) coordinate space ----
-
 type RecordedCall = ((Option<f32>, Option<f32>), (AvailableSpace, AvailableSpace));
 
 #[derive(Default)]
@@ -69,13 +56,6 @@ impl IntrinsicMeasure for RecordingIntrinsic {
     }
 }
 
-/// A leaf with 20px uniform padding, stretched to its column-flex parent's
-/// full 300px content width but auto-height (so taffy must measure its
-/// intrinsic height with the width already resolved). Any call where
-/// `known.0` is definite must agree with `available.0` when that is also
-/// definite: both describe the same box, and per taffy 0.10.1's own
-/// `compute_leaf_layout`, `available_space` has already had padding+border
-/// subtracted before reaching the measure function.
 #[test]
 fn measure_fn_known_and_available_agree_on_content_box_width() {
     use rustmotion_core::css::style::{AlignItems, Display, FlexDirection};

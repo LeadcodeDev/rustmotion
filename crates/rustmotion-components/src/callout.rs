@@ -76,10 +76,6 @@ impl Callout {
         self.style.border_radius_px_or(8.0)
     }
 
-    /// Resolves `font-size` against a real per-frame viewport (`rem`/`vw`/
-    /// `vh` now resolve instead of silently dropping to 0px — lot B, wave
-    /// S). `em`/`%` on `font-size` itself remain approximate — see
-    /// `crate::intrinsic::font_size_ctx`'s doc comment.
     fn font_size(&self, ctx: &PaintCtx) -> f32 {
         self.style.font_size_px_ctx(
             &crate::intrinsic::font_size_ctx(ctx.video_width as f32, ctx.video_height as f32, 0.0),
@@ -99,7 +95,6 @@ impl Callout {
     fn arrow_path(&self, w: f32, h: f32) -> Path {
         let mut path = PathBuilder::new();
         let a = self.arrow_size;
-        // Overlap the arrow base 1px into the bubble to eliminate anti-aliasing seam
         let overlap = 1.0;
 
         match self.arrow_direction {
@@ -148,7 +143,6 @@ impl Callout {
         let radius = self.radius();
         let font_size = self.font_size(ctx);
 
-        // Draw bubble body
         let bubble = self.bubble_rect(w, h);
         let rrect = RRect::new_rect_xy(bubble, radius, radius);
         let mut bg_paint = paint_from_hex(self.bg_color());
@@ -156,11 +150,9 @@ impl Callout {
         bg_paint.set_anti_alias(true);
         canvas.draw_rrect(rrect, &bg_paint);
 
-        // Draw arrow
         let arrow = self.arrow_path(w, h);
         canvas.draw_path(&arrow, &bg_paint);
 
-        // Draw text
         let font_style = skia_safe::FontStyle::normal();
         let family = self.style.font_family.as_deref().unwrap_or("Inter");
         let typeface = typeface_with_fallback(family, font_style)?;
@@ -228,12 +220,8 @@ mod tests {
         }
     }
 
-    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
-
     #[test]
     fn rem_font_size_paints_visible_ink() {
-        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
-        // context-free `font_size_px_or`.
         let callout = Callout {
             text: "hello".to_string(),
             arrow_direction: ArrowDirection::default(),
@@ -271,9 +259,6 @@ mod tests {
             skia_safe::image::CachingHint::Disallow,
         );
         assert!(ok, "pixel read should succeed");
-        // Text is white (#FFFFFF default) on a dark #333333 bubble — probe
-        // for near-white ink specifically, since the bubble background
-        // paints regardless of font-size.
         let text_ink = buf
             .as_chunks::<4>()
             .0

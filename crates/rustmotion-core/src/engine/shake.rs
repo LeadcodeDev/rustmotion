@@ -1,22 +1,6 @@
-//! Evaluates [`crate::schema::shake::SceneShake`] at a given scene-local
-//! time (issue #330). See that type's own doc for the damped-oscillation
-//! formula this module implements verbatim; nothing here should ever
-//! diverge from it — if the two disagree, the schema doc is the spec and
-//! this file has a bug.
-//!
-//! [`shake_offset`] is a pure function: it knows nothing about
-//! [`crate::schema::scenario::Camera`] or how a resolved camera transform
-//! gets built. The offset it returns is meant to be added to whatever the
-//! camera already resolved to independently — see [`SceneShake`]'s own doc
-//! for why "additive" rather than "instead of".
-
 use crate::schema::shake::SceneShake;
 use crate::schema::time::{TimeCtx, TimeError};
 
-/// The camera's shake contribution at a scene-local `time`, in the same
-/// units [`crate::schema::scenario::Camera`]'s own `x`/`y` (pixels) and
-/// `rotation` (degrees) use. Additive: a caller adds this to the camera's
-/// independently-resolved values rather than replacing them.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ShakeOffset {
     pub x: f64,
@@ -34,19 +18,6 @@ impl ShakeOffset {
     }
 }
 
-/// Evaluates every impact in `shake.impacts` at `time` (scene-local
-/// seconds — the same clock `PaintCtx::time` uses, not
-/// `PaintCtx::scenario_time`) and sums their contributions. Each impact's
-/// own `at` is a [`crate::schema::time::TimePoint`], resolved against `ctx`
-/// via [`crate::schema::time::TimePoint::resolve_relative`] — the same
-/// "relative to the scene's own start unless `@`-prefixed" rule every
-/// other in-scene time follows.
-///
-/// See [`SceneShake`]'s doc for the formula. Returns [`TimeError`] only
-/// when an impact's `at` fails to resolve (e.g. a `b`-unit term with no
-/// `bpm` declared) — a grammatically malformed `at` is caught earlier, at
-/// scenario deserialization, by the same mechanism every other
-/// [`crate::schema::time::TimePoint`] uses.
 pub fn shake_offset(
     shake: &SceneShake,
     ctx: &TimeCtx,
@@ -124,7 +95,7 @@ mod tests {
     #[test]
     fn the_envelope_decays_to_roughly_one_over_e_after_one_over_decay_seconds() {
         let decay = 10.0;
-        let shake = single_impact(0.0, 20.0, decay, 0.0, 0.0); // frequency=0 -> x is the raw envelope
+        let shake = single_impact(0.0, 20.0, decay, 0.0, 0.0);
         let offset = shake_offset(&shake, &ctx(), 1.0 / decay).unwrap();
         let expected = 20.0 / std::f64::consts::E;
         assert!(
@@ -170,7 +141,6 @@ mod tests {
 
     #[test]
     fn beat_grid_impacts_resolve_through_bpm_and_beat_offset() {
-        // bpm=120 -> 0.5s/beat. Impact at beat 2 lands at t=1.0s.
         let shake = SceneShake {
             impacts: vec![ShakeImpact {
                 at: TimePoint::Spec("2b".to_string()),
@@ -205,18 +175,6 @@ mod tests {
         assert!(shake_offset(&shake, &no_bpm_ctx, 1.0).is_err());
     }
 
-    /// Six declarative impacts (as the acceptance criterion describes)
-    /// reproduce the same damped-sine shape the old workflow got from
-    /// sampling this exact formula 155 times into a hand-pasted camera
-    /// keyframe track. Since the original reel's Python loop isn't
-    /// available to diff against, this test is the strongest available
-    /// proof: it independently re-derives the formula from `SceneShake`'s
-    /// own doc comment (not by calling into this module's
-    /// implementation) and checks `shake_offset` agrees at 155 sampled
-    /// points across the shake's span — i.e. that a hand-rolled,
-    /// per-frame keyframe track built the way the old workflow built one
-    /// would be indistinguishable from what six `{at, amplitude}` pairs
-    /// now produce directly.
     #[test]
     fn six_impacts_reproduce_a_hand_sampled_155_keyframe_track() {
         let decay = 12.0;
@@ -243,8 +201,6 @@ mod tests {
             rotation,
         };
 
-        // Independent re-derivation of the doc's formula — a hand-rolled
-        // sampler, exactly as a Python loop pasting keyframes would build.
         let hand_sampled = |t: f64| -> (f64, f64, f64) {
             let mut x = 0.0;
             let mut y = 0.0;
@@ -261,7 +217,7 @@ mod tests {
             (x, y, rotation * x)
         };
 
-        let span_end = 3.0; // last impact at 2.5s, well decayed by 3.0s.
+        let span_end = 3.0;
         let samples = 155;
         for i in 0..samples {
             let t = span_end * i as f64 / (samples - 1) as f64;

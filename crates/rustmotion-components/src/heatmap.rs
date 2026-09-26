@@ -98,11 +98,6 @@ fn interpolate_color(scale: &[String], t: f32) -> (u8, u8, u8) {
     }
     let n = scale.len() - 1;
     let scaled = t * n as f32;
-    // Clamp the segment index (t=1.0 lands exactly on `n`, one past the
-    // last valid segment), but re-derive `local_t` from the *clamped*
-    // segment rather than reusing the unclamped one — otherwise t=1.0
-    // computed local_t=0.0 against the clamped (second-to-last) segment and
-    // resolved to the second-to-last color instead of the last one.
     let segment = (scaled.floor() as usize).min(n - 1);
     let local_t = (scaled - segment as f32).clamp(0.0, 1.0);
     let (r1, g1, b1, _) = parse_hex_color(&scale[segment]);
@@ -119,10 +114,6 @@ impl Heatmap {
         if !self.animated {
             return 1.0;
         }
-        // Ramp measured from `start_at`, not from scene time zero — matches
-        // `Counter::ramp_progress`. A heatmap delayed with `start_at` used
-        // to read raw scene time, so it was already fully revealed on the
-        // very first frame it became visible.
         let start = self.timing.start_at.unwrap_or(0.0);
         let elapsed = (time - start).max(0.0);
         let p = (elapsed / self.animation_duration).clamp(0.0, 1.0) as f32;
@@ -139,7 +130,6 @@ impl Heatmap {
 
         let progress = self.progress_at(time);
 
-        // Animation: clip rect expanding from left to right
         let clip_w = w * progress;
         canvas.save();
         canvas.clip_rect(
@@ -152,14 +142,6 @@ impl Heatmap {
 
         for (row_idx, row) in self.data.iter().enumerate() {
             for (col_idx, &val) in row.iter().enumerate() {
-                // `color_scale` documents an absolute 0.0-1.0 semantic
-                // (SKILL.md: "2D array of f64, values 0.0-1.0"), not a
-                // per-render min-max scale. Renormalizing meant a grid of
-                // constant values (or any subrange, e.g. [0.8, 0.9, 1.0])
-                // painted identically to a grid of zeros — a flat or
-                // uniformly-high grid is not the same fact as "nothing
-                // happened". Clamp into the documented range instead of
-                // rescaling to whatever the data happens to span.
                 let normalized = (val as f32).clamp(0.0, 1.0);
                 let (r, g, b) = interpolate_color(&self.color_scale, normalized);
 
@@ -230,7 +212,6 @@ mod tests {
             None,
         );
         let mut buf = [0u8; 4];
-        // Sample the middle of the top-left cell.
         let x = (heatmap.cell_size / 2.0) as i32;
         let y = (heatmap.cell_size / 2.0) as i32;
         snapshot.read_pixels(
@@ -245,11 +226,6 @@ mod tests {
 
     #[test]
     fn a_uniformly_low_grid_is_not_identical_to_an_all_zero_grid() {
-        // #6's exact repro: `color_scale` is documented (SKILL.md) as an
-        // *absolute* 0.0-1.0 scale, but the painter renormalized min→max —
-        // so a grid of constant 5.0s (or any other constant) rendered
-        // pixel-for-pixel identical to a grid of constant 0.0s, both
-        // collapsing to the scale's first (lowest) color.
         let uniform = base_heatmap(vec![vec![5.0, 5.0, 5.0], vec![5.0, 5.0, 5.0]]);
         let zero = base_heatmap(vec![vec![0.0, 0.0, 0.0], vec![0.0, 0.0, 0.0]]);
         let uniform_color = cell_color(&uniform, 200, 100, 10.0);
@@ -262,9 +238,6 @@ mod tests {
 
     #[test]
     fn absolute_values_are_not_renormalized_to_the_data_subrange() {
-        // A grid whose values happen to span [0.8, 1.0] must not stretch
-        // that subrange to fill the whole color scale — 0.8 reads as
-        // "mostly full", not as "the bottom of whatever this grid contains".
         let high = base_heatmap(vec![vec![0.8, 0.9, 1.0]]);
         let low = base_heatmap(vec![vec![0.0, 0.1, 0.2]]);
         let high_first_cell = cell_color(&high, 200, 100, 10.0);
@@ -277,11 +250,6 @@ mod tests {
 
     #[test]
     fn interpolate_color_at_the_top_of_the_scale_returns_the_last_color() {
-        // Surfaced while chasing #6: the clamped segment index was reused
-        // for `local_t` too, so t=1.0 exactly computed `local_t = 0.0` for
-        // the *clamped* (second-to-last) segment instead of `local_t = 1.0`
-        // — landing on the second-to-last color rather than the last
-        // (brightest) one.
         let scale = default_color_scale();
         let (r, g, b) = interpolate_color(&scale, 1.0);
         let (er, eg, eb, _) = parse_hex_color(scale.last().unwrap());

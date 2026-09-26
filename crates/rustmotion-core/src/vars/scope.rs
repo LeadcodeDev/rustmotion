@@ -1,66 +1,7 @@
-//! [`VarScope`]: the [`Scope`] implementation an expression actually reads
-//! `$name` through, composing a scenario-wide [`VarTable`] with an optional
-//! scene-level one that shadows it.
-
 use crate::expr::Scope;
 
 use super::track::VarTable;
 
-/// Reads declared scenario/scene variables for one absolute instant `t`.
-///
-/// Scene-level shadows scenario-level, by name: a scene that redeclares a
-/// scenario variable's name gets its own value for that name inside that
-/// scene, and the scenario's is invisible there (not summed, not merged —
-/// entirely replaced).
-///
-/// # Scene isolation
-///
-/// A [`VarScope`] built for scene B never holds scene A's table, so an
-/// expression in scene A that names a variable declared only in scene B's
-/// `vars` gets `None` back from [`VarScope::var`] — exactly what it would
-/// get for a name that was never declared anywhere.
-/// [`Scope::var`](crate::expr::Scope::var)'s own doc already treats those
-/// two cases as indistinguishable ("`None` means not defined in this
-/// scope" turns into the same [`crate::expr::ExprError::UnknownIdent`] a
-/// genuinely unknown name produces), which is what makes a cross-scene
-/// variable reference surface as the same error a cross-scene node
-/// reference does — this module does not need to special-case it, only to
-/// never construct a [`VarScope`] that can see another scene's table.
-///
-/// # Composing with `node_prop`
-///
-/// This type answers [`Scope::var`] only; [`Scope::node_prop`] keeps its
-/// default `None`. A caller that also needs node references (see
-/// `engine::deps`) does not wrap a [`VarScope`] inside another `Scope` impl
-/// — a `Scope` is consumed behind `&dyn Scope`, and trait objects don't
-/// compose that way — it instead holds a [`VarScope`] (or the two
-/// [`VarTable`]s and a `t`, if that is more convenient for its own
-/// lifetimes) as a field alongside its node lookups, and its own `var`
-/// implementation tries [`VarScope::resolve`] first, falling back to
-/// whatever else it answers for. [`VarScope::resolve`] is exposed as a
-/// plain method — not only reachable through the `Scope` impl — precisely
-/// so it can be called that way without going through a trait object:
-///
-/// ```
-/// use rustmotion_core::expr::Scope;
-/// use rustmotion_core::vars::VarScope;
-///
-/// struct EngineScope<'a> {
-///     vars: VarScope<'a>,
-///     // ... node lookups owned elsewhere ...
-/// }
-///
-/// impl Scope for EngineScope<'_> {
-///     fn var(&self, name: &str) -> Option<f64> {
-///         self.vars.resolve(name) /* .or_else(|| self.node_derived(name)) */
-///     }
-///
-///     fn node_prop(&self, id: &str, prop: &str) -> Option<f64> {
-///         let _ = (id, prop);
-///         None // delegate to the node-dependency graph here
-///     }
-/// }
-/// ```
 pub struct VarScope<'a> {
     scenario: &'a VarTable,
     scene: Option<&'a VarTable>,
@@ -68,15 +9,10 @@ pub struct VarScope<'a> {
 }
 
 impl<'a> VarScope<'a> {
-    /// `scenario` is visible everywhere; `scene`, when given, shadows it by
-    /// name for expressions evaluated inside that one scene. `t` is the
-    /// absolute scenario time (seconds) this scope answers for.
     pub fn new(scenario: &'a VarTable, scene: Option<&'a VarTable>, t: f64) -> Self {
         VarScope { scenario, scene, t }
     }
 
-    /// Resolve `name`, scene table first. Usable directly, without going
-    /// through the [`Scope`] trait object — see the composing note above.
     pub fn resolve(&self, name: &str) -> Option<f64> {
         self.scene
             .and_then(|scene| scene.value_at(name, self.t))
@@ -128,13 +64,6 @@ mod tests {
         );
         let scope = VarScope::new(&scenario, None, 0.5);
 
-        // `Expr::is_static` only special-cases the fixed `t`/`T`/`beat`/
-        // `duration` names — it has no notion of a declared `vars` set, so
-        // in isolation it still says `true` here. That is expected, not a
-        // bug: a caller must additionally consult
-        // `crate::vars::dynamic_names` before folding, which is exactly
-        // what makes `keyDraw` land on the dynamic side — see this
-        // module's doc and `mod.rs`'s "What is not here" section.
         let expr = Expr::parse("= $keyDraw * 360").unwrap();
         assert!(expr.is_static());
         assert_eq!(expr.eval(&scope).unwrap(), 180.0);
@@ -166,9 +95,6 @@ mod tests {
 
     #[test]
     fn scene_local_variable_is_invisible_outside_its_scene() {
-        // Scene B declares `onlyInB`; a scope built without scene B's
-        // table (as if evaluating an expression in scene A) must not see
-        // it — same `None` a genuinely unknown name produces.
         let scenario = VarTable::compile(&VarSet::new(), &ctx()).unwrap();
         let scene_b = table_with(
             "onlyInB",
@@ -177,7 +103,7 @@ mod tests {
                 animation: Vec::new(),
             },
         );
-        let _ = &scene_b; // would be passed as `scene` only while evaluating scene B
+        let _ = &scene_b;
 
         let scope_in_scene_a = VarScope::new(&scenario, None, 0.0);
         assert_eq!(scope_in_scene_a.resolve("onlyInB"), None);
@@ -188,5 +114,36 @@ mod tests {
             err,
             crate::expr::ExprError::UnknownIdent("onlyInB".to_string())
         );
+    }
+
+    #[test]
+    fn a_host_scope_can_hold_a_var_scope_and_delegate_to_resolve() {
+        struct EngineScope<'a> {
+            vars: VarScope<'a>,
+        }
+
+        impl crate::expr::Scope for EngineScope<'_> {
+            fn var(&self, name: &str) -> Option<f64> {
+                self.vars.resolve(name)
+            }
+
+            fn node_prop(&self, id: &str, prop: &str) -> Option<f64> {
+                let _ = (id, prop);
+                None
+            }
+        }
+
+        let scenario = table_with(
+            "W",
+            VarDef {
+                default: 1080.0,
+                animation: Vec::new(),
+            },
+        );
+        let host = EngineScope {
+            vars: VarScope::new(&scenario, None, 0.0),
+        };
+        assert_eq!(crate::expr::Scope::var(&host, "W"), Some(1080.0));
+        assert_eq!(crate::expr::Scope::node_prop(&host, "n", "x"), None);
     }
 }

@@ -1,44 +1,11 @@
-//! Unknown-attribute detection for LLM-authored scenarios.
-//!
-//! Component structs deliberately do not use `deny_unknown_fields` (they rely
-//! on `#[serde(flatten)]` for timing, which is incompatible with it), so a
-//! typo'd attribute like `<rm-counter typo-attr="x">` silently disappears at
-//! typed load. This module rebuilds the set of known top-level properties per
-//! component from the schemars JSON Schema of `Component` and reports any
-//! unknown key into `attr_warnings`.
-//!
-//! M5 (issue #110 / #102, decided at kickoff): unknown attributes error
-//! **by default** now, not only under `--strict-attrs` as before. This
-//! module still returns them separately as `(errors, warnings)` — callers
-//! outside `run_checks` (e.g. this module's own tests) can inspect them
-//! independently — but `validation::run_checks` folds the warnings straight
-//! into `schema_errors` unconditionally before anyone sees a
-//! `ValidationReport`, so `validate`/`render`/`watch` all block on them with
-//! no extra wiring. `--strict-attrs` / `ValidationReport::promote_attr_warnings`
-//! still exist, purely for CLI-surface stability — see their doc comments.
-//!
-//! It also surfaces typed-deserialization failures (e.g. an unknown CSS
-//! property, rejected by `CssStyle`'s `deny_unknown_fields`, or a missing
-//! required field) as blocking schema errors — today those children are
-//! silently dropped at render time.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use rustmotion::components::{ChildComponent, Component};
 use rustmotion::schema::ResolvedScenario;
 
-/// Keys accepted on any component object but absent from the per-variant
-/// schema properties:
-/// - `position`, `x`, `y`, `z-index`, `id`: `ChildComponent` wrapper fields
-///   (flattened around the component itself). `id` is what a sibling node's
-///   expression addresses through `node("id", "prop")`.
-/// - `animation`: top-level `animation` is ignored by the engine and already
-///   reported by the dedicated misplaced-animation warning — flagging it here
-///   too would double-report.
 const WRAPPER_KEYS: &[&str] = &["position", "x", "y", "z-index", "animation", "bleed", "id"];
 
-/// Serde enum aliases that schemars does not know about: alias tag → schema tag.
 const TAG_ALIASES: &[(&str, &str)] = &[
     ("container", "div"),
     ("progress_bar", "progress"),
@@ -48,10 +15,6 @@ const TAG_ALIASES: &[(&str, &str)] = &[
     ("positioned", "div"),
 ];
 
-/// Lazily-built map: component tag ("counter") → set of known top-level
-/// property names, extracted from the schemars `oneOf` variants. Flattened
-/// `TimingConfig` fields (`start_at`, `end_at`) are included by schemars in
-/// each variant's properties, so no extra allowlist is needed for them.
 fn known_props() -> &'static BTreeMap<String, BTreeSet<String>> {
     static CACHE: OnceLock<BTreeMap<String, BTreeSet<String>>> = OnceLock::new();
     CACHE.get_or_init(|| {
@@ -79,11 +42,6 @@ fn known_props() -> &'static BTreeMap<String, BTreeSet<String>> {
     })
 }
 
-/// Check every component in the scenario. Returns `(errors, warnings)`:
-/// - errors: children that fail typed deserialization (would be silently
-///   dropped at render time) — always blocking;
-/// - warnings: unknown top-level attributes (silently ignored at load) —
-///   advisory unless `--strict-attrs`.
 pub fn check_component_attrs(scenario: &ResolvedScenario) -> (Vec<String>, Vec<String>) {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
@@ -91,8 +49,6 @@ pub fn check_component_attrs(scenario: &ResolvedScenario) -> (Vec<String>, Vec<S
         for (si, scene) in view.scenes.iter().enumerate() {
             for (ci, child) in scene.children.iter().enumerate() {
                 let path = format!("views[{vi}].scenes[{si}].children[{ci}]");
-                // Typed parse at scene level covers nested children
-                // transitively (containers parse their subtree).
                 if let Err(e) = serde_json::from_value::<ChildComponent>(child.clone()) {
                     let kind = child.get("type").and_then(|t| t.as_str()).unwrap_or("?");
                     errors.push(format!(
@@ -107,17 +63,15 @@ pub fn check_component_attrs(scenario: &ResolvedScenario) -> (Vec<String>, Vec<S
     (errors, warnings)
 }
 
-/// Recursively check one component object (and its `children`, when the
-/// component type supports children) for unknown top-level attributes.
 fn walk_component(value: &serde_json::Value, path: &str, warnings: &mut Vec<String>) {
     let Some(obj) = value.as_object() else {
         return;
     };
     let Some(tag) = obj.get("type").and_then(|t| t.as_str()) else {
-        return; // missing/invalid type — already covered by the typed-parse error
+        return;
     };
     let Some(known) = known_props().get(tag) else {
-        return; // unknown component tag — already covered by the typed-parse error
+        return;
     };
 
     for key in obj.keys() {
@@ -139,8 +93,6 @@ fn walk_component(value: &serde_json::Value, path: &str, warnings: &mut Vec<Stri
     }
 }
 
-/// Build the "(did you mean …? known: …)" suffix: known keys sorted by edit
-/// distance to the unknown one, closest first, capped at 8.
 fn suggest(unknown: &str, known: &BTreeSet<String>) -> String {
     let mut ranked: Vec<(usize, &str)> = known
         .iter()
@@ -161,7 +113,6 @@ fn suggest(unknown: &str, known: &BTreeSet<String>) -> String {
     }
 }
 
-/// Classic dynamic-programming Levenshtein distance (small strings only).
 fn levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
@@ -177,7 +128,6 @@ fn levenshtein(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
-/// Cap long serde error messages (CssStyle's field list is ~150 entries).
 fn truncate(msg: &str, max: usize) -> String {
     if msg.len() <= max {
         msg.to_string()
@@ -221,19 +171,11 @@ mod tests {
             "got: {}",
             warnings[0]
         );
-        // Lists known attributes so the author can self-correct.
         assert!(warnings[0].contains("known:"), "got: {}", warnings[0]);
     }
 
     #[test]
     fn unknown_attr_blocks_by_default_without_strict_attrs() {
-        // M5 (issue #110): unknown attributes error by default — no
-        // `--strict-attrs` needed. `render` used to exit 0 here, having
-        // silently used default styling. `run_checks` folds them straight
-        // into `schema_errors` (see its doc comment), so every caller
-        // (`validate`, `render`, `watch`) blocks uniformly with zero extra
-        // wiring — `report.attr_warnings` itself is already empty by the
-        // time `run_checks` returns.
         let json = serde_json::json!({
             "video": { "width": 100, "height": 100 },
             "scenes": [{ "duration": 2.0, "children": [
@@ -257,10 +199,6 @@ mod tests {
 
     #[test]
     fn strict_attrs_promotion_is_a_harmless_no_op_post_m5() {
-        // `--strict-attrs` / `promote_attr_warnings` are kept for CLI-surface
-        // stability, but since M5 there is nothing left for them to do by
-        // the time `run_checks` has already run: `attr_warnings` is already
-        // empty, so promoting it is a no-op, and the report already blocked.
         let json = serde_json::json!({
             "video": { "width": 100, "height": 100 },
             "scenes": [{ "duration": 2.0, "children": [
@@ -287,8 +225,6 @@ mod tests {
 
     #[test]
     fn flattened_and_wrapper_fields_are_not_flagged() {
-        // start_at/end_at come from the flattened TimingConfig; position/x/y/
-        // z-index from the ChildComponent wrapper. None may warn.
         let s = resolved(serde_json::json!([
             {
                 "type": "text", "content": "hi",
@@ -338,8 +274,6 @@ mod tests {
 
     #[test]
     fn alias_tags_use_target_schema() {
-        // "container" is a serde alias of "div"; "progress_bar" of "progress".
-        // Their unknown attributes must be checked against the target schema.
         let s = resolved(serde_json::json!([
             { "type": "container", "typo": "x", "children": [] }
         ]));
@@ -350,8 +284,6 @@ mod tests {
 
     #[test]
     fn invalid_component_is_a_blocking_error() {
-        // Missing required field `to`: today the child is silently dropped at
-        // render; validation must surface it as an error.
         let s = resolved(serde_json::json!([
             { "type": "counter", "from": 0 }
         ]));
@@ -362,23 +294,6 @@ mod tests {
 
     #[test]
     fn typo_inside_style_animation_effect_is_reported() {
-        // Constat #8: `walk_component` only compares a component's own
-        // top-level keys, then recurses into `children` — it never looks
-        // inside `style`, let alone `style.animation[*]`. A typo'd field on
-        // an animation effect (`duratoin` instead of `duration`) used to
-        // deserialize silently (the effect config structs had no
-        // `deny_unknown_fields`), so the author got a scenario that "worked"
-        // but quietly ran the default 0.8s duration instead of theirs.
-        //
-        // The fix lives in `schema/video.rs` (adding `deny_unknown_fields` to
-        // every `AnimationEffect` payload struct) rather than here: an
-        // internally-tagged enum's tag field is excluded from what the
-        // variant's own `Deserialize` sees, so this rejects the typo without
-        // ever flagging the legitimate `name` tag as unknown. That routes the
-        // typo through the *existing* typed-parse-failure path in
-        // `check_component_attrs` (the same one that already catches, e.g.,
-        // a missing required field) — it surfaces as a blocking error, not a
-        // `walk_component` warning.
         let s = resolved(serde_json::json!([
             {
                 "type": "text", "content": "hi",
@@ -394,9 +309,6 @@ mod tests {
 
     #[test]
     fn well_formed_animation_effect_fields_are_not_flagged() {
-        // Sanity companion to the typo test: legitimate fields across a
-        // spread of effect kinds (preset timing, keyframes, wiggle, glow,
-        // motion_blur, tilt_in) must not trip the new deny_unknown_fields.
         let s = resolved(serde_json::json!([
             {
                 "type": "text", "content": "hi",

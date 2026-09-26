@@ -2,7 +2,6 @@ use skia_safe::{Canvas, Paint, Rect};
 
 use crate::schema::ShapeType;
 
-/// Build a `Path` for the given shape type without drawing it.
 pub fn build_shape_path(
     shape_type: &ShapeType,
     x: f32,

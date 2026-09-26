@@ -1,6 +1,3 @@
-// Auto-generated from https://github.com/lowmess/hero-patterns
-// 87 patterns total
-
 pub struct HeropatternDef {
     pub name: &'static str,
     pub svg_paths: &'static str,

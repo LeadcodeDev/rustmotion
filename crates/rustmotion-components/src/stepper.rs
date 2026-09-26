@@ -175,7 +175,6 @@ impl Stepper {
             };
             let cy = r + 4.0;
 
-            // Draw connector lines between nodes
             for i in 0..(n - 1) {
                 let x1 = padding + i as f32 * spacing + r;
                 let x2 = padding + (i + 1) as f32 * spacing - r;
@@ -200,41 +199,30 @@ impl Stepper {
                 canvas.draw_line((x1, cy), (x2, cy), &line_paint);
             }
 
-            // Draw nodes and labels
             for (i, step) in self.steps.iter().enumerate() {
                 let cx = padding + i as f32 * spacing;
                 let step_f = i as f32;
 
                 let (node_color, is_active) = if step_f < current.floor() {
-                    // Completed
                     (&self.completed_color, false)
                 } else if (step_f - current).abs() < 0.5 {
-                    // Active
                     (&self.active_color, true)
                 } else {
-                    // Pending
                     (&self.pending_color, false)
                 };
 
-                // Node circle
                 let mut node_paint = paint_from_hex(node_color);
                 node_paint.set_style(PaintStyle::Fill);
                 node_paint.set_anti_alias(true);
 
-                if is_active {
-                    // Filled circle for active
-                    canvas.draw_circle((cx, cy), r, &node_paint);
-                } else if step_f < current.floor() {
-                    // Filled circle for completed
+                if is_active || step_f < current.floor() {
                     canvas.draw_circle((cx, cy), r, &node_paint);
                 } else {
-                    // Ring for pending
                     node_paint.set_style(PaintStyle::Stroke);
                     node_paint.set_stroke_width(2.0);
                     canvas.draw_circle((cx, cy), r - 1.0, &node_paint);
                 }
 
-                // Step number inside circle
                 let num_text = format!("{}", i + 1);
                 let num_w =
                     measure_text_with_fallback(&num_text, &number_font, &emoji_number_font, 0.0);
@@ -255,7 +243,6 @@ impl Stepper {
                     &num_paint,
                 );
 
-                // Label below circle
                 let label_w =
                     measure_text_with_fallback(&step.label, &label_font, &emoji_label_font, 0.0);
                 let label_x = cx - label_w / 2.0;
@@ -275,7 +262,6 @@ impl Stepper {
                     &label_paint,
                 );
 
-                // Description below label
                 if let Some(desc) = &step.description {
                     let desc_w =
                         measure_text_with_fallback(desc, &desc_font, &emoji_desc_font, 0.0);
@@ -297,7 +283,6 @@ impl Stepper {
                 }
             }
         } else {
-            // Vertical layout
             let padding = r + 8.0;
             let available = h - padding * 2.0;
             let spacing = if n > 1 {
@@ -307,7 +292,6 @@ impl Stepper {
             };
             let cx = r + 4.0;
 
-            // Draw connector lines
             for i in 0..(n - 1) {
                 let y1 = padding + i as f32 * spacing + r;
                 let y2 = padding + (i + 1) as f32 * spacing - r;
@@ -332,7 +316,6 @@ impl Stepper {
                 canvas.draw_line((cx, y1), (cx, y2), &line_paint);
             }
 
-            // Draw nodes and labels
             for (i, step) in self.steps.iter().enumerate() {
                 let cy = padding + i as f32 * spacing;
                 let step_f = i as f32;
@@ -357,7 +340,6 @@ impl Stepper {
                     canvas.draw_circle((cx, cy), r - 1.0, &node_paint);
                 }
 
-                // Step number
                 let num_text = format!("{}", i + 1);
                 let num_w =
                     measure_text_with_fallback(&num_text, &number_font, &emoji_number_font, 0.0);
@@ -378,7 +360,6 @@ impl Stepper {
                     &num_paint,
                 );
 
-                // Label to the right
                 let lx = cx + r + 12.0;
                 let (_, lm) = label_font.metrics();
                 let ly = cy + (-lm.ascent - lm.descent) / 2.0;
@@ -395,7 +376,6 @@ impl Stepper {
                     &label_paint,
                 );
 
-                // Description below label
                 if let Some(desc) = &step.description {
                     let desc_y = ly + label_font_size + 2.0;
                     let mut desc_paint = paint_from_hex("#8B949E");

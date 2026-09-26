@@ -1,28 +1,12 @@
-//! Merging rustmotion's guidance into a project `CLAUDE.md` without owning the file.
-//!
-//! `skills install` used to write `CLAUDE.md` wholesale and `skills uninstall` used
-//! to delete it. Both treated a file the user authors as rustmotion's property: a
-//! project with its own build notes lost them on install, and lost the file itself
-//! on uninstall.
-//!
-//! Instead, rustmotion claims a delimited block and never touches anything outside
-//! it. The markers are HTML comments so they stay invisible in rendered Markdown.
-
 pub const START: &str = "<!-- rustmotion:start -->";
 pub const END: &str = "<!-- rustmotion:end -->";
 
-/// Byte range of the rustmotion block, markers included.
 fn block_span(text: &str) -> Option<(usize, usize)> {
     let start = text.find(START)?;
     let end = text[start..].find(END)? + start + END.len();
     Some((start, end))
 }
 
-/// The document to write on install.
-///
-/// - no file yet: the block alone;
-/// - a file without a block: the block appended, existing content untouched;
-/// - a file with a block: only the block replaced, in place.
 pub fn merge(existing: Option<&str>, body: &str) -> String {
     let block = format!("{START}\n{}\n{END}\n", body.trim_end());
     let Some(existing) = existing else {
@@ -49,14 +33,8 @@ pub fn merge(existing: Option<&str>, body: &str) -> String {
     }
 }
 
-/// The document to write on uninstall, or `None` when nothing rustmotion owns is
-/// left and the file should be removed.
-///
-/// A file the user also wrote in survives with its own content; a file that only
-/// ever held our block is reported as removable.
 pub fn strip(existing: &str) -> Option<String> {
     let Some((start, end)) = block_span(existing) else {
-        // No block: the file is entirely the user's. Never remove it.
         return Some(existing.to_string());
     };
     let mut out = String::with_capacity(existing.len());
