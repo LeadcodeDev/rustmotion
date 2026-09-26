@@ -9,10 +9,9 @@ Tout JSON de scénario généré doit être validé avec `rustmotion validate` a
 
 ## Sécurité géométrique (viewport)
 
-Aucun contenu textuel ne doit dépasser du device. Quatre propriétés contrôlent ce comportement :
+Aucun contenu textuel ne doit dépasser du device. Trois propriétés contrôlent ce comportement :
 
 - `style.white-space` (default `normal`, donc wrap actif) sur `text` : le texte wrap sur la largeur du parent par défaut. `white-space: "nowrap"` (ou `"pre"`) est légitime uniquement si un `max-width` fini + `font-size` raisonnable garantissent que la ligne tient. Le validateur émet `unwrappable_text_overflow` sinon. Il n'existe pas de champ `style.wrap` — c'est un vocabulaire hérité de l'ancien modèle de style, supprimé de `CssStyle`. Voir [rules/geometry-safety.md](.claude/skills/rustmotion/rules/geometry-safety.md).
-- `auto_scroll` (default `true`) sur `codeblock` et `terminal` : quand le contenu dépasse la hauteur du `size`, le moteur scrolle (clip + translate) sans réduire la `font-size`. `auto_scroll: false` → `auto_scroll_disabled_overflow`.
 - `style.text-autofit` (default absent) sur `text` et `gradient_text` : réduit la `font-size` jusqu'à ce que le contenu tienne dans sa boîte. À réserver au texte piloté par des données, dont on ne peut pas connaître la longueur à l'avance — pas pour compenser une mise en page qu'on peut simplement dimensionner. Le rétrécissement s'arrête à un plancher de lisibilité calibré ; si ça ne suffit pas, **la violation est toujours signalée**. Seuls ces deux composants l'implémentent : le déclarer ailleurs est inerte.
 - `style.overflow` (default `visible`) sur les conteneurs : sémantique CSS. `hidden` clippe au bord du parent. Le validateur ne se plaint que si le contenu sort du **viewport**, pas d'un parent `visible`.
 
@@ -20,7 +19,7 @@ Aucun contenu textuel ne doit dépasser du device. Quatre propriétés contrôle
 
 CLI :
 - `rustmotion validate -f file.json` — schema + geometry
-- `--fix` — auto-fix sûr : `auto_scroll: true` sur `auto_scroll_disabled_overflow`, retrait de `style.white-space` sur `unwrappable_text_overflow` (retour au wrapping), et `text-autofit: true` sur `content_overflows_box` pour `text`/`gradient_text`. Les débordements de viewport restent non corrigés : ils demandent un arbitrage de mise en page. `--fix` **refuse** d'écrire sur un scénario templaté, utilisant `include`, ou utilisant `for-each`/`use` — les index de chemin ne correspondraient plus à la source.
+- `--fix` — auto-fix sûr : retrait de `style.white-space` sur `unwrappable_text_overflow` (retour au wrapping), et `text-autofit: true` sur `content_overflows_box` pour `text`/`gradient_text`. Les débordements de viewport restent non corrigés : ils demandent un arbitrage de mise en page. `--fix` **refuse** d'écrire sur un scénario templaté, utilisant `include`, ou utilisant `for-each`/`use` — les index de chemin ne correspondraient plus à la source.
 - `--report r.json` — rapport JSON
 - `--strict-anim` — vérification frame par frame ; ajoute la détection `animated_text_overflow` (transform animé qui sort du viewport à un instant échantillonné). L'échantillonnage s'arrête à `scene.freeze_at`, puisque rien n'est rendu au-delà.
 - `--strict-attrs` — promeut en erreurs les attributs inconnus (détection schéma + did-you-mean, activée par défaut en warnings)
@@ -70,15 +69,13 @@ La vue **`world`** est le seul mécanisme qui produit une continuité réelle en
 
 > `grid_dots` marks the intersections and reads as a texture; `grid_lines` is a grid of ruled **lines** and reads as a structure — the one to put behind a chart or a code panel. Config: `cell`, `weight`, `color`, plus `major_every`/`major_weight` for the graph-paper effect.
 
-## Composants disponibles (60)
+## Composants disponibles (53)
 
 ### Basiques
 `text`, `shape`, `image`, `icon`, `svg`, `video`, `gif`, `caption`, `rich_text`, `gradient_text`
 
 ### Conteneurs
-`card`, `flex`, `grid`, `div` (alias de `container`), `container`, `positioned`
-
-> `div` = layout pur sans décoration visuelle (HTML `<div>`). `card` = même chose mais avec fond/border-radius/ombre attendus.
+`div` — seul type de conteneur. `card`, `flex`, `grid`, `container`, `positioned` sont acceptés comme alias JSON du même composant (compat historique avec les six types qui existaient avant leur fusion) : aucune différence de comportement, de style par défaut ou de décoration entre ces orthographes. `style.display` (`flex` par défaut, ou `grid`) pilote le layout — pas le nom du tag ; fond, `border-radius`, ombre sont de simples propriétés `style` disponibles sur ce composant comme sur n'importe quel autre, pas un attribut réservé à l'une des anciennes variantes.
 
 ### Data Visualization
 - `chart` — 12 types: bar, line, pie, donut, horizontal_bar, area, stacked_bar, radar, scatter, radial_bar, funnel, waterfall. Supporte axes/grilles/labels.
@@ -90,7 +87,7 @@ La vue **`world`** est le seul mécanisme qui produit une continuité réelle en
 - `dot_map` — carte mondiale en dot-pattern avec points de données, pulse, lat/lng
 - `progress` — barre linéaire ou circulaire
 - `counter` — compteur animé (standalone uniquement, pas dans les cards)
-- `number_wheel` — digits that scroll like a mechanical odometer and land on the figure. Not to be confused with `counter`, which interpolates a value and rewrites the number (its glyphs jump). See [rules/number-wheel.md](.claude/skills/rustmotion/rules/number-wheel.md).
+- `number_wheel` — digits that scroll like a mechanical odometer and land on the figure. Not to be confused with `counter`, which interpolates a value and rewrites the number (its glyphs jump). Le réglage se fait par `digits`, `duration` et `easing` sur le composant.
 - `table` — tableau avec column_widths, column_align, cell_padding, show_borders
 
 ### UI Components
@@ -101,7 +98,6 @@ La vue **`world`** est le seul mécanisme qui produit une continuité réelle en
 - `rating` — étoiles avec remplissage partiel animé
 - `kbd` — touche clavier visuelle (effet 3D)
 - `tooltip` — label flottant avec flèche directionnelle
-- `notification` — toast fade-in/out avec stack push (info/success/warning/error)
 - `pill_nav` — tabs avec pill indicator animé entre onglets
 - `list` — liste bullet/numbered/checklist avec icônes
 - `stepper` — étapes numérotées connectées avec progression animée
@@ -114,10 +110,6 @@ La vue **`world`** est le seul mécanisme qui produit une continuité réelle en
 - `divider` — séparateur visuel
 - `success_check` — a checkmark that draws itself inside a halo, with a pop and a settling rotation
 - `pointer` — a simulated **mouse** cursor (arrow + click ring) following waypoints. `cursor` is a text caret, not this. See [rules/pointer-walkthrough.md](.claude/skills/rustmotion/rules/pointer-walkthrough.md).
-
-### Code & Terminal
-- `codeblock` — code syntax-highlighted avec reveal, diff mode (`diff: true`), state transitions
-- `terminal` — terminal avec chrome macOS, reveal typewriter + curseur clignotant
 
 ### Diagrammes
 `arrow`, `connector`, `timeline`, `line`
@@ -153,7 +145,7 @@ The seven `char_*` presets are tuned via `direction` (up/down/left/right), `dist
 Le moteur utilise un pipeline **box_tree → layout_pass → paint_pass** inspiré des navigateurs web :
 
 1. **box_tree** (`box_builder.rs`) — construit un arbre de `BoxNode { css: CssStyle, children, intrinsic }` depuis les composants JSON résolus
-2. **layout_pass** (`engine/layout_pass.rs`) — orchestre taffy pour calculer les `BoxLayout { x, y, width, height }` de chaque nœud. Les feuilles avec un `IntrinsicMeasure` (texte, image, codeblock) sont mesurées via une `measure_fn`.
+2. **layout_pass** (`engine/layout_pass.rs`) — orchestre taffy pour calculer les `BoxLayout { x, y, width, height }` de chaque nœud. Les feuilles avec un `IntrinsicMeasure` (texte, image, table) sont mesurées via une `measure_fn`.
 3. **paint_pass** (`engine/paint_pass.rs`) — descend l'arbre, applique transform/opacity, peint les décorations (background, border, shadow), délègue au `Painter` du composant pour le contenu.
 
 Chaque composant implémente le trait `Painter` :
@@ -191,7 +183,6 @@ crates/
 │   │   ├── style.rs            # Specialized types (CardBorder, CardShadow, Fill, etc.)
 │   │   ├── background.rs       # AnimatedBackground, BackgroundPreset
 │   │   ├── animation.rs        # EasingType, AnimationPreset, PresetConfig
-│   │   ├── codeblock_types.rs  # CodeblockChrome, CodeblockState
 │   │   └── video.rs            # AnimationEffect, Size, ShapeType, Stroke
 │   └── traits/
 │       ├── painter.rs          # Painter trait + PaintCtx + AvailableSize + MeasureCtx

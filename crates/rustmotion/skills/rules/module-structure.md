@@ -41,7 +41,6 @@ src/
 │   ├── style.rs          # Specialized types: CardBorder, CardShadow, Fill, Gradient, etc.
 │   ├── background.rs     # AnimatedBackground, BackgroundPreset
 │   ├── animation.rs      # EasingType, AnimationPreset, PresetConfig, AnimationEffect
-│   ├── codeblock_types.rs# CodeblockChrome, CodeblockState, CodeblockReveal
 │   └── video.rs          # Size, ShapeType, Stroke, ImageFit, GlowConfig, OrbitConfig
 └── traits/
     ├── painter.rs        # Painter trait + PaintCtx + AvailableSize + MeasureCtx
@@ -79,13 +78,6 @@ src/
 │   ├── funnel.rs       # render_funnel (horizontal + vertical)
 │   ├── waterfall.rs    # render_waterfall
 │   └── axes.rs         # draw_axes(categorical: bool), format_number, contrast_text_color
-├── codeblock/          # Codeblock component
-│   ├── mod.rs          # render_codeblock_v2, Painter impl
-│   ├── highlight.rs    # Syntect integration, syntax highlighting
-│   ├── chrome.rs       # macOS title bar chrome
-│   ├── reveal.rs       # Typewriter, line-by-line reveal
-│   ├── diff.rs         # State transitions, word diff, cursor editing
-│   └── dimensions.rs   # compute_code_dimensions
 └── *.rs                # One file per component (impl Painter)
 ```
 

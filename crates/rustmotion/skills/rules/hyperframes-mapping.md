@@ -12,7 +12,7 @@ If you're asked for an effect from the Hyperframes catalogue (or an effect descr
 | Streaming Text | `char_blur_in` with `jitter`/`seed`/`ink_from` — see [streaming-text.md](streaming-text.md) |
 | Typewriter | `typewriter` preset + `text.caret` |
 | Text State Swap | `text.states` + `text.swap` |
-| Number Wheel | `number_wheel` component — see [number-wheel.md](number-wheel.md) |
+| Number Wheel | `number_wheel` component — `value` (string, e.g. `"30,222"`), `spin` (single/double/triple), `duration`, `stagger_per_column` |
 | Badge Pop | `badge` + `style.animation: [{ "name": "pop_in" }]` |
 | Success Check | `success_check` component |
 | Simulated Cursor | `pointer` component — see [pointer-walkthrough.md](pointer-walkthrough.md) |

@@ -31,7 +31,7 @@
 }
 ```
 
-This applies to ALL components: `text`, `card`, `badge`, `icon`, `shape`, `image`, `codeblock`, etc.
+This applies to ALL components: `text`, `card`, `badge`, `icon`, `shape`, `image`, `table`, etc.
 
 ### width / height
 

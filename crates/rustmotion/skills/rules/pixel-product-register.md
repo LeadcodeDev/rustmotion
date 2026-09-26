@@ -123,13 +123,16 @@ Entrances are `char_fade_in` with `granularity: "word"`, `stagger: 0.05`,
 
 ---
 
-## 4. The terminal window — composed, not the `terminal` component
+## 4. The terminal window — composed from primitives, not a `terminal` component
 
-**`terminal` cannot express this.** `TerminalLine` carries one `color` for the
-whole line, and this register colours *fragments inside* a line — a product name
-in the accent inside a grey version string, a flag in cyan inside a sentence.
-Build the window from parts and use `rich_text`, whose spans do carry per-span
-colour.
+**There is no `terminal` component to reach for.** It was deleted from the
+engine outright — not merely inadequate here. Even while it existed it
+couldn't have expressed this register anyway: `TerminalLine` carried one
+`color` for the whole line, and this register colours *fragments inside* a
+line — a product name in the accent inside a grey version string, a flag in
+cyan inside a sentence. Build the window from parts (a `div` chrome bar over
+the pane) and use `rich_text` for the transcript, whose spans do carry
+per-span colour.
 
 ### Geometry, measured
 

@@ -45,8 +45,7 @@ Rustmotion's JSON API is a direct superset of HTML/CSS. When composing a scene, 
 | HTML/CSS | Rustmotion JSON |
 |---|---|
 | `<body style="display:flex;flex-direction:column;align-items:center;justify-content:center">` | `"layout": {"direction": "column", "align_items": "center", "justify_content": "center"}` |
-| `<div>` neutre — layout pur, zéro décoration visuelle | `{"type":"div"}` — flex par défaut, pas de fond/border-radius/ombre |
-| `<div class="card">` — avec fond, border-radius, ombre | `{"type":"card"}` — flex par défaut, styling visuel |
+| `<div>`, plain or decorated | `{"type":"div"}` — flex par défaut; ajoute `background`/`border-radius`/`box-shadow` dans `style` pour un panneau décoré, ou laisse-les absents pour un groupement pur. `card`/`flex`/`grid`/`positioned`/`container` sont des alias historiques du même type — aucune différence de comportement, `div` est la forme canonique. |
 | `<div style="display:flex;flex-direction:row;gap:24px">` | `{"type":"div","style":{"flex-direction":"row","gap":24}}` |
 | `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">` | `{"type":"div","style":{"display":"grid","grid-template-columns":["1fr","1fr"],"gap":16}}` |
 | `<h1>Title</h1>` — inline, no position | `{"type":"text","content":"Title"}` — flow child, no `x`/`y` |
@@ -96,6 +95,24 @@ Tout espace, alignement, et distribution se règle via des propriétés sur le *
   ]
 }
 ```
+
+---
+
+## Composition over cataloguing
+
+Fifty-three component types exist, but three different things hide behind that one number:
+
+1. **Algorithms** (`dot_map`, `treemap`, `lottie`, `video`, `gif`, `qr_code`, `waveform`/`audio_spectrum`, `image`) render something a JSON tree of shapes and text genuinely cannot — a land bitmap, an FFT, Reed-Solomon error correction, recursive slice-and-dice. Reach for these directly. (`codeblock` used to belong here for syntax highlighting; it was deleted outright, not deprecated — the tokenising didn't need to live in the engine, since whoever writes the scenario is a language model that already knows the grammars and can emit `rich_text` with a coloured span per token directly. See [rules/composition-recipes.md](rules/composition-recipes.md) for the recipe.)
+2. **Primitives** (`text`, `rich_text`, `gradient_text`, `shape`, `svg`, `icon`, `line`, `arrow`, `connector`, `div`, `cursor`, `pointer`) are the alphabet. Everything else is built from these.
+3. **Composite UI widgets** (`stat`, `badge`, `gauge`, `sparkline`, `progress`, `counter`, `number_wheel`, `kbd`, `tooltip`, `list`, `stepper`, `comparison`, `countdown`, `pill_nav`, `avatar`, `avatar_group`, `rating`, `switch`, `slider`, `skeleton`, `tag_cloud`, `callout`, `divider`, `success_check`, `timeline`, `marquee`, `chart`, `heatmap`, `table`, `particle`, `caption`, `mockup`) are frozen arrangements of primitives — a `div` + `text` + `shape` + an animation, baked into a single JSON type with its own field names. They **still exist and still render byte-identically** — nothing here changes what a scenario produces. Issue #333 phase B put a Rust-level `#[deprecated]` attribute on 16 of the original 27 struct definitions (the other 11 carry the same message as a doc comment instead, because a struct-level `#[deprecated]` also deprecates field *reads*, and a few of these are read directly by CLI-internal code outside this crate — see each type's own note in `crates/rustmotion-components/src/*.rs`). That attribute is a signal for a Rust contributor writing `Badge { .. }`/`Stat { .. }`/etc. by hand in this codebase or a downstream crate; it never fires for JSON scenario authoring, which goes through this crate's own generated deserializer. They are simply no longer documented here, and no longer the reflex to reach for. (`notification` used to be a member of this class too; like `codeblock`, it was deleted outright rather than merely deprecated — see the `div`-sliding-toast recipe in [rules/composition-recipes.md](rules/composition-recipes.md).)
+
+   `chart`, `heatmap`, `table`, `particle`, `caption`, and `mockup` joined this class later, once this chantier's `for-each` gained arithmetic expressions, deterministic `rand(seed, i)`, computed path data, and node references — the exact machinery that makes a five-bar chart a `for-each` over five items with one `height` expression instead of a dedicated component. All six carry the real `#[deprecated]` struct attribute (see [rules/composition-recipes.md](rules/composition-recipes.md) for what composes each), with a narrow `#[allow(deprecated)]` on the handful of CLI call sites that read `caption`/`mockup` fields directly (`crates/rustmotion/src/cli/commands/{geometry,validate_schema,info}.rs`) rather than a blanket one. (`terminal` was also in this later-joining group; it was deleted outright, not deprecated — see the `div`-title-bar-plus-`text` recipe in [rules/composition-recipes.md](rules/composition-recipes.md).)
+
+**Why:** a shipped widget library is still a default that anchors a generator toward filling in blanks (`stat` with a value and a label) instead of designing the actual layout the brief calls for. Art direction is per video; a component defined *inside* the scenario and instantiated with `components` + `for-each` gives the same reuse without importing someone else's opinion about what a KPI card looks like. An example teaches composition; a library teaches filling in blanks.
+
+**The decision, recorded:** nothing is added to the frozen-widget class from here on. A generator that needs a stat card, a progress bar, a stepper, or any other shape a UI kit would hand over **defines it in the scenario** with `div`/`text`/`shape`, and reaches for `components` + `for-each` the moment more than one instance is needed. See [rules/composition-recipes.md](rules/composition-recipes.md) — read it before reaching for a component not in the catalog below — and the worked examples under `examples/composition-*.json`.
+
+If a subject genuinely needs one of the 32 frozen widgets by name (they are still valid JSON, still render, and are exercised in `examples/component-showcase.json` and `examples/mega-showcase.json`), using it is not an error. The point is that a generator should no longer see them first and reach for them by default.
 
 ---
 
@@ -151,17 +168,17 @@ Each scene must include:
 
 | User's idea | Recommended components |
 |---|---|
-| Stats / numbers | `counter` (animated) + `card` |
-| Features / benefits | `card` grid + `icon` + `badge` |
-| Code / technical | `codeblock` + `terminal` |
-| Process / steps | `timeline` component |
+| Stats / numbers | a KPI `card` (`div`/`card` + `text` + `shape`) defined once as a `components` entry, instantiated with `for-each` — see `examples/composition-kpi-row.json` |
+| Features / benefits | `card` grid + `icon`, one `components` entry per card instantiated with `for-each` |
+| Code / technical | `rich_text` with a coloured span per token for the code, plus a terminal-style `div` (title bar + monospace `text` lines under `typewriter`) — see [rules/composition-recipes.md](rules/composition-recipes.md) |
+| Process / steps | `connector`/`line` + `text` labels, one step defined as a `components` entry and repeated with `for-each` — see [rules/composition-recipes.md](rules/composition-recipes.md) |
 | Comparison | `flex` row with 2 `card` side by side |
 | Testimonial | `card` with `shape` circle (avatar) + `text` italic |
-| Pricing | `card` with `counter` + `text` |
+| Pricing | `card` with `text` + `shape` (see the KPI card pattern above — the number is static, not counted up) |
 | Partner logos | `flex` row + `icon` (simple-icons:xxx) |
-| CTA / call to action | `badge` + glow + `particle` confetti |
+| CTA / call to action | a pill (`div`/`shape` + `icon` + `text`) + glow + confetti (`for-each` + `rand`/`sin` drift — see [rules/composition-recipes.md](rules/composition-recipes.md)) |
 | Hero / intro | `text` with `char_scale_in` + main `icon` (hero role: 160-200px mobile / 80-100px desktop) |
-| Transition / ambiance | `particle` stars/confetti + `animated-background` |
+| Transition / ambiance | confetti/stars (`for-each` + `rand`/`sin` drift) + `animated-background` |
 | Grouped transforms | `div` wrapping children + shared `timeline` scale/fade |
 
 The user validates or adjusts the plan before proceeding.
@@ -173,9 +190,8 @@ The user validates or adjusts the plan before proceeding.
 1. All font sizes meet the floor for the target device (see [rules/typography-readability.md](rules/typography-readability.md))
 2. `start_at + delay + duration ≤ scene_duration` for every animation (see [rules/animation-completion-budget.md](rules/animation-completion-budget.md))
 3. Text color contrasts correctly with the scene/card background (dark bg → white text, light bg → dark text)
-4. If a `counter` is inside a card (this is fine — it centers correctly), make sure the card/parent is at least as wide as the counter's worst-case digit width, since the counter box never shrinks to fit (see [rules/counter-standalone.md](rules/counter-standalone.md))
-5. Scene duration ≥ reading time of all text (`word_count ÷ 2.5`) (see [rules/scene-pacing.md](rules/scene-pacing.md))
-6. If dynamism level ≥ 2: at least one non-text element per scene has a continuous effect (`float_3d`/`wiggle`/`orbit` with `loop: true`). Never apply continuous motion to primary text. See [rules/dynamic-depth.md](rules/dynamic-depth.md).
+4. Scene duration ≥ reading time of all text (`word_count ÷ 2.5`) (see [rules/scene-pacing.md](rules/scene-pacing.md))
+5. If dynamism level ≥ 2: at least one non-text element per scene has a continuous effect (`float_3d`/`wiggle`/`orbit` with `loop: true`). Never apply continuous motion to primary text. See [rules/dynamic-depth.md](rules/dynamic-depth.md).
 
 For each scene in the validated plan:
 1. Generate the JSON for the scene
@@ -219,7 +235,8 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/validate-json.md](rules/validate-json.md) - Always validate generated JSON with `rustmotion validate` before presenting
 - [rules/geometry-safety.md](rules/geometry-safety.md) - Keep all content inside the viewport: `white-space`, `auto_scroll`, `overflow` semantics + violation kinds
 - [rules/even-dimensions.md](rules/even-dimensions.md) - Use even width/height for H.264 encoding
-- [rules/counter-standalone.md](rules/counter-standalone.md) - Counter centers correctly in a card; size the parent for its worst-case digit width or it overflows silently
+- [rules/composition-recipes.md](rules/composition-recipes.md) - **Read this before reaching for a UI-widget component.** Composing KPI cards, pill rows, progress bars, and other former "frozen composition" shapes from primitives, `components`, and `for-each`
+- [rules/templates-and-iteration.md](rules/templates-and-iteration.md) - `for-each`/`components`/`use` mechanics: bindings, param defaults, ordering of passes, named errors
 - [rules/vertical-align.md](rules/vertical-align.md) - Shape text vertical_align: use "top"/"middle"/"bottom" (NOT "center")
 - [rules/stagger-animations.md](rules/stagger-animations.md) - Stagger animations with increasing style.animation.delay
 - [rules/layer-order.md](rules/layer-order.md) - Layer order matters: first in array = behind, last = front
@@ -241,10 +258,6 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/video-wizard.md](rules/video-wizard.md) - Video creation wizard: iterative scene-by-scene construction best practices
 - [rules/responsive-device-sizing.md](rules/responsive-device-sizing.md) - CRITICAL: Scale all sizes to target device using Tailwind 4 type scale (×3 mobile, ×1.5 desktop)
 - [rules/chart-types.md](rules/chart-types.md) - Chart type selection guide (12 types: bar, line, area, donut, funnel, waterfall, radar, scatter, etc.)
-- [rules/stat-cards.md](rules/stat-cards.md) - Stat/KPI cards best practices (trend, sparkline, dashboard layout)
-- [rules/data-viz-components.md](rules/data-viz-components.md) - Data visualization component selection (gauge vs progress, sparkline vs chart, skeleton patterns)
-- [rules/ui-controls.md](rules/ui-controls.md) - Switch, slider, rating: animated interactive control patterns
-- [rules/notification-stacking.md](rules/notification-stacking.md) - Notification stacking: push_at, wait_for_push, variant colors
 - [rules/dot-map-coordinates.md](rules/dot-map-coordinates.md) - Dot map: use real lat/lng coordinates, common city reference table
 
 ### Design quality (nouvelles règles)
@@ -257,7 +270,6 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/depth-layering.md](rules/depth-layering.md) - **NEW:** Visual depth — 3 planes (bg/mid/fg), z-index, blur, shadow hierarchy, scale gradient, 3D tilt
 - [rules/dynamic-depth.md](rules/dynamic-depth.md) - **NEW:** Multi-element parallax — wiggle seeds, float_3d preset, camera zoom, orbit phases, frequency hierarchy
 - [rules/component-field-placement.md](rules/component-field-placement.md) - **CRITICAL:** Field placement (root vs style) — `width`/`height`/`animation` inside `style`; `fill`/`stroke`/`timeline`/`stagger` at root; `box-shadow` as array; silently-dropped component pitfalls
-- [rules/badge-video-sizing.md](rules/badge-video-sizing.md) - Badge sizing for video resolution — `badge_size` sm/md/lg is too small at 1080px; use `style.font-size` to override (40px recommended for 1080×1920)
 - [rules/glassmorphism.md](rules/glassmorphism.md) - Frosted-glass card recipe: `backdrop-filter: blur`, translucent background, subtle border, layered over a colorful background
 - [rules/audio-reactive.md](rules/audio-reactive.md) - Bind `style.audio-reactive` to an `audio` track — drives `waveform`/`audio_spectrum` and reactive scale/opacity on any component
 - [rules/captions-workflow.md](rules/captions-workflow.md) - Generating `caption` word timings from a transcript/audio track
@@ -281,7 +293,13 @@ The two examples below are short excerpts. For full, validated, end-to-end scena
 | `examples/dynamic-glass.json` | 1920×1080 | 3 | Glassmorphism, `backdrop-filter`, depth layering |
 | `examples/rustmotion-promo.json` | 1920×1080 | 6 | Product promo pacing, stagger, char animations |
 | `examples/ferriskey-presentation.json` | 1920×1080 | 6 | Slide-deck style presentation, heavy char/word stagger |
-| `examples/mega-showcase.json` | 1920×1080 | 9 | Largest example — grid layout, timeline component, most component types in one file |
+| `examples/mega-showcase.json` | 1920×1080 | 9 | Largest example — grid layout, timeline component, most component types in one file (the catalogue-tour file; not a composition model — see below) |
+| `examples/composition-kpi-row.json` | 1920×1080 | 1 | A `stat`-style KPI card built from `card`+`icon`+`shape`+`text`, defined once as a `components` entry and instantiated four times with `for-each` |
+| `examples/composition-pill-row.json` | 1920×1080 | 1 | A `badge`-style pill built from `div`+`icon`+`text`, repeated with `for-each` |
+| `examples/composition-progress-bars.json` | 1920×1080 | 1 | A `progress`-style bar from two primitives (a `card` track + an animated-width `shape` fill), four instances via `for-each` |
+| `examples/composition-step-flow.json` | 1920×1080 | 1 | A `stepper`-style flow from `card`+`text`+`shape` connectors, each `for-each` item emitting a sibling pair (node + connector) |
+
+These four are the worked reference for [rules/composition-recipes.md](rules/composition-recipes.md) — read that file first when a brief calls for something that used to be one of the frozen UI-widget components.
 
 ### Example 1: Marketing Card (Portrait)
 
@@ -369,20 +387,52 @@ The two examples below are short excerpts. For full, validated, end-to-end scena
           }
         },
         {
-          "type": "codeblock",
-          "code": "fn main() {\n    println!(\"Hello, world!\");\n}",
-          "language": "rust",
-          "theme": "tokyo-night",
-          "show_line_numbers": true,
-          "chrome": { "enabled": true, "title": "src/main.rs" },
-          "reveal": { "mode": "typewriter", "start": 0.5, "duration": 3.0 },
-          "style": { "width": 1400, "height": 400, "font-size": 22, "padding": 24, "border-radius": 16 },
-          "states": [
+          "type": "div",
+          "style": {
+            "flex-direction": "column",
+            "background": "#1a1b26",
+            "border-radius": 16,
+            "overflow": "hidden",
+            "width": 1400,
+            "height": 400,
+            "animation": [{ "name": "fade_in_up", "delay": 0.3, "duration": 0.5 }]
+          },
+          "children": [
             {
-              "code": "fn main() {\n    let name = \"rustmotion\";\n    println!(\"Hello, {}!\", name);\n}",
-              "at": 5.0,
-              "duration": 2.5,
-              "cursor": { "enabled": true, "blink": true }
+              "type": "div",
+              "style": { "flex-direction": "row", "align-items": "center", "gap": 8, "padding": { "top": 10, "right": 14, "bottom": 10, "left": 14 }, "background": "#16161e" },
+              "children": [
+                { "type": "shape", "shape": "circle", "fill": "#ff5f56", "style": { "width": 12, "height": 12 } },
+                { "type": "shape", "shape": "circle", "fill": "#ffbd2e", "style": { "width": 12, "height": 12 } },
+                { "type": "shape", "shape": "circle", "fill": "#27c93f", "style": { "width": 12, "height": 12 } },
+                { "type": "text", "content": "src/main.rs", "style": { "font-size": 13, "color": "#8b949e", "margin": { "left": 8 } } }
+              ]
+            },
+            {
+              "type": "div",
+              "stagger": 0.5,
+              "style": { "flex-direction": "column", "padding": 24, "gap": 4 },
+              "children": [
+                {
+                  "type": "rich_text",
+                  "spans": [
+                    { "text": "fn ", "color": "#bb9af7" },
+                    { "text": "main", "color": "#7aa2f7" },
+                    { "text": "() {", "color": "#c0caf5" }
+                  ],
+                  "style": { "font-family": "JetBrains Mono", "font-size": 22, "white-space": "pre", "animation": [{ "name": "typewriter", "duration": 0.5 }] }
+                },
+                {
+                  "type": "rich_text",
+                  "spans": [{ "text": "    println!(\"Hello, world!\");", "color": "#c0caf5" }],
+                  "style": { "font-family": "JetBrains Mono", "font-size": 22, "white-space": "pre", "animation": [{ "name": "typewriter", "duration": 0.5 }] }
+                },
+                {
+                  "type": "rich_text",
+                  "spans": [{ "text": "}", "color": "#c0caf5" }],
+                  "style": { "font-family": "JetBrains Mono", "font-size": 22, "white-space": "pre", "animation": [{ "name": "typewriter", "duration": 0.5 }] }
+                }
+              ]
             }
           ]
         },
@@ -770,7 +820,12 @@ Default duration: `0.5` seconds.
 
 ### Component Types
 
-The engine has **57** component types total (`Component` enum, `crates/rustmotion-components/src/lib.rs:194-254`). The catalog below has a dedicated write-up with a JSON example for most of them; the rest are containers (`card`/`flex`, `div`, `grid`, `positioned`) covered in the "Mental Model: Think HTML/CSS" section above, plus `waveform`/`audio_spectrum` covered in [rules/audio-reactive.md](rules/audio-reactive.md).
+The engine has **53** component types total (`Component` enum, `crates/rustmotion-components/src/lib.rs`). Two of the three classes get a dedicated write-up below:
+
+- **Algorithms** — cannot be composed from drawing primitives, so they stay as first-class components: `qr_code`, `dot_map`, `treemap`, `lottie`, `video`, `gif`, `waveform`/`audio_spectrum` (see [rules/audio-reactive.md](rules/audio-reactive.md)), `image`. Nine total. (`codeblock` used to be here for syntax highlighting; deleted outright — see [rules/composition-recipes.md](rules/composition-recipes.md) for the `rich_text`-per-token recipe that replaces it.)
+- **Primitives** — `text`, `rich_text`, `gradient_text`, `shape`, `svg`, `icon`, `line`, `arrow`, `connector`, `div`, `cursor`, `pointer` (see [rules/pointer-walkthrough.md](rules/pointer-walkthrough.md)). The container (`div` — `card`/`flex`/`grid`/`positioned`/`container` are the same type, kept as JSON aliases) is covered in the "Mental Model: Think HTML/CSS" section above. These are the building blocks for everything else — see [rules/composition-recipes.md](rules/composition-recipes.md).
+
+The **third class — composite UI widgets** (`stat`, `badge`, `gauge`, `sparkline`, `progress`, `counter`, `number_wheel`, `kbd`, `tooltip`, `list`, `stepper`, `comparison`, `countdown`, `pill_nav`, `avatar`, `avatar_group`, `rating`, `switch`, `slider`, `skeleton`, `tag_cloud`, `callout`, `divider`, `success_check`, `timeline`, `marquee`, `chart`, `heatmap`, `table`, `particle`, `caption`, `mockup`) still exists in the engine and still renders byte-identically — nothing described here is removed, and the JSON you write for a scenario is unaffected. Since issue #333 phase B, most of them carry a Rust-level `#[deprecated]` marker at their struct definition, naming the primitive recipe that replaces them (a signal for Rust code, not for scenario JSON); `chart`/`heatmap`/`table`/`particle`/`caption`/`mockup` joined the same class once `for-each` gained the arithmetic/rand/computed-path machinery to reproduce them (see [rules/composition-recipes.md](rules/composition-recipes.md)). It is intentionally **not catalogued below**. See "Composition over cataloguing" near the top of this document for why, and [rules/composition-recipes.md](rules/composition-recipes.md) for how to get the same result from primitives. (`notification` and `terminal` used to be members of this class; both were deleted outright rather than deprecated — see [rules/composition-recipes.md](rules/composition-recipes.md) for the `div`-based recipes that replace them.)
 
 All components are discriminated by `"type"`. Rendered in array order (first = bottom). See Rule 7.
 
@@ -839,7 +894,7 @@ All components are discriminated by `"type"`. Rendered in array order (first = b
 
 ---
 
-### 1. `text`
+### `text`
 
 ```json
 {
@@ -920,7 +975,7 @@ Animates each character or word independently with staggered timing. Use `char_*
 }
 ```
 
-### 2. `shape`
+### `shape`
 
 ```json
 {
@@ -991,7 +1046,7 @@ Types: `linear`, `radial`.
 
 `vertical_align`: `"top"`, `"middle"`, `"bottom"` (default: `"middle"`). See Rule 5.
 
-### 3. `image`
+### `image`
 
 ```json
 {
@@ -1010,7 +1065,7 @@ Types: `linear`, `radial`.
 
 Style: `width`, `height` (default: uses image dimensions)
 
-### 4. `svg`
+### `svg`
 
 ```json
 {
@@ -1043,7 +1098,7 @@ draws its outline first, then takes its colour.
         "keyframes": [{ "time": 0, "value": 0 }, { "time": 2.2, "value": 1 }] }] }] } }
 ```
 
-### 5. `icon`
+### `icon`
 
 Renders an icon from the **Iconify** open-source framework (200,000+ icons from 150+ sets). Icons are fetched from the Iconify API at render time. Browse all icons: https://icon-sets.iconify.design/
 
@@ -1064,7 +1119,7 @@ Style: `width`, `height` (default `24`), `color` (default `"#FFFFFF"`)
 
 Common prefixes: `lucide` (UI), `mdi` (Material), `heroicons`, `ph` (Phosphor), `tabler`, `simple-icons` (brand logos), `devicon` (dev tools)
 
-### 6. `video`
+### `video`
 
 ```json
 {
@@ -1089,7 +1144,7 @@ Common prefixes: `lucide` (UI), `mdi` (Material), `heroicons`, `ph` (Phosphor), 
 
 Style: `width`, `height` (required)
 
-### 7. `gif`
+### `gif`
 
 ```json
 {
@@ -1108,84 +1163,18 @@ Style: `width`, `height` (required)
 
 Style: `width`, `height` (default: intrinsic GIF dimensions)
 
-### 8. `caption`
+### `div`
 
-Timed word-by-word captions with active word highlighting.
+The one container type: a box with CSS-like flex & grid layout that lays out `children`. Decoration (`background`, `border-radius`, `border`, `box-shadow`) is entirely opt-in through `style` — set none of them for an invisible grouping wrapper (HTML `<div>`), or set them for a visually decorated panel. There is no separate "decorated" type: the box is the same either way, only `style` differs.
 
-```json
-{
-  "type": "caption",
-  "words": [
-    { "text": "Hello", "start": 0.0, "end": 0.5 },
-    { "text": "World", "start": 0.5, "end": 1.0 }
-  ],
-  "mode": "highlight",
-  "max_width": 900,
-  "style": { "font-size": 48, "color": "#FFFFFF" }
-}
-```
-
-| Field          | Type     | Default                                                                    |
-| -------------- | -------- | -------------------------------------------------------------------------- |
-| `words`        | array    | required — `[{ "text", "start", "end" }]`                                  |
-| `position`     | `{x, y}` | `{0, 0}`                                                                   |
-| `mode`         | enum     | `"default"` — `"default"`, `"highlight"`, `"karaoke"`, `"bounce"` |
-| `active_color` | string   | `"#FFD700"`                                                                |
-| `max_width`    | f32      | `null`                                                                     |
-
-Style: `font-size` (48.0), `font-family`, `color` (#FFFFFF), `background`
-
-### 9. `counter`
-
-Animated number counter. Works fine inside a card (centers correctly) — see checklist item 4 / [rules/counter-standalone.md](rules/counter-standalone.md) for sizing the parent to its worst-case digit width.
-
-```json
-{
-  "type": "counter",
-  "from": 0,
-  "to": 1250,
-  "decimals": 0,
-  "separator": " ",
-  "suffix": "€",
-  "easing": "ease_out",
-  "start_at": 0.5,
-  "style": { "font-size": 72, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center" }
-}
-```
-
-`end_at` is a visibility toggle, not an animation-completion boundary — setting it on a `counter` makes the number **disappear** once that time passes, since the counter's own animation is driven by `ctx.time / scene_duration`, not by `start_at`/`end_at`. Use `start_at` only.
-
-**Root fields:** `from`, `to`, `decimals`, `separator`, `prefix`, `suffix`, `easing`
-
-**Easing options:** `linear`, `ease_in`, `ease_out`, `ease_in_out`, `ease_in_quad`, `ease_out_quad`, `ease_in_cubic`, `ease_out_cubic`, `ease_in_expo`, `ease_out_expo`, `spring`
-
-Style: `font-size` (48.0), `color` (#FFFFFF), `font-family` (Inter), `font-weight`, `text-align`, `letter-spacing`, `text-shadow`, `stroke`
-
-### 10. Absolute Positioning (via `card`)
-
-To place children at fixed absolute coordinates, use a `card` with transparent background and explicit size. Each child uses `position: {x, y}` relative to the card's top-left. Children with `position` become absolute inside a `card`.
-
-```json
-{
-  "type": "card",
-  "style": { "width": 1920, "height": 1080, "background": "#00000000", "padding": 0 },
-  "children": [
-    { "type": "shape", "shape": "rect", "fill": "#1E293B", "position": { "x": 0, "y": 0 }, "style": { "width": 400, "height": 300, "border-radius": 16 } },
-    { "type": "icon", "icon": "lucide:phone-off", "position": { "x": 170, "y": 120 }, "style": { "width": 64, "height": 64, "color": "#FFFFFF" } }
-  ]
-}
-```
-
-### 11. `card` / `flex`
-
-Visual container with CSS-like flex & grid layout. `flex` is an alias for `card`. See Rule 8.
+`card`, `flex`, `grid`, `positioned`, and `container` are accepted as JSON aliases for `"type": "div"` — old scenarios using any of them keep working, and they render byte-identically to `div`, because they deserialize into the exact same component. Write new scenarios as `div`.
 
 Each dimension (`width`/`height` in `style`) can be a number or `"auto"`.
 
-**Flex example:**
+**Flex example** (default `display`):
 ```json
 {
-  "type": "card",
+  "type": "div",
   "style": { "width": 800, "height": 100, "flex-direction": "row", "gap": 16 },
   "children": [
     { "type": "shape", "shape": "rect", "fill": "#FF0000", "style": { "width": 100, "height": 100 } },
@@ -1195,10 +1184,31 @@ Each dimension (`width`/`height` in `style`) can be a number or `"auto"`.
 }
 ```
 
+**Decorated panel** (same type, `style` adds a background/border-radius):
+```json
+{
+  "type": "div",
+  "style": {
+    "width": 800,
+    "height": "auto",
+    "flex-direction": "row",
+    "align-items": "center",
+    "gap": 16,
+    "padding": 24,
+    "background": "#1E293B",
+    "border-radius": 16
+  },
+  "children": [
+    { "type": "icon", "icon": "lucide:check-circle", "style": { "width": 48, "height": 48, "color": "#22C55E" } },
+    { "type": "text", "content": "Feature enabled", "style": { "font-size": 32, "color": "#FFFFFF" } }
+  ]
+}
+```
+
 **Grid example (2x2):** Note: grid containers need explicit `height` (not `"auto"`) — see [rules/grid-card-height.md](rules/grid-card-height.md). `grid-template-columns`/`grid-template-rows` is `Vec<GridTrack>`, an **untagged** enum: a bare number means px, a quoted string like `"1fr"` carries the unit, `"auto"` is the keyword. The object forms `{"fr": N}` / `{"px": N}` shown in older docs do **not** match any variant and drop the whole component.
 ```json
 {
-  "type": "card",
+  "type": "div",
   "style": {
     "width": 600,
     "height": 400,
@@ -1214,6 +1224,18 @@ Each dimension (`width`/`height` in `style`) can be a number or `"auto"`.
     { "type": "text", "content": "Cell 2", "style": { "color": "#FFFFFF" } },
     { "type": "text", "content": "Cell 3", "style": { "color": "#FFFFFF" } },
     { "type": "text", "content": "Cell 4", "style": { "color": "#FFFFFF" } }
+  ]
+}
+```
+
+**Absolute positioning of children:** any container's children can carry `position: {x, y}` — it's a property of the child, not a special container mode. Give the container a transparent background and explicit size, and each `position`-ed child is placed relative to its top-left; children without `position` still lay out with flex/grid.
+```json
+{
+  "type": "div",
+  "style": { "width": 1920, "height": 1080, "background": "#00000000", "padding": 0 },
+  "children": [
+    { "type": "shape", "shape": "rect", "fill": "#1E293B", "position": { "x": 0, "y": 0 }, "style": { "width": 400, "height": 300, "border-radius": 16 } },
+    { "type": "icon", "icon": "lucide:phone-off", "position": { "x": 170, "y": 120 }, "style": { "width": 64, "height": 64, "color": "#FFFFFF" } }
   ]
 }
 ```
@@ -1244,329 +1266,9 @@ Each dimension (`width`/`height` in `style`) can be a number or `"auto"`.
 - `grid-column` (object) — `{ "start": 1, "span": 2 }` (1-indexed)
 - `grid-row` (object) — `{ "start": 1, "span": 2 }` (1-indexed)
 
-`position: "absolute"` (root field, sibling of `style`) works on a child of **any** container — `card`, `div`, `grid`, `positioned`, or the scene root — not just inside `positioned`. `positioned` is simply a semantic Stack-like container with no visual decoration; it does not unlock `position` — every container already supports it. Children without `position` are laid out using flex/grid style properties.
+`timeline` and `stagger` are **root fields**, not `style` — `CssStyle` has no `timeline` key and `deny_unknown_fields` drops the whole component if you nest it there.
 
-### 12. `div`
-
-Invisible flex wrapper — groupe des enfants pour un layout pur ou des transforms partagés. Comme `card`/`flex` mais **sans background, border, shadow, ni clipping**. Équivalent de `<div>` en HTML.
-
-Utiliser `div` quand il faut grouper des éléments sans décoration visuelle (ex: grille de cards, ligne d'icônes, animation partagée sur un groupe).
-
-```json
-{
-  "type": "div",
-  "style": {
-    "flex-direction": "column",
-    "align-items": "center",
-    "gap": 36
-  },
-  "timeline": [
-    { "at": 3.5, "animation": [{ "name": "keyframes", "keyframes": [
-      { "property": "scale", "keyframes": [{ "time": 0, "value": 1 }, { "time": 0.8, "value": 4 }], "easing": "ease_in" },
-      { "property": "opacity", "keyframes": [{ "time": 0, "value": 1 }, { "time": 0.7, "value": 0 }], "easing": "ease_in" }
-    ]}]}
-  ],
-  "children": [
-    { "type": "icon", "icon": "lucide:zap", "style": { "width": 80, "height": 80, "color": "#25D366" } },
-    { "type": "text", "content": "Grouped content", "style": { "font-size": 48, "color": "#FFFFFF" } }
-  ]
-}
-```
-
-`timeline` and `stagger` are **root fields**, not `style` — `CssStyle` has no `timeline` key and `deny_unknown_fields` drops the whole component if you nest it there. Supporte toutes les propriétés CSS flex/grid (`flex-direction`, `align-items`, `justify-content`, `gap`, `padding`, `display: "grid"`, `grid-template-columns`) dans `style`, plus `timeline`/`stagger` au niveau racine. Préférer `div` à `card` avec fond transparent pour tout layout sans styling visuel.
-
-### 12. `codeblock`
-
-Code block with syntax highlighting, chrome, reveal animations, and animated diff transitions.
-
-```json
-{
-  "type": "codeblock",
-  "code": "fn main() {\n    println!(\"Hello\");\n}",
-  "language": "rust",
-  "theme": "base16-ocean.dark",
-  "show_line_numbers": true,
-  "chrome": { "enabled": true, "title": "main.rs" },
-  "reveal": { "mode": "typewriter", "start": 0, "duration": 2.5 },
-  "style": { "font-size": 18, "border-radius": 12, "padding": 16 },
-  "states": [
-    {
-      "code": "fn main() {\n    println!(\"Hello, world!\");\n}",
-      "at": 5.0,
-      "duration": 2.0,
-      "cursor": { "enabled": true }
-    }
-  ]
-}
-```
-
-**Root fields:** `code` (required), `language`, `theme`, `show_line_numbers`, `chrome`, `highlights`, `reveal`, `states`, `diff` (bool — enables diff mode: lines starting with `+` get green background, `-` get red background), `auto_scroll` (bool, default `true` — when content overflows the box vertically, scrolls so the last revealed line stays visible; font is never reduced. See [rules/geometry-safety.md](rules/geometry-safety.md))
-
-Style: `width`, `height` (set to constrain the visible area; content scrolls if it overflows vertically when `auto_scroll: true`)
-
-**Diff mode example:**
-```json
-{
-  "type": "codeblock",
-  "language": "diff",
-  "diff": true,
-  "code": " fn render() {\n-    let old = bar();\n+    let new = donut();\n }",
-  "chrome": { "enabled": true, "title": "changes.rs" }
-}
-```
-
-| Style field     | Type   | Default              |
-| --------------- | ------ | -------------------- |
-| `font-family`   | string | `"JetBrains Mono"`   |
-| `font-size`     | f32    | `14.0`               |
-| `font-weight`   | enum   | `"normal"`           |
-| `line-height`   | f32    | `1.5` (multiplier)   |
-| `background`    | string | `null` (uses theme)  |
-| `border-radius` | f32    | `12.0`               |
-| `padding`       | f32 or obj | `16`             |
-
-**Available themes (72):** `base16-ocean.dark`, `base16-ocean.light`, `base16-eighties.dark`, `base16-mocha.dark`, `InspiredGitHub`, `Solarized (dark)`, `Solarized (light)`, `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha`, `andromeeda`, `aurora-x`, `ayu-dark`, `ayu-light`, `ayu-mirage`, `dark-plus`, `dracula`, `dracula-soft`, `everforest-dark`, `everforest-light`, `github-dark`, `github-dark-default`, `github-dark-dimmed`, `github-dark-high-contrast`, `github-light`, `github-light-default`, `github-light-high-contrast`, `gruvbox-dark-hard`, `gruvbox-dark-medium`, `gruvbox-dark-soft`, `gruvbox-light-hard`, `gruvbox-light-medium`, `gruvbox-light-soft`, `horizon`, `horizon-bright`, `houston`, `kanagawa-dragon`, `kanagawa-lotus`, `kanagawa-wave`, `laserwave`, `light-plus`, `material-theme`, `material-theme-darker`, `material-theme-lighter`, `material-theme-ocean`, `material-theme-palenight`, `min-dark`, `min-light`, `monokai`, `night-owl`, `night-owl-light`, `nord`, `one-dark-pro`, `one-light`, `plastic`, `poimandres`, `red`, `rose-pine`, `rose-pine-dawn`, `rose-pine-moon`, `slack-dark`, `slack-ochin`, `snazzy-light`, `solarized-dark`, `solarized-light`, `synthwave-84`, `tokyo-night`, `vesper`, `vitesse-black`, `vitesse-dark`, `vitesse-light`
-
-### 13. `divider`
-
-Visual separator line.
-
-```json
-{
-  "type": "divider",
-  "direction": "horizontal",
-  "thickness": 2,
-  "line_style": "solid",
-  "style": { "color": "#4B5563" }
-}
-```
-
-**Root fields:** `direction` (horizontal/vertical), `thickness` (default 2.0), `line_style` (solid/dashed/dotted), `length` (optional fixed length)
-
-Style: `color` (default `"#FFFFFF"`)
-
-### 14. `badge`
-
-Compact pill-shaped label with optional icon, dot indicator, pulse animation, and count badge.
-
-```json
-{
-  "type": "badge",
-  "text": "Messages",
-  "icon": "lucide:mail",
-  "variant": "solid",
-  "badge_size": "lg",
-  "dot": true,
-  "dot_color": "#22C55E",
-  "pulse": true,
-  "count": 12,
-  "style": { "background": "#3B82F6" }
-}
-```
-
-**Root fields:** `text` (required), `icon` (Iconify id), `variant` (solid/outline), `badge_size` (sm/md/lg), `dot` (bool — colored dot top-right), `dot_color` (hex, defaults to badge color), `pulse` (bool — animated pulse ring on dot), `count` (u32 — red count badge top-right, caps at "99+")
-
-Style: `background` (default `"#3B82F6"`) — badge color, `font-size`, `font-family`
-
-### 15. `avatar`
-
-Circular image with optional border and status indicator.
-
-```json
-{
-  "type": "avatar",
-  "src": "photo.jpg",
-  "size": 80,
-  "border_color": "#3B82F6",
-  "border_width": 3,
-  "status": "online"
-}
-```
-
-**Root fields:** `src` (required), `size` (diameter, default 64), `border_color`, `border_width`, `status` (online/offline/away/none), `status_color`
-
-### 16. `callout`
-
-Speech bubble with directional arrow.
-
-```json
-{
-  "type": "callout",
-  "text": "Hello!",
-  "arrow_direction": "bottom",
-  "arrow_size": 12,
-  "style": { "background": "#333333", "color": "#FFFFFF", "border-radius": 8, "font-size": 16 }
-}
-```
-
-**Root fields:** `text` (required), `arrow_direction` (top/bottom/left/right), `arrow_size` (default 12), `size`
-
-Style: `background` (default `"#333333"`), `color` (default `"#FFFFFF"`), `border-radius` (default 8), `font-size` (default 16), `font-family`
-
-### 17. `terminal`
-
-Terminal window with colored lines and chrome.
-
-```json
-{
-  "type": "terminal",
-  "title": "Terminal",
-  "theme": "dark",
-  "reveal": { "mode": "typewriter", "start": 0.5, "duration": 3.0 },
-  "lines": [
-    { "text": "npm install", "line_type": "prompt" },
-    { "text": "added 42 packages", "line_type": "output" }
-  ],
-  "style": { "width": 600, "height": 300 }
-}
-```
-
-**Root fields:** `lines` (required — `[{ "text", "line_type", "color" }]`), `theme` (dark/light), `title`, `show_chrome` (default true), `reveal`, `auto_scroll` (bool, default `true` — vertical scroll when content > box, font never shrinks. See [rules/geometry-safety.md](rules/geometry-safety.md))
-
-Style: `width`, `height` (set to constrain the visible area)
-
-**Reveal:** `{ "mode": "typewriter"|"line_by_line", "start": 0, "duration": 1.0, "easing": "linear" }` — animates line/word appearance. In typewriter mode, a blinking cursor appears at the typing position.
-
-Line types: `"prompt"` ($ prefix in green), `"command"` (white), `"output"` (gray)
-
-Style: `font-size` (default 14)
-
-### 18. `table`
-
-Data table with headers, styled rows, configurable column widths and alignment.
-
-```json
-{
-  "type": "table",
-  "headers": ["Metric", "Value", "Change"],
-  "rows": [["Revenue", "1.2M", "+24%"], ["Users", "45K", "+12%"]],
-  "column_widths": [300, 200, 150],
-  "column_align": ["left", "right", "right"],
-  "cell_padding": 20,
-  "show_borders": true,
-  "style": { "width": 650, "height": 150, "color": "#E2E8F0", "font-size": 15, "border-radius": 12 }
-}
-```
-
-**Root fields:** `headers` (required), `rows` (required), `header_color` (#374151), `row_colors` (alternating array), `border_color` (#4B5563), `header_text_color`, `column_widths` (array of f32 — explicit pixel widths per column), `column_align` (array — `"left"` / `"center"` / `"right"` per column), `cell_padding` (f32, default 12), `show_borders` (bool, default true)
-
-Style: `color` (default `"#FFFFFF"`) — cell text color, `font-size` (default 14), `font-family`, `border-radius`
-
-### 19. `chart`
-
-Data visualization with animation. Supports 12 chart types.
-
-```json
-{
-  "type": "chart",
-  "chart_type": "area",
-  "data": [
-    { "value": 10, "label": "Jan" },
-    { "value": 25, "label": "Feb" },
-    { "value": 18, "label": "Mar" },
-    { "value": 42, "label": "Apr" }
-  ],
-  "smooth": true,
-  "fill_opacity": 0.3,
-  "show_grid": true,
-  "show_x_labels": true,
-  "show_y_labels": true,
-  "style": { "width": 600, "height": 300 }
-}
-```
-
-**Chart types:** `bar`, `line`, `pie`, `donut`, `horizontal_bar`, `area`, `stacked_bar`, `radar`, `scatter`, `radial_bar`, `funnel`, `waterfall`
-
-**Root fields:** `chart_type` (required), `data` (`[{ "value", "label"?, "color"? }]`), `animated` (default true), `animation_duration` (default 1.5s), `colors` (custom palette)
-
-Style: `width`, `height` — **required**. `chart` has no intrinsic sizing (no fallback in the engine — verified against `box_builder.rs`'s `component_intrinsic`/`apply_intrinsic_overrides`); omit them in a flex/grid container and the chart lays out at 0×0 and renders nothing.
-
-**Axes & grid (bar, line, area, stacked_bar, scatter, waterfall):** `show_grid`, `show_x_labels`, `show_y_labels`, `grid_color` (#FFFFFF15), `label_color` (#888888), `label_font_size` (12)
-
-**Type-specific fields:**
-
-| Field | Chart Types | Default | Description |
-| --- | --- | --- | --- |
-| `inner_radius` | donut | `0.6` | Hole size ratio (0.1–0.95) |
-| `fill_opacity` | area | `0.3` | Gradient fill opacity |
-| `smooth` | area | `false` | Catmull-Rom spline smoothing |
-| `show_labels` | horizontal_bar, funnel | `false` | Labels inside bars/segments |
-| `direction` | funnel | `"vertical"` | `"vertical"` or `"horizontal"` |
-| `categories` | stacked_bar | `[]` | X-axis category names |
-| `series` | stacked_bar | `[]` | `[{ "name", "data": [f64], "color"? }]` |
-| `axes` | radar | `[]` | Axis labels |
-| `radar_data` | radar | `[]` | `[{ "values": [f64], "color"? }]` |
-| `points` | scatter | `[]` | `[{ "x", "y", "size"?, "color"? }]` |
-
-**Stacked bar example:**
-```json
-{
-  "type": "chart",
-  "chart_type": "stacked_bar",
-  "categories": ["Q1", "Q2", "Q3", "Q4"],
-  "series": [
-    { "name": "Product A", "data": [30, 40, 35, 50], "color": "#3B82F6" },
-    { "name": "Product B", "data": [20, 15, 25, 30], "color": "#22C55E" }
-  ],
-  "show_grid": true, "show_x_labels": true, "show_y_labels": true
-}
-```
-
-**Funnel example (horizontal):**
-```json
-{
-  "type": "chart",
-  "chart_type": "funnel",
-  "direction": "horizontal",
-  "data": [
-    { "value": 10000, "label": "Visitors", "color": "#3B82F6" },
-    { "value": 6500, "label": "Leads", "color": "#6366F1" },
-    { "value": 3200, "label": "Qualified", "color": "#8B5CF6" }
-  ],
-  "show_labels": true
-}
-```
-
-**Waterfall** uses green for positive values, red for negative, with dashed connectors between bars.
-
-Default palette: `#3B82F6`, `#EF4444`, `#22C55E`, `#F59E0B`, `#8B5CF6`, `#EC4899`, `#06B6D4`, `#F97316`
-
-### 20. `mockup`
-
-Device frame with image content inside.
-
-```json
-{
-  "type": "mockup",
-  "device": "iphone",
-  "src": "screenshot.png",
-  "theme": "dark"
-}
-```
-
-**Root fields:** `device` (required — iphone/android/laptop/browser), `src` (required — path to image), `theme` (dark/light), `size`
-
-Default sizes: iPhone 375x812, Android 360x800, Laptop 800x550, Browser 800x600
-
-### 21. `particle`
-
-Animated particle system for visual effects.
-
-```json
-{
-  "type": "particle",
-  "particle_type": "confetti",
-  "count": 80,
-  "speed": 1.2,
-  "seed": 42
-}
-```
-
-**Root fields:** `particle_type` (required — confetti/snow/stars/bubbles/halo), `count` (default 50), `colors`, `speed` (default 1.0), `size_range` ({min, max}, default {4, 12}), `seed` (default 42)
-
-Behaviors: confetti=falling rotating rects, snow=falling circles, stars=twinkling fixed positions, bubbles=rising circles, halo=soft glowing circles drifting with pulsing opacity (use larger size_range like {30, 80} and low count ~10-15)
-
-### 22. `arrow`
+### `arrow`
 
 Directional arrow with optional bezier curves. Supports `draw_in` / `stroke_reveal` animation presets.
 
@@ -1602,7 +1304,7 @@ Directional arrow with optional bezier curves. Supports `draw_in` / `stroke_reve
 | `arrow_size`  | f32           | `12.0`     | Arrowhead size                                           |
 | `dashed`      | array of f32  | `null`     | Dash pattern (e.g. `[8, 4]`)                             |
 
-### 23. `connector`
+### `connector`
 
 Connects two points with automatic routing (straight, curved, or elbow). Useful for diagrams and flowcharts.
 
@@ -1634,50 +1336,7 @@ Connects two points with automatic routing (straight, curved, or elbow). Useful 
 | `arrow_size`  | f32           | `10.0`       | Arrowhead size                                       |
 | `dashed`      | array of f32  | `null`       | Dash pattern (e.g. `[6, 3]`)                         |
 
-### 24. `timeline`
-
-Step-by-step timeline with animated progress bar, node icons, and labels.
-
-```json
-{
-  "type": "timeline",
-  "width": 800,
-  "direction": "horizontal",
-  "fill_progress": 0.75,
-  "bar_fill_color": "#58A6FF",
-  "steps": [
-    { "label": "Design", "sublabel": "Week 1", "color": "#58A6FF", "icon": "1" },
-    { "label": "Build", "sublabel": "Week 2-3", "color": "#58A6FF", "icon": "2" },
-    { "label": "Test", "sublabel": "Week 4", "color": "#58A6FF", "icon": "3" },
-    { "label": "Ship", "sublabel": "Week 5", "color": "#22C55E", "icon": "🚀" }
-  ]
-}
-```
-
-| Field            | Type   | Default      | Description                                         |
-| ---------------- | ------ | ------------ | --------------------------------------------------- |
-| `steps`          | array  | required     | `[{ "label", "sublabel"?, "color"?, "icon"? }]`     |
-| `width`          | f32    | `800.0`      | Total timeline width                                 |
-| `direction`      | enum   | `"horizontal"` | `"horizontal"` or `"vertical"`                    |
-| `node_radius`    | f32    | `24.0`       | Radius of step circles                               |
-| `bar_color`      | string | `"#333333"`  | Background bar color                                 |
-| `bar_fill_color` | string | `"#58A6FF"`  | Filled bar color                                     |
-| `bar_height`     | f32    | `4.0`        | Bar thickness                                        |
-| `fill_progress`  | f32    | `1.0`        | Progress from 0.0 to 1.0 (animatable)               |
-| `font_size`      | f32    | `16.0`       | Label font size                                      |
-| `label_color`    | string | `"#FFFFFF"`  | Label text color                                     |
-| `sublabel_color` | string | `"#8B949E"`  | Sublabel text color                                  |
-
-**Step fields:**
-
-| Field      | Type   | Default     | Description                          |
-| ---------- | ------ | ----------- | ------------------------------------ |
-| `label`    | string | required    | Step label text                      |
-| `sublabel` | string | `null`      | Secondary label below/right of label |
-| `color`    | string | `"#58A6FF"` | Node fill color when active          |
-| `icon`     | string | `null`      | Emoji or single character in node    |
-
-### 25. `lottie`
+### `lottie`
 
 Renders Lottie animations from pre-rendered PNG frame sequences. Requires frames to be pre-generated externally.
 
@@ -1704,7 +1363,7 @@ Style: `width`, `height` (default: Lottie intrinsic size)
 
 **Generating frames:** Use tools like `npx lottie-to-frames animation.json --output frames/` or puppeteer/lottie-web to pre-render Lottie frames as numbered PNGs.
 
-### 26. `cursor`
+### `cursor`
 
 Animated cursor with click effects, blinking, and path animation between waypoints.
 
@@ -1755,7 +1414,7 @@ Animated cursor with click effects, blinking, and path animation between waypoin
 
 **Notes:** When `auto_path` is set, click animations trigger automatically at each waypoint time. Cursor movement uses Catmull-Rom spline interpolation for smooth curves.
 
-### 27. `line`
+### `line`
 
 Simple line from (x1, y1) to (x2, y2). Supports `draw_in` / `stroke_reveal` animation.
 
@@ -1782,7 +1441,7 @@ Simple line from (x1, y1) to (x2, y2). Supports `draw_in` / `stroke_reveal` anim
 | `color` | string        | `"#FFFFFF"` | Line color               |
 | `dashed`| array of f32  | `null`      | Dash pattern (e.g. `[8, 4]`) |
 
-### 28. `rich_text`
+### `rich_text`
 
 Multi-styled text with individually styled spans on the same line. Inherits defaults from the component's `style`.
 
@@ -1815,240 +1474,7 @@ Multi-styled text with individually styled spans on the same line. Inherits defa
 | `font-style`    | enum   | inherited   | `"normal"`, `"italic"`, `"oblique"` |
 | `letter-spacing`| f32    | inherited   | Letter spacing       |
 
-### 29. `progress`
-
-Progress bar with linear (default) or circular variant.
-
-```json
-{
-  "type": "progress",
-  "progress": 0.75,
-  "variant": "circular",
-  "width": 120,
-  "height": 120,
-  "fill_color": "#3B82F6",
-  "background_color": "#1E293B",
-  "track_width": 8,
-  "show_value": true
-}
-```
-
-**Root fields:** `progress` (0.0–1.0), `variant` (`"linear"` or `"circular"`), `width` (default 300), `height` (default 20 linear / same as width circular), `fill_color` (#4CAF50), `background_color` (#333333), `border_radius` (linear only), `track_width` (circular only, default 8), `show_value` (circular only — shows percentage text)
-
-### 30. `gauge`
-
-Semi-circular arc gauge for KPIs and dashboards.
-
-```json
-{
-  "type": "gauge",
-  "value": 72,
-  "max": 100,
-  "label": "Performance",
-  "fill_color": "#3B82F6",
-  "track_color": "#1E293B",
-  "track_width": 16,
-  "show_value": true,
-  "style": { "width": 200, "height": 140 }
-}
-```
-
-**Root fields:** `value` (required), `min` (0), `max` (100), `label`, `fill_color` (#3B82F6), `track_color` (#333333), `track_width` (16), `start_angle` (135), `end_angle` (405), `show_value` (true), `animated` (true), `animation_duration` (1.5s)
-
-Style: `width`, `height` — **required**, same as `chart`: `gauge` has no intrinsic sizing; without explicit dimensions it lays out at 0×0.
-
-### 31. `sparkline`
-
-Mini inline chart without axes — ideal inside cards next to counters.
-
-```json
-{
-  "type": "sparkline",
-  "data": [5, 12, 8, 20, 15, 25, 18, 30],
-  "color": "#22C55E",
-  "fill": true,
-  "fill_opacity": 0.2,
-  "stroke_width": 2,
-  "style": { "width": 120, "height": 40 }
-}
-```
-
-**Root fields:** `data` (required — array of f64), `color` (#22C55E), `fill` (false — gradient fill under line), `fill_opacity` (0.2), `stroke_width` (2.0), `animated` (true), `animation_duration` (1.0s)
-
-Style: `width`, `height` — **required**: `sparkline` has no intrinsic sizing (confirmed empirically — omitted, it renders zero pixels); always set explicit dimensions, e.g. `120×40`.
-
-### 32. `stat`
-
-Composite KPI card: value + label + trend arrow + sparkline.
-
-```json
-{
-  "type": "stat",
-  "value": "45.2K",
-  "label": "Active Users",
-  "trend": { "value": "+12.5%", "direction": "up" },
-  "sparkline_data": [20, 25, 22, 30, 28, 35, 32, 40, 38, 45],
-  "sparkline_color": "#22C55E",
-  "style": { "width": 280, "height": 180, "background": "#1E293B", "border-radius": 16 }
-}
-```
-
-**Root fields:** `value` (required — display string), `label`, `trend` (`{ "value": string, "direction": "up"/"down"/"neutral", "color"? }`), `sparkline_data` (array of f64), `sparkline_color`, `value_font_size` (48), `label_font_size` (14), `value_color` (#FFFFFF), `label_color` (#94A3B8)
-
-Style: `width`, `height` — **required**: `stat` has no intrinsic sizing. Verified empirically — three `stat`s in a flex-row card with no explicit `width`/`height` render **zero pixels** (all three collapse to 0×0). Always set explicit dimensions, e.g. `280×180`. See [rules/stat-cards.md](rules/stat-cards.md).
-
-Trend uses `lucide:trending-up` / `lucide:trending-down` icons. Direction `"down"` with a positive connotation (e.g. churn decreasing) can use `"color": "#22C55E"` to override the default red.
-
-### 33. `skeleton`
-
-Loading placeholder with animated shimmer effect. Three variants for different content types.
-
-```json
-{
-  "type": "skeleton",
-  "variant": "text",
-  "lines": 3,
-  "style": { "width": 300, "height": 68 }
-}
-```
-
-**Root fields:** `variant` (`"rectangle"` / `"circle"` / `"text"`), `base_color` (#1E293B), `shimmer_color` (#334155), `border_radius` (8), `speed` (1.5 — shimmer cycle duration), `lines` (3 — text variant only), `line_height` (16), `line_gap` (12)
-
-Style: `width`, `height` (default: rectangle 200×40, circle 48×48, text auto-computed from lines)
-
-Default sizes: rectangle 200x40, circle 48x48, text auto-computed from lines.
-
-### 34. `kbd`
-
-Visual keyboard key — for documenting shortcuts.
-
-```json
-{
-  "type": "kbd",
-  "key": "Cmd"
-}
-```
-
-**Root fields:** `key` (required — text displayed), `font_size` (14), `background_color` (#1E293B), `border_color` (#475569), `text_color` (#E2E8F0)
-
-Auto-sizes based on text content. Has a 3D depth effect (shadow below). Uses monospace font. Style overrides: `background`, `color`, `font-size`.
-
-### 35. `tooltip`
-
-Floating label with directional arrow — for annotations and callouts.
-
-```json
-{
-  "type": "tooltip",
-  "text": "Click to expand",
-  "arrow": "bottom",
-  "background_color": "#1E293B",
-  "text_color": "#E2E8F0",
-  "border_color": "#334155"
-}
-```
-
-**Root fields:** `text` (required), `arrow` (`"top"` / `"bottom"` / `"left"` / `"right"` / `"none"`, default `"bottom"`), `font_size` (13), `background_color` (#1E293B), `text_color` (#E2E8F0), `arrow_size` (8), `border_color` (optional)
-
-Style overrides: `background`, `color`, `font-size`, `border-radius` (8).
-
-### 36. `marquee`
-
-Continuous scrolling text — for tickers, breaking news, or decorative text bands.
-
-```json
-{
-  "type": "marquee",
-  "content": "Breaking news — rustmotion 2.0 released!",
-  "speed": 100,
-  "direction": "left",
-  "font_size": 24,
-  "color": "#3B82F6",
-  "style": { "width": 800, "height": 48 }
-}
-```
-
-**Root fields:** `content` (required), `speed` (100 — pixels/second), `direction` (`"left"` / `"right"`), `font_size` (24), `color` (#FFFFFF), `separator` (spacing between repeats, default 5 spaces)
-
-Style: `width`, `height` — **required**: `marquee` has no intrinsic sizing; always set explicit dimensions (it's exempt from viewport-overflow checks since its role is to bleed, but it still needs a box to scroll within).
-
-### 37. `avatar_group`
-
-Stacked circular avatars with overlap and "+N" overflow badge.
-
-```json
-{
-  "type": "avatar_group",
-  "avatars": [
-    { "src": "user1.png" },
-    { "src": "user2.png" },
-    { "src": "user3.png" },
-    { "src": "user4.png" },
-    { "src": "user5.png" }
-  ],
-  "max_display": 3,
-  "overlap": 16,
-  "size": 48
-}
-```
-
-**Root fields:** `avatars` (required — `[{ "src": string }]`), `max_display` (optional — limit visible avatars), `size` (48 — diameter), `overlap` (16 — px overlap between avatars), `border_width` (3), `border_color` (#0f172a — ring color, match your background)
-
-### 38. `switch`
-
-Animated toggle switch that flips state at a configurable time.
-
-```json
-{
-  "type": "switch",
-  "value": false,
-  "toggle_at": 1.5,
-  "label": "Dark Mode",
-  "width": 52,
-  "height": 28,
-  "track_color_on": "#4CAF50",
-  "track_color_off": "#CCCCCC"
-}
-```
-
-**Root fields:** `value` (bool, default false), `toggle_at` (time to flip), `label`, `width` (52), `height` (28), `track_color_on` (#4CAF50), `track_color_off` (#CCCCCC), `thumb_color` (#FFFFFF), `transition_duration` (0.3)
-
-### 39. `slider`
-
-Horizontal slider that animates to a target value.
-
-```json
-{
-  "type": "slider",
-  "value": 0.3,
-  "animate_to": 0.85,
-  "animate_at": 1.0,
-  "animation_duration": 2.0,
-  "width": 300,
-  "fill_color": "#3B82F6",
-  "show_value": true
-}
-```
-
-**Root fields:** `value` (0.0–1.0), `animate_to`, `animate_at` (time to start), `animation_duration` (1.0), `width` (300), `height` (8), `track_color` (#333333), `fill_color` (#3B82F6), `thumb_size` (20), `thumb_color` (#FFFFFF), `show_value` (false)
-
-### 40. `rating`
-
-Star rating display with animated fill.
-
-```json
-{
-  "type": "rating",
-  "value": 4.5,
-  "max": 5,
-  "size": 32,
-  "filled_color": "#F59E0B"
-}
-```
-
-**Root fields:** `value` (f64), `max` (5), `size` (32 — star diameter), `gap` (4), `filled_color` (#F59E0B), `empty_color` (#374151), `animated` (true), `animation_duration` (1.0)
-
-### 41. `gradient_text`
+### `gradient_text`
 
 Text with animated gradient fill.
 
@@ -2068,163 +1494,7 @@ Text with animated gradient fill.
 
 Style: `font-size`, `font-weight`, `font-family`
 
-### 42. `list`
-
-Feature list with bullet, numbered, or checklist items.
-
-```json
-{
-  "type": "list",
-  "items": [
-    { "text": "Unlimited projects", "icon": "lucide:check" },
-    { "text": "Priority support", "icon": "lucide:check" },
-    { "text": "Advanced analytics", "icon": "lucide:x" }
-  ],
-  "variant": "checklist",
-  "icon_color": "#22C55E",
-  "unchecked_color": "#EF4444",
-  "gap": 16,
-  "width": 400,
-  "style": { "font-size": 18, "color": "#E2E8F0" }
-}
-```
-
-**Root fields:** `items` (required — `[{ "text", "icon"?, "checked"? }]`), `variant` (`"bullet"` / `"numbered"` / `"checklist"`), `gap` (16), `icon_size` (20), `icon_color` (#22C55E), `unchecked_color` (#6B7280), `width` (400)
-
-### 43. `pill_nav`
-
-Horizontal tab navigation with animated pill indicator.
-
-```json
-{
-  "type": "pill_nav",
-  "items": ["Overview", "Analytics", "Settings"],
-  "active_index": 0,
-  "transitions": [
-    { "to": 1, "at": 2.0 },
-    { "to": 2, "at": 4.0 }
-  ],
-  "pill_color": "#3B82F6",
-  "height": 44
-}
-```
-
-**Root fields:** `items` (required — array of strings), `active_index` (0), `transitions` (`[{ "to": u32, "at": f64 }]`), `pill_color` (#3B82F6), `text_color` (#FFFFFF), `inactive_text_color` (#9CA3AF), `background_color` (#1E293B), `height` (44), `border_radius` (22), `gap` (4), `transition_duration` (0.3)
-
-### 44. `notification`
-
-Toast notification with fade-in/out and stack push animation.
-
-```json
-{
-  "type": "notification",
-  "title": "Deployment Complete",
-  "message": "v2.4.1 deployed to production",
-  "variant": "success",
-  "width": 380,
-  "slide_in_at": 0.8,
-  "slide_out_at": 4.5,
-  "push_at": [1.5],
-  "position": "absolute",
-  "x": 500,
-  "y": 100
-}
-```
-
-**Root fields:** `title` (required), `message`, `icon` (Iconify id), `variant` (info/success/warning/error), `width` (360), `slide_in_at` (0.5 — fade-in time), `slide_out_at` (fade-out time), `slide_duration` (0.15 — fade speed), `accent_color` (override variant color), `push_at` (array of timestamps — when to push down one slot), `stack_gap` (12), `wait_for_push` (bool — delay fade-in until push animation finishes)
-
-**Stacking notifications:** Place all at the same x/y. The first notification gets `push_at: [1.5]` (time when second appears). The second gets `wait_for_push: true`. This makes the first slide down, then the second fades in above it.
-
-### 45. `stepper`
-
-Step indicator with connected nodes and animated progression.
-
-```json
-{
-  "type": "stepper",
-  "steps": [
-    { "label": "Sign Up" },
-    { "label": "Configure" },
-    { "label": "Deploy" }
-  ],
-  "active_step": 0,
-  "animate_to": 2,
-  "animate_at": 1.0,
-  "style": { "width": 600, "height": 80 }
-}
-```
-
-**Root fields:** `steps` (required — `[{ "label", "description"? }]`), `active_step` (0), `animate_to` (target step), `animate_at` (time), `transition_duration` (0.5), `orientation` ("horizontal"), `active_color` (#3B82F6), `completed_color` (#22C55E), `pending_color` (#6B7280), `node_size` (32)
-
-Style: `width`, `height`
-
-### 46. `comparison`
-
-Before/after split view with animated divider.
-
-```json
-{
-  "type": "comparison",
-  "left_color": "#1E293B",
-  "right_color": "#3B82F6",
-  "left_label": "Before",
-  "right_label": "After",
-  "divider_position": 0.5,
-  "animate_from": 0.2,
-  "animate_to": 0.8,
-  "animate_at": 1.0,
-  "animation_duration": 2.0,
-  "border_radius": 16,
-  "style": { "width": 600, "height": 300 }
-}
-```
-
-**Root fields:** `left_color`, `right_color`, `left_label`, `right_label`, `divider_position` (0.5), `animate_from`, `animate_to`, `animate_at`, `animation_duration` (2.0), `divider_color` (#FFFFFF), `divider_width` (3), `border_radius` (12)
-
-Style: `width`, `height`
-
-### 47. `countdown`
-
-Digital countdown timer with flip-clock style digit boxes.
-
-```json
-{
-  "type": "countdown",
-  "seconds": 3723,
-  "digit_size": 48,
-  "digit_color": "#FFFFFF",
-  "digit_background": "#1E293B",
-  "style": { "width": 400, "height": 80 }
-}
-```
-
-**Root fields:** `seconds` (total countdown, counts down from ctx.time), `show_hours` (true), `show_minutes` (true), `show_seconds` (true), `digit_size` (64), `digit_color` (#FFFFFF), `digit_background` (#1E293B), `separator_color` (#6B7280), `gap` (12), `border_radius` (12)
-
-Style: `width`, `height`
-
-### 48. `heatmap`
-
-Grid of colored cells (GitHub contribution style).
-
-```json
-{
-  "type": "heatmap",
-  "data": [
-    [0.1, 0.5, 0.9, 0.3, 0.7],
-    [0.4, 0.8, 0.2, 0.6, 0.5]
-  ],
-  "cell_size": 20,
-  "cell_gap": 3,
-  "cell_radius": 4,
-  "style": { "width": 400, "height": 200 }
-}
-```
-
-**Root fields:** `data` (required — 2D array of f64, values 0.0–1.0), `color_scale` (array of hex, default GitHub green scale), `cell_size` (14), `cell_gap` (3), `cell_radius` (2), `animated` (true), `animation_duration` (1.5)
-
-Style: `width`, `height`
-
-### 49. `treemap`
+### `treemap`
 
 Space-filling rectangles proportional to values.
 
@@ -2247,29 +1517,7 @@ Space-filling rectangles proportional to values.
 
 Style: `width`, `height`
 
-### 50. `tag_cloud`
-
-Word cloud with weighted font sizes.
-
-```json
-{
-  "type": "tag_cloud",
-  "tags": [
-    { "text": "Rust", "weight": 10 },
-    { "text": "TypeScript", "weight": 8 },
-    { "text": "Python", "weight": 7 }
-  ],
-  "min_font_size": 14,
-  "max_font_size": 64,
-  "style": { "width": 500, "height": 300 }
-}
-```
-
-**Root fields:** `tags` (required — `[{ "text", "weight", "color"? }]`), `min_font_size` (14), `max_font_size` (64), `colors` (custom palette), `animated` (true), `animation_duration` (1.5)
-
-Style: `width`, `height`
-
-### 51. `dot_map`
+### `dot_map`
 
 World map in dot-pattern with data points at geographic coordinates.
 
@@ -2295,7 +1543,7 @@ Style: `width`, `height`
 
 Points use real geographic coordinates (lat/lng). The world map is rendered as a dot grid using a 180×90 land bitmap. Points with `pulse: true` show expanding concentric rings.
 
-### 52. `qr_code`
+### `qr_code`
 
 Renders a scannable QR code from arbitrary content (URL, text, etc.).
 
@@ -2709,5 +1957,4 @@ Before presenting a generated scenario to the user, verify:
 - [ ] `concentric_circles` animated-background on at least 4 scenes for visual depth
 - [ ] No `end_at` on counters (makes them disappear — use `start_at` only)
 - [ ] No text uses `style.white-space: "nowrap"`/`"pre"` unless a finite `max-width` keeps it inside the viewport (use `marquee` for intentional bleeding) — see [rules/geometry-safety.md](rules/geometry-safety.md)
-- [ ] Long codeblocks/terminals leave `auto_scroll` at its default (`true`) — never set `false` unless content is guaranteed to fit
 - [ ] `rustmotion validate -f scenario.json` passes (zero schema **and** geometry violations) before presenting
