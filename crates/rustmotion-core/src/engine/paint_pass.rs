@@ -269,12 +269,24 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         .filter
         .as_deref()
         .and_then(|list| filters_to_image_filter(list, &length_ctx));
-    let opened_opacity_layer = if opacity < 1.0 || content_filter.is_some() {
+    let aberration_shift = active_chromatic_aberration(&node.css, ctx.frame.time)
+        .map(|(cfg, progress)| crate::engine::animator::chromatic_aberration_shift(cfg, progress));
+    let aberration_filter = aberration_shift.and_then(chromatic_aberration_image_filter);
+    let combined_filter = {
+        use skia_safe::image_filters;
+        match (content_filter, aberration_filter) {
+            (Some(cf), Some(af)) => image_filters::compose(af, cf),
+            (Some(cf), None) => Some(cf),
+            (None, Some(af)) => Some(af),
+            (None, None) => None,
+        }
+    };
+    let opened_opacity_layer = if opacity < 1.0 || combined_filter.is_some() {
         let mut paint = Paint::default();
         if opacity < 1.0 {
             paint.set_alpha((opacity * 255.0) as u8);
         }
-        if let Some(filter) = content_filter {
+        if let Some(filter) = combined_filter {
             paint.set_image_filter(filter);
         }
         let filter_bleed_px = node
@@ -289,7 +301,10 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
             .as_deref()
             .map(|shadows| box_shadow_bleed(shadows, &length_ctx))
             .unwrap_or(0.0);
-        let bleed = filter_bleed_px.max(shadow_bleed_px);
+        let aberration_bleed_px = aberration_shift.map(|s| s.abs().ceil()).unwrap_or(0.0);
+        let bleed = filter_bleed_px
+            .max(shadow_bleed_px)
+            .max(aberration_bleed_px);
         let mut bounds = Rect::from_xywh(
             box_layout.x - bleed,
             box_layout.y - bleed,
@@ -482,6 +497,60 @@ fn paint_shimmer_band(
         Rect::from_xywh(layout.x, layout.y, layout.width, layout.height),
         &paint,
     );
+}
+
+fn active_chromatic_aberration(
+    css: &CssStyle,
+    time: f64,
+) -> Option<(&crate::schema::ChromaticAberrationConfig, f32)> {
+    let cfg = css.animation.iter().find_map(|e| match e {
+        crate::schema::AnimationEffect::ChromaticAberration(c) => Some(c),
+        _ => None,
+    })?;
+    if cfg.duration <= 0.0 {
+        return None;
+    }
+    let elapsed = time - cfg.delay;
+    if elapsed < 0.0 || elapsed >= cfg.duration {
+        return None;
+    }
+    Some((cfg, (elapsed / cfg.duration) as f32))
+}
+
+fn chromatic_aberration_image_filter(shift: f32) -> Option<skia_safe::ImageFilter> {
+    if shift.abs() < 0.05 {
+        return None;
+    }
+    use skia_safe::{color_filters, image_filters, BlendMode};
+
+    #[rustfmt::skip]
+    const RED_ONLY: [f32; 20] = [
+        1.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 1.0, 0.0,
+    ];
+    #[rustfmt::skip]
+    const CYAN_ONLY: [f32; 20] = [
+        0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 1.0, 0.0,
+    ];
+
+    let red_shifted = image_filters::offset((-shift, 0.0), None, None)?;
+    let cyan_shifted = image_filters::offset((shift, 0.0), None, None)?;
+    let red = image_filters::color_filter(
+        color_filters::matrix_row_major(&RED_ONLY, None),
+        Some(red_shifted),
+        None,
+    )?;
+    let cyan = image_filters::color_filter(
+        color_filters::matrix_row_major(&CYAN_ONLY, None),
+        Some(cyan_shifted),
+        None,
+    )?;
+    image_filters::blend(BlendMode::Plus, Some(red), Some(cyan), None)
 }
 
 fn filter_bleed(list: &[crate::css::style::FilterFn], ctx: &LengthContext) -> f32 {
@@ -2639,6 +2708,7 @@ mod paint_order_tests {
     use crate::css::units::{Length, LengthPercentage as CLP};
     use crate::engine::box_tree::{BoxKind, BoxNode};
     use crate::engine::layout_pass::run_layout;
+    use crate::schema::{AnimationEffect, ChromaticAberrationConfig, EasingType};
 
     fn test_frame(w: u32, h: u32) -> PaintFrame {
         PaintFrame {
@@ -2987,6 +3057,135 @@ mod paint_order_tests {
         );
         let far = probe(20, 20);
         assert_eq!(far, 0, "far corner must stay untouched, got r={far}");
+    }
+
+    fn render_pixels_at(root: &mut BoxNode, w: u32, h: u32, time: f64) -> Vec<u8> {
+        root.assign_ids(0);
+        let layout = run_layout(root, (w as f32, h as f32), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w as i32, h as i32)).unwrap();
+        let frame = PaintFrame {
+            time,
+            ..test_frame(w, h)
+        };
+        paint_tree(surface.canvas(), root, &layout, &frame, &NoopDispatcher);
+        let info = skia_safe::ImageInfo::new(
+            (w as i32, h as i32),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        surface.read_pixels(&info, &mut buf, (w * 4) as usize, (0, 0));
+        buf
+    }
+
+    fn white_square(animation: Vec<AnimationEffect>) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(100.0)),
+                top: Some(CLP::Px(100.0)),
+                width: Some(CSize::Length(CLP::Px(120.0))),
+                height: Some(CSize::Length(CLP::Px(120.0))),
+                background: Some(Background::Color(CssColor::String("#ffffff".into()))),
+                animation,
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn probe(buf: &[u8], w: u32, x: u32, y: u32) -> (u8, u8, u8) {
+        let i = ((y * w + x) * 4) as usize;
+        (buf[i], buf[i + 1], buf[i + 2])
+    }
+
+    #[test]
+    fn chromatic_aberration_shows_a_red_fringe_on_one_edge_and_a_cyan_fringe_on_the_other() {
+        let cfg = ChromaticAberrationConfig {
+            delay: 0.0,
+            duration: 0.6,
+            amount: 10.0,
+            easing: EasingType::Linear,
+        };
+        let mut root = root_node(
+            400.0,
+            400.0,
+            "#000000",
+            vec![white_square(vec![AnimationEffect::ChromaticAberration(
+                cfg,
+            )])],
+        );
+        let buf = render_pixels_at(&mut root, 400, 400, 0.3);
+
+        let left_edge = probe(&buf, 400, 100, 160);
+        let right_edge = probe(&buf, 400, 220, 160);
+        assert!(
+            left_edge.0 > 200 && left_edge.1 < 50 && left_edge.2 < 50,
+            "expected a red-leaning fringe on the left edge mid-flight, got {left_edge:?}"
+        );
+        assert!(
+            right_edge.0 < 50 && right_edge.1 > 200 && right_edge.2 > 200,
+            "expected a cyan-leaning fringe on the right edge mid-flight, got {right_edge:?}"
+        );
+    }
+
+    #[test]
+    fn chromatic_aberration_is_gone_by_the_end_of_the_animation() {
+        let mut plain = root_node(400.0, 400.0, "#000000", vec![white_square(vec![])]);
+        let baseline = render_pixels_at(&mut plain, 400, 400, 5.0);
+
+        let cfg = ChromaticAberrationConfig {
+            delay: 0.0,
+            duration: 0.6,
+            amount: 10.0,
+            easing: EasingType::Linear,
+        };
+        let mut animated = root_node(
+            400.0,
+            400.0,
+            "#000000",
+            vec![white_square(vec![AnimationEffect::ChromaticAberration(
+                cfg,
+            )])],
+        );
+        let at_end = render_pixels_at(&mut animated, 400, 400, 0.6);
+
+        assert_eq!(
+            baseline, at_end,
+            "the node must be pixel-identical to one with no effect at all once the \
+             animation's duration has elapsed — no permanent fringe left behind"
+        );
+    }
+
+    #[test]
+    fn a_node_without_the_effect_is_untouched() {
+        let mut root_a = root_node(400.0, 400.0, "#000000", vec![white_square(vec![])]);
+        let a = render_pixels_at(&mut root_a, 400, 400, 0.0);
+        let mut root_b = root_node(400.0, 400.0, "#000000", vec![white_square(vec![])]);
+        let b = render_pixels_at(&mut root_b, 400, 400, 5.0);
+        assert_eq!(
+            a, b,
+            "a node with no chromatic_aberration effect must not vary with time"
+        );
+
+        let left_edge = probe(&a, 400, 100, 160);
+        let right_edge = probe(&a, 400, 219, 160);
+        assert_eq!(
+            left_edge,
+            (255, 255, 255),
+            "no effect means no fringe on the left edge either, got {left_edge:?}"
+        );
+        assert_eq!(
+            right_edge,
+            (255, 255, 255),
+            "no effect means no fringe on the right edge either, got {right_edge:?}"
+        );
     }
 }
 

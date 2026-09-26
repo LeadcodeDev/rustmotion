@@ -270,6 +270,45 @@ pub fn ease(t: f64, easing: &EasingType) -> f64 {
     }
 }
 
+pub fn chromatic_aberration_shift(
+    cfg: &crate::schema::ChromaticAberrationConfig,
+    progress: f32,
+) -> f32 {
+    let eased = ease(progress as f64, &cfg.easing) as f32;
+    cfg.amount * (1.0 - eased)
+}
+
+#[cfg(test)]
+mod chromatic_aberration_shift_tests {
+    use super::*;
+    use crate::schema::{ChromaticAberrationConfig, EasingType};
+
+    fn cfg(amount: f32) -> ChromaticAberrationConfig {
+        ChromaticAberrationConfig {
+            delay: 0.0,
+            duration: 0.6,
+            amount,
+            easing: EasingType::Linear,
+        }
+    }
+
+    #[test]
+    fn peaks_at_the_full_amount_when_progress_is_zero() {
+        assert_eq!(chromatic_aberration_shift(&cfg(6.0), 0.0), 6.0);
+    }
+
+    #[test]
+    fn decays_to_exactly_zero_when_progress_reaches_one() {
+        assert_eq!(chromatic_aberration_shift(&cfg(6.0), 1.0), 0.0);
+    }
+
+    #[test]
+    fn is_between_zero_and_the_amount_mid_flight() {
+        let shift = chromatic_aberration_shift(&cfg(6.0), 0.5);
+        assert!(shift > 0.0 && shift < 6.0, "got {shift}");
+    }
+}
+
 fn cubic_bezier_ease(t: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
     let t_curve = find_bezier_t_for_x(t, x1, x2);
     bezier_component(t_curve, y1, y2)
