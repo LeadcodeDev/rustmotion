@@ -199,8 +199,7 @@ impl AnimationEffect {
 // minimal repro before relying on it. Without this, `validate_attrs.rs`
 // never sees inside `style.animation[*]` (it only walks component-level
 // keys), so a typo silently no-ops instead of erroring.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, JsonSchema, PartialEq)]
 pub struct AnimationTiming {
     /// Delay before animation starts (seconds).
     #[serde(default)]
@@ -208,9 +207,42 @@ pub struct AnimationTiming {
     /// Animation duration (seconds).
     #[serde(default = "default_animation_duration")]
     pub duration: f64,
-    /// Loop the animation continuously.
-    #[serde(default, rename = "loop")]
+    /// Loop the animation continuously. Kept as a plain bool for source
+    /// compatibility with every reader that only ever checked this flag
+    /// (several live outside this workstream's owned files) — `true`
+    /// covers both "loop forever" (`repeat_count: None`) and "loop a known
+    /// number of times" (`repeat_count: Some(n)`), so a finite count is
+    /// never mistaken for a one-shot animation by code that only reads
+    /// this field. The JSON `"loop"` key this deserializes from accepts
+    /// either shape (see [`AnimationTimingWire`]); `repeat` alone can't
+    /// tell you which one was written — check `repeat_count` for that.
+    #[serde(rename = "loop")]
     pub repeat: bool,
+    /// How many times the animation plays, when the JSON `"loop"` value
+    /// was a positive integer rather than a bare bool (issue #330) — e.g.
+    /// `"loop": 12` for GSAP's `repeat: 11` (11 *re*plays, 12 plays
+    /// total — this field counts total plays, not replays). `None`
+    /// defers entirely to `repeat`: `true` loops forever, `false` plays
+    /// once — today's behaviour, unchanged. `0` and `1` both fold back
+    /// into `repeat: false, repeat_count: None` at parse time (see
+    /// [`RepeatSpec::into_parts`]): there is no visible difference
+    /// between "play once" and "loop zero times", so there's no reason to
+    /// carry a count that never changes anything downstream.
+    #[serde(default)]
+    pub repeat_count: Option<u32>,
+    /// Reverse direction on every other play (ping-pong) instead of
+    /// snapping back to the start each cycle — GSAP calls this `yoyo`.
+    /// Only meaningful when the animation actually repeats (`repeat` or
+    /// `repeat_count`); a no-op otherwise. Works on any animation this
+    /// timing drives, not a fixed set of presets — see
+    /// `engine::animator::cycle_time`.
+    #[serde(default)]
+    pub yoyo: bool,
+    /// Pause between plays, in seconds, held at the resting value of the
+    /// play that just finished before the next one starts. `0.0` (default)
+    /// is a seamless loop.
+    #[serde(default)]
+    pub repeat_delay: f64,
     /// Overshoot/anticipation intensity for scale_in/scale_out (0.0 = none, default 0.08 = 8%).
     #[serde(default)]
     pub overshoot: Option<f64>,
@@ -231,6 +263,132 @@ pub struct AnimationTiming {
 
 fn default_animation_duration() -> f64 {
     0.8
+}
+
+/// The `"loop"` field as written in JSON: a bare boolean — `true` loops
+/// forever, `false` (the default) plays once, exactly as before this type
+/// widened — or a positive integer naming an exact play count. Only ever
+/// used as the wire shape [`AnimationTimingWire`] folds into
+/// [`AnimationTiming::repeat`]/[`AnimationTiming::repeat_count`] (and back,
+/// for `Serialize` — see [`RepeatSpec::from_parts`]); nothing downstream
+/// matches on this type directly.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+enum RepeatSpec {
+    Loop(bool),
+    Count(u32),
+}
+
+impl Default for RepeatSpec {
+    fn default() -> Self {
+        RepeatSpec::Loop(false)
+    }
+}
+
+impl RepeatSpec {
+    /// Splits the wire value into `AnimationTiming`'s two fields. `0`/`1`
+    /// fold back to the boolean form: a count only starts meaning anything
+    /// once there's a second play to differ from the first.
+    fn into_parts(self) -> (bool, Option<u32>) {
+        match self {
+            RepeatSpec::Loop(b) => (b, None),
+            RepeatSpec::Count(0) | RepeatSpec::Count(1) => (false, None),
+            RepeatSpec::Count(n) => (true, Some(n)),
+        }
+    }
+
+    /// Inverse of [`Self::into_parts`]: reconstructs the wire value that
+    /// would have produced this `(repeat, repeat_count)` pair, so
+    /// `AnimationTiming`'s hand-written `Serialize` impl round-trips
+    /// through the same single `"loop"` key its `Deserialize` impl reads —
+    /// never a separate `repeat_count` key alongside it.
+    fn from_parts(repeat: bool, repeat_count: Option<u32>) -> Self {
+        match repeat_count {
+            Some(n) => RepeatSpec::Count(n),
+            None => RepeatSpec::Loop(repeat),
+        }
+    }
+}
+
+/// The wire shape of [`AnimationTiming`] — identical field-for-field except
+/// `"loop"`, which is [`RepeatSpec`] here instead of the plain `bool`
+/// [`AnimationTiming::repeat`] exposes. Exists only to give
+/// `AnimationTiming` hand-written `Serialize`/`Deserialize` impls that can
+/// split one JSON key into two Rust fields (`repeat`/`repeat_count`) and
+/// merge them back — a derive can't express that. Kept private: nothing
+/// outside this module should ever construct or see one directly. Carries
+/// its own `deny_unknown_fields` so a typo'd field is still rejected
+/// exactly as it was before this type existed (constat #8's guarantee,
+/// preserved).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnimationTimingWire {
+    #[serde(default)]
+    delay: f64,
+    #[serde(default = "default_animation_duration")]
+    duration: f64,
+    #[serde(default, rename = "loop")]
+    repeat: RepeatSpec,
+    #[serde(default)]
+    yoyo: bool,
+    #[serde(default)]
+    repeat_delay: f64,
+    #[serde(default)]
+    overshoot: Option<f64>,
+    #[serde(default)]
+    spring: Option<SpringConfig>,
+    #[serde(default)]
+    amplitude: Option<f64>,
+}
+
+impl From<AnimationTimingWire> for AnimationTiming {
+    fn from(wire: AnimationTimingWire) -> Self {
+        let (repeat, repeat_count) = wire.repeat.into_parts();
+        AnimationTiming {
+            delay: wire.delay,
+            duration: wire.duration,
+            repeat,
+            repeat_count,
+            yoyo: wire.yoyo,
+            repeat_delay: wire.repeat_delay,
+            overshoot: wire.overshoot,
+            spring: wire.spring,
+            amplitude: wire.amplitude,
+        }
+    }
+}
+
+impl From<&AnimationTiming> for AnimationTimingWire {
+    fn from(t: &AnimationTiming) -> Self {
+        AnimationTimingWire {
+            delay: t.delay,
+            duration: t.duration,
+            repeat: RepeatSpec::from_parts(t.repeat, t.repeat_count),
+            yoyo: t.yoyo,
+            repeat_delay: t.repeat_delay,
+            overshoot: t.overshoot,
+            spring: t.spring.clone(),
+            amplitude: t.amplitude,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AnimationTiming {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        AnimationTimingWire::deserialize(deserializer).map(AnimationTiming::from)
+    }
+}
+
+impl Serialize for AnimationTiming {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        AnimationTimingWire::from(self).serialize(serializer)
+    }
 }
 
 /// Configuration for the `tilt_in` animation with configurable 3D transform values.
@@ -263,6 +421,9 @@ impl Default for AnimationTiming {
             delay: 0.0,
             duration: 0.8,
             repeat: false,
+            repeat_count: None,
+            yoyo: false,
+            repeat_delay: 0.0,
             overshoot: None,
             spring: None,
             amplitude: None,
@@ -485,6 +646,9 @@ impl AnimationTiming {
             delay: self.delay,
             duration: self.duration,
             repeat: self.repeat,
+            repeat_count: self.repeat_count,
+            yoyo: self.yoyo,
+            repeat_delay: self.repeat_delay,
             overshoot: self.overshoot,
             spring: self.spring.clone(),
         }
@@ -913,6 +1077,56 @@ pub struct Stroke {
     pub color: String,
     #[serde(default = "default_stroke_width")]
     pub width: f32,
+    /// `skia_safe::PathEffect::dash` interval list (on-length, off-length,
+    /// repeating) — the same spelling and shape `arrow`/`connector`/`line`
+    /// already use for their own `dashed` field. `None` (the default)
+    /// strokes solid, exactly as every `Stroke` did before this field
+    /// existed.
+    #[serde(default)]
+    pub dashed: Option<Vec<f32>>,
+    /// Phase offset (px) into `dashed`'s pattern — `skia_safe::PathEffect::
+    /// dash`'s second argument, hardcoded to `0.0` on `arrow`/`connector`/
+    /// `line` today. A literal number is a constant phase; an `"= ..."`
+    /// expression (see `crate::expr`) is re-evaluated every frame against
+    /// the node's `crate::css::FrameClock` (`$t`/`$T`/`$duration`/`$W`/
+    /// `$H`/`$fps`), the same per-frame mechanism `CssStyle`'s `opacity`/
+    /// `width`/`height` already use — this is what makes a dashed stroke's
+    /// "draw-on" (dash length == path length, offset animating from the
+    /// full length down to `0`) expressible without the engine's classic
+    /// keyframe/easing `AnimatedProperties` pipeline.
+    #[serde(default)]
+    pub dash_offset: Option<crate::expr::Computed<f32>>,
+    /// `stroke-linecap`. Default `LineCap::Butt` — skia's own default, so
+    /// a stroke that never set this renders byte-identical to before this
+    /// field existed.
+    #[serde(default)]
+    pub line_cap: LineCap,
+    /// `stroke-linejoin`. Default `LineJoin::Miter` — skia's own default,
+    /// same backward-compatibility guarantee as `line_cap` above.
+    #[serde(default)]
+    pub line_join: LineJoin,
+}
+
+/// `stroke-linecap` — how an open subpath's two ends are drawn. See
+/// `Stroke::line_cap`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LineCap {
+    #[default]
+    Butt,
+    Round,
+    Square,
+}
+
+/// `stroke-linejoin` — how two stroked segments meet at a vertex. See
+/// `Stroke::line_join`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LineJoin {
+    #[default]
+    Miter,
+    Round,
+    Bevel,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -1484,5 +1698,140 @@ mod motion_path_schema_tests {
             AnimationEffect::MotionPath(cfg) => assert!((cfg.delay - 0.75).abs() < 1e-9),
             other => panic!("expected MotionPath, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod animation_timing_repeat_widening_tests {
+    use super::*;
+    use serde_json::json;
+
+    // ---- issue #330: `"loop"` widens from a bare bool to bool-or-integer.
+    // Every test in this module that only sets `"loop": true`/`false` (or
+    // omits it) must produce byte-identical `AnimationTiming` values to
+    // what the old plain-bool deserializer produced — that's the
+    // acceptance criterion that matters most here. ----
+
+    #[test]
+    fn loop_true_is_unchanged_infinite_repeat() {
+        let json = json!({ "name": "pulse", "loop": true });
+        let effect: AnimationEffect = serde_json::from_value(json).unwrap();
+        match effect {
+            AnimationEffect::Pulse(t) => {
+                assert!(t.repeat, "\"loop\": true must still set repeat = true");
+                assert_eq!(
+                    t.repeat_count, None,
+                    "a bare `true` carries no count — infinite, exactly as before"
+                );
+                assert!(!t.yoyo);
+                assert_eq!(t.repeat_delay, 0.0);
+            }
+            other => panic!("expected Pulse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn loop_false_and_omitted_are_unchanged_and_identical() {
+        let explicit: AnimationTiming = serde_json::from_value(json!({ "loop": false })).unwrap();
+        let omitted: AnimationTiming = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(
+            explicit, omitted,
+            "an explicit `false` and an omitted `loop` must resolve identically"
+        );
+        assert!(!explicit.repeat);
+        assert_eq!(explicit.repeat_count, None);
+        assert_eq!(explicit, AnimationTiming::default());
+    }
+
+    #[test]
+    fn loop_as_a_positive_integer_sets_repeat_and_the_count() {
+        // GSAP's `repeat: 11` means 11 *re*plays — 12 plays total. This
+        // field counts total plays, so the JSON author writes 12.
+        let t: AnimationTiming = serde_json::from_value(json!({ "loop": 12 })).unwrap();
+        assert!(t.repeat, "a finite count still loops — see the field doc");
+        assert_eq!(t.repeat_count, Some(12));
+    }
+
+    #[test]
+    fn loop_as_zero_or_one_folds_back_to_the_boolean_form() {
+        for n in [0, 1] {
+            let t: AnimationTiming = serde_json::from_value(json!({ "loop": n })).unwrap();
+            assert!(!t.repeat, "loop: {n} must not set repeat");
+            assert_eq!(t.repeat_count, None, "loop: {n} must not carry a count");
+        }
+    }
+
+    #[test]
+    fn yoyo_and_repeat_delay_default_to_off_and_zero() {
+        let t: AnimationTiming = serde_json::from_value(json!({})).unwrap();
+        assert!(!t.yoyo);
+        assert_eq!(t.repeat_delay, 0.0);
+    }
+
+    #[test]
+    fn yoyo_and_repeat_delay_are_accepted_on_any_animation_timing() {
+        let json = json!({
+            "name": "shake",
+            "duration": 0.035,
+            "loop": 12,
+            "yoyo": true,
+            "repeat_delay": 0.01
+        });
+        let effect: AnimationEffect = serde_json::from_value(json).unwrap();
+        match effect {
+            AnimationEffect::Shake(t) => {
+                assert!(t.yoyo);
+                assert_eq!(t.repeat_delay, 0.01);
+                assert_eq!(t.repeat_count, Some(12));
+            }
+            other => panic!("expected Shake, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_typo_is_still_rejected_through_the_wire_type() {
+        let json = json!({ "name": "pulse", "duratoin": 1.0 });
+        let err = serde_json::from_value::<AnimationEffect>(json)
+            .expect_err("a typo'd field must still be rejected, not silently ignored");
+        assert!(err.to_string().contains("duratoin"), "got: {err}");
+    }
+
+    #[test]
+    fn loop_as_a_negative_number_is_rejected_not_silently_coerced() {
+        let json = json!({ "name": "pulse", "loop": -1 });
+        assert!(
+            serde_json::from_value::<AnimationEffect>(json).is_err(),
+            "a negative \"loop\" is neither a bool nor a valid play count"
+        );
+    }
+
+    #[test]
+    fn a_finite_repeat_count_round_trips_through_a_single_loop_key() {
+        // Regression: `AnimationTiming` used to derive `Serialize`
+        // directly off its own fields, which emitted a *separate*
+        // `"repeat_count"` key alongside `"loop"` — a shape
+        // `AnimationTimingWire`'s `deny_unknown_fields` (rightly) never
+        // accepted on the way back in, so a scenario that had merely been
+        // parsed and re-serialized (e.g. by tooling, or `--fix`) failed to
+        // parse again. `AnimationTiming` now hand-writes `Serialize` to
+        // fold back onto one `"loop"` key, matching `Deserialize` exactly.
+        let t: AnimationTiming = serde_json::from_value(json!({ "loop": 12 })).unwrap();
+        let json = serde_json::to_value(&t).unwrap();
+        assert!(
+            json.get("repeat_count").is_none(),
+            "must not emit a separate repeat_count key: {json}"
+        );
+        assert_eq!(json["loop"], serde_json::json!(12));
+        let back: AnimationTiming = serde_json::from_value(json).unwrap();
+        assert_eq!(t, back);
+    }
+
+    #[test]
+    fn easing_steps_round_trips_and_is_distinct_from_cubic_bezier() {
+        let json = json!({ "steps": 4 });
+        let easing: EasingType = serde_json::from_value(json).unwrap();
+        assert_eq!(easing, EasingType::Steps(4));
+        let back = serde_json::to_value(&easing).unwrap();
+        assert_eq!(back, json!({ "steps": 4 }));
     }
 }
