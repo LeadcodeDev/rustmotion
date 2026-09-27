@@ -34,7 +34,7 @@ fn video_frame_cache_bytes() -> u64 {
         .sum()
 }
 
-pub fn prefetch_icons(scenes: &[Scene]) {
+pub fn prefetch_icons(scenes: &[Scene]) -> crate::error::Result<()> {
     use std::collections::HashSet;
 
     let mut seen = HashSet::new();
@@ -128,16 +128,14 @@ pub fn prefetch_icons(scenes: &[Scene]) {
     }
 
     if !unresolved.is_empty() {
-        panic!(
-            "rustmotion: {} icon(s) could not be preloaded — checked the disk cache at \
-             {} and the network, both failed:\n  - {}\n\
-             A render must not silently omit an icon: fix the identifier(s), or connect to \
-             the network so they can be downloaded once and cached for offline use.",
-            unresolved.len(),
-            icon_cache_dir().display(),
-            unresolved.join("\n  - ")
-        );
+        return Err(crate::error::RustmotionError::IconsUnresolved {
+            count: unresolved.len(),
+            cache_dir: icon_cache_dir().display().to_string(),
+            details: unresolved.join("\n  - "),
+        });
     }
+
+    Ok(())
 }
 
 pub fn preextract_video_frames(scenes: &[Scene], fps: u32) {
@@ -358,14 +356,14 @@ mod tests {
         }))
         .expect("scene must deserialize");
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prefetch_icons(std::slice::from_ref(&scene));
-        }));
+        let result = prefetch_icons(std::slice::from_ref(&scene));
 
         assert!(
             result.is_err(),
-            "prefetch_icons must panic (or otherwise hard-fail) when an icon cannot be \
-             resolved via disk cache or network, instead of silently continuing"
+            "prefetch_icons must hard-fail when an icon cannot be resolved via disk cache or \
+             network, instead of silently continuing. It reports a named error rather than \
+             panicking now, so a caller can decide — the studio keeps its preview alive, the \
+             render commands exit."
         );
     }
 }

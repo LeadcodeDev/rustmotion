@@ -53,7 +53,7 @@ fn encode_png_sequence_to_dir(
     let height = config.height;
 
     for view in &scenario.views {
-        prefetch_icons(&view.scenes);
+        prefetch_icons(&view.scenes)?;
     }
 
     let tasks = build_frame_tasks(scenario);
@@ -146,7 +146,7 @@ fn encode_gif_to_path(
     let fps = config.fps;
 
     for view in &scenario.views {
-        prefetch_icons(&view.scenes);
+        prefetch_icons(&view.scenes)?;
     }
 
     let tasks = build_frame_tasks(scenario);
@@ -232,7 +232,7 @@ fn encode_raw_frames(scenario: &Scenario, quiet: bool, writer: &mut dyn Write) -
     let config = &scenario.video;
 
     for view in &scenario.views {
-        prefetch_icons(&view.scenes);
+        prefetch_icons(&view.scenes)?;
     }
 
     let tasks = build_frame_tasks(scenario);

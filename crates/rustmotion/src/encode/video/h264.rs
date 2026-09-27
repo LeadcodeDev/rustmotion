@@ -56,7 +56,7 @@ fn encode_video_impl(
 
     for view in &scenario.views {
         preextract_video_frames(&view.scenes, fps);
-        prefetch_icons(&view.scenes);
+        prefetch_icons(&view.scenes)?;
     }
     for failure in analyze_scenario_audio(scenario) {
         eprintln!("rustmotion: audio-reactive: {failure} — waveform/audio_spectrum will render flat for this track.");
@@ -158,7 +158,7 @@ pub fn encode_video_incremental(
 
     for view in &scenario.views {
         preextract_video_frames(&view.scenes, fps);
-        prefetch_icons(&view.scenes);
+        prefetch_icons(&view.scenes)?;
     }
     for failure in analyze_scenario_audio(scenario) {
         eprintln!("rustmotion: audio-reactive: {failure} — waveform/audio_spectrum will render flat for this track.");

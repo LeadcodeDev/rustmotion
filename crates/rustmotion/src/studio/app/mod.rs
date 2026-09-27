@@ -108,7 +108,9 @@ pub fn spawn_scenario_warmup(shared: Shared) {
             (m.scenario.clone(), m.scenario.video.fps)
         };
         for view in &scenario.views {
-            engine::prefetch_icons(&view.scenes);
+            if let Err(icons_unresolved) = engine::prefetch_icons(&view.scenes) {
+                eprintln!("Warning: {icons_unresolved}");
+            }
             engine::preextract_video_frames(&view.scenes, fps);
         }
         let failures = rustmotion::encode::audio_analysis::analyze_scenario_audio(&scenario);

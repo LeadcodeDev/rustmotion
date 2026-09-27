@@ -67,10 +67,89 @@ pub fn icon_cache_dir() -> PathBuf {
     base.join("rustmotion").join("icons")
 }
 
-fn icon_cache_file(cache_dir: &Path, icon: &str, color: &str, width: u32, height: u32) -> PathBuf {
-    let slug = icon.replace(':', "_");
-    let hex_color = color.trim_start_matches('#').to_lowercase();
-    cache_dir.join(format!("{slug}-{hex_color}-{width}x{height}.svg"))
+fn icon_source_cache_file(cache_dir: &Path, icon: &str) -> PathBuf {
+    cache_dir.join(format!("{}.svg", icon.replace(':', "_")))
+}
+
+fn set_root_attribute(svg: &str, attribute: &str, value: &str) -> String {
+    let Some(tag_start) = svg.find("<svg") else {
+        return svg.to_string();
+    };
+    let Some(tag_len) = svg[tag_start..].find('>') else {
+        return svg.to_string();
+    };
+    let tag = &svg[tag_start..tag_start + tag_len];
+
+    let needle = format!(" {attribute}=\"");
+    let replaced = match tag.find(&needle) {
+        Some(at) => {
+            let value_start = at + needle.len();
+            match tag[value_start..].find('"') {
+                Some(value_len) => format!(
+                    "{}{}\"{}",
+                    &tag[..value_start],
+                    value,
+                    &tag[value_start + value_len..]
+                ),
+                None => tag.to_string(),
+            }
+        }
+        None => format!("<svg {attribute}=\"{value}\"{}", &tag["<svg".len()..]),
+    };
+
+    format!(
+        "{}{}{}",
+        &svg[..tag_start],
+        replaced,
+        &svg[tag_start + tag_len..]
+    )
+}
+
+fn recolour_and_resize(source: &[u8], hex_color: &str, width: u32, height: u32) -> Vec<u8> {
+    let coloured =
+        String::from_utf8_lossy(source).replace("currentColor", &format!("#{hex_color}"));
+    let sized = set_root_attribute(&coloured, "width", &width.to_string());
+    set_root_attribute(&sized, "height", &height.to_string()).into_bytes()
+}
+
+const ICON_FETCH_ATTEMPTS: u32 = 4;
+
+fn status_is_worth_retrying(error: &ureq::Error) -> bool {
+    matches!(error, ureq::Error::StatusCode(code) if *code == 429 || *code >= 500)
+}
+
+fn fetch_icon_source(icon: &str, prefix: &str, name: &str) -> Result<Vec<u8>> {
+    let url = format!("https://api.iconify.design/{prefix}/{name}.svg");
+    let mut backoff = Duration::from_millis(250);
+    let mut last_reason = String::new();
+
+    for attempt in 0..ICON_FETCH_ATTEMPTS {
+        match http_agent().get(&url).call() {
+            Ok(response) => {
+                return response
+                    .into_body()
+                    .read_to_vec()
+                    .map_err(|e| RustmotionError::IconFetch {
+                        icon: icon.to_string(),
+                        reason: e.to_string(),
+                    })
+            }
+            Err(e) => {
+                last_reason = e.to_string();
+                let is_last_attempt = attempt + 1 == ICON_FETCH_ATTEMPTS;
+                if !status_is_worth_retrying(&e) || is_last_attempt {
+                    break;
+                }
+                std::thread::sleep(backoff);
+                backoff *= 2;
+            }
+        }
+    }
+
+    Err(RustmotionError::IconFetch {
+        icon: icon.to_string(),
+        reason: last_reason,
+    })
 }
 
 pub fn fetch_icon_svg(icon: &str, color: &str, width: u32, height: u32) -> Result<Vec<u8>> {
@@ -93,37 +172,21 @@ pub fn fetch_icon_svg_in(
     let width = width.max(1);
     let height = height.max(1);
 
-    let cache_file = icon_cache_file(cache_dir, icon, color, width, height);
-    if let Ok(data) = std::fs::read(&cache_file) {
-        if !data.is_empty() {
-            return Ok(data);
+    let hex_color = hex_color.to_lowercase();
+    let source_file = icon_source_cache_file(cache_dir, icon);
+
+    let source = match std::fs::read(&source_file) {
+        Ok(data) if !data.is_empty() => data,
+        _ => {
+            let fetched = fetch_icon_source(icon, prefix, name)?;
+            if std::fs::create_dir_all(cache_dir).is_ok() {
+                let _ = std::fs::write(&source_file, &fetched);
+            }
+            fetched
         }
-    }
+    };
 
-    let url = format!(
-        "https://api.iconify.design/{}/{}.svg?color=%23{}&width={}&height={}",
-        prefix, name, hex_color, width, height
-    );
-    let response = http_agent()
-        .get(&url)
-        .call()
-        .map_err(|e| RustmotionError::IconFetch {
-            icon: icon.to_string(),
-            reason: e.to_string(),
-        })?;
-    let body = response
-        .into_body()
-        .read_to_vec()
-        .map_err(|e| RustmotionError::IconFetch {
-            icon: icon.to_string(),
-            reason: e.to_string(),
-        })?;
-
-    if std::fs::create_dir_all(cache_dir).is_ok() {
-        let _ = std::fs::write(&cache_file, &body);
-    }
-
-    Ok(body)
+    Ok(recolour_and_resize(&source, &hex_color, width, height))
 }
 
 static VIDEO_FRAME_CACHE: OnceLock<VideoFrameCacheMap> = OnceLock::new();
@@ -419,21 +482,34 @@ mod tests {
         let (w, h) = (48, 48);
         let svg_bytes = b"<svg>fake cached icon for the test suite</svg>".to_vec();
 
-        let cache_file = icon_cache_file(&cache_dir, icon, color, w, h);
+        let cache_file = icon_source_cache_file(&cache_dir, icon);
+        std::fs::create_dir_all(&cache_dir).unwrap();
         std::fs::write(&cache_file, &svg_bytes).unwrap();
 
         let result = fetch_icon_svg_in(icon, color, w, h, &cache_dir).expect("cache hit");
-        assert_eq!(result, svg_bytes);
+        let result = String::from_utf8(result).unwrap();
+        assert!(
+            result.contains("fake cached icon for the test suite"),
+            "the cached source must be what is served — the network was never reached: {result}"
+        );
+        assert!(
+            result.contains(r#"width="48""#),
+            "and it is resized on the way out, which is what lets one cached source serve \
+             every colour and size: {result}"
+        );
     }
 
     #[test]
-    fn disk_cache_is_keyed_by_icon_color_and_size() {
+    fn disk_cache_is_keyed_by_the_icon_alone() {
         let cache_dir = unique_temp_dir("cache-keying");
-        let a = icon_cache_file(&cache_dir, "lucide:home", "#FFFFFF", 80, 80);
-        let b = icon_cache_file(&cache_dir, "lucide:home", "#000000", 80, 80);
-        let c = icon_cache_file(&cache_dir, "lucide:home", "#FFFFFF", 40, 40);
-        assert_ne!(a, b, "different colors must not share a cache file");
-        assert_ne!(a, c, "different sizes must not share a cache file");
+        assert_eq!(
+            icon_source_cache_file(&cache_dir, "lucide:home"),
+            icon_source_cache_file(&cache_dir, "lucide:home"),
+        );
+        assert_ne!(
+            icon_source_cache_file(&cache_dir, "lucide:home"),
+            icon_source_cache_file(&cache_dir, "lucide:check"),
+        );
     }
 
     #[test]
@@ -457,7 +533,7 @@ mod tests {
         let first = fetch_icon_svg_in(icon, color, w, h, &cache_dir).expect("live fetch");
         assert!(!first.is_empty());
 
-        let cache_file = icon_cache_file(&cache_dir, icon, color, w, h);
+        let cache_file = icon_source_cache_file(&cache_dir, icon);
         assert!(
             cache_file.exists(),
             "a successful live fetch must be persisted to disk"
@@ -645,5 +721,80 @@ mod tests {
     #[test]
     fn ffprobe_available_does_not_panic_either_way() {
         let _ = ffprobe_available();
+    }
+}
+
+#[cfg(test)]
+mod icon_source_cache_tests {
+    use super::*;
+
+    const LUCIDE_CHECK: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>"#;
+
+    #[test]
+    fn the_disk_entry_is_named_by_the_icon_alone() {
+        let dir = Path::new("/tmp/icons");
+        assert_eq!(
+            icon_source_cache_file(dir, "lucide:check"),
+            dir.join("lucide_check.svg"),
+            "one entry per icon: naming it by colour and size is what filled a cache with 20 \
+             copies of the same glyph and made a colour change hit the network"
+        );
+    }
+
+    #[test]
+    fn recolouring_substitutes_current_color_everywhere() {
+        let out = recolour_and_resize(LUCIDE_CHECK.as_bytes(), "2a2f6b", 84, 84);
+        let out = String::from_utf8(out).unwrap();
+        assert!(!out.contains("currentColor"));
+        assert!(out.contains(r##"stroke="#2a2f6b""##), "got {out}");
+    }
+
+    #[test]
+    fn resizing_rewrites_the_root_size_and_leaves_the_viewbox_alone() {
+        let out = recolour_and_resize(LUCIDE_CHECK.as_bytes(), "ffffff", 84, 96);
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains(r#"width="84""#), "got {out}");
+        assert!(out.contains(r#"height="96""#), "got {out}");
+        assert!(
+            out.contains(r#"viewBox="0 0 24 24""#),
+            "the viewBox is the glyph's own coordinate space and must survive a resize: {out}"
+        );
+    }
+
+    #[test]
+    fn a_root_without_a_size_gains_one() {
+        let bare = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"></svg>"#;
+        let out =
+            String::from_utf8(recolour_and_resize(bare.as_bytes(), "000000", 32, 32)).unwrap();
+        assert!(
+            out.contains(r#"width="32""#) && out.contains(r#"height="32""#),
+            "got {out}"
+        );
+    }
+
+    #[test]
+    fn two_colours_of_one_icon_share_a_single_source_entry() {
+        let dir = Path::new("/tmp/icons");
+        assert_eq!(
+            icon_source_cache_file(dir, "lucide:sparkles"),
+            icon_source_cache_file(dir, "lucide:sparkles")
+        );
+        let red = recolour_and_resize(LUCIDE_CHECK.as_bytes(), "ff0000", 24, 24);
+        let blue = recolour_and_resize(LUCIDE_CHECK.as_bytes(), "0000ff", 24, 24);
+        assert_ne!(
+            red, blue,
+            "the same source still produces different renders"
+        );
+    }
+
+    #[test]
+    fn only_rate_limits_and_server_faults_are_retried() {
+        assert!(status_is_worth_retrying(&ureq::Error::StatusCode(429)));
+        assert!(status_is_worth_retrying(&ureq::Error::StatusCode(503)));
+        assert!(
+            !status_is_worth_retrying(&ureq::Error::StatusCode(404)),
+            "a missing icon is not going to appear on the fourth try — retrying it would just \
+             make a typo take four times as long to report"
+        );
     }
 }
