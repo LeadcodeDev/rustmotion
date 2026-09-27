@@ -238,6 +238,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/chromatic-aberration.md](rules/chromatic-aberration.md) - Per-element red/cyan fringe on arrival: `chromatic_aberration`'s `amount`, how its curve differs from `chromatic_wipe`'s, and the `amount`-not-`amplitude` trap
 - [rules/material-and-light.md](rules/material-and-light.md) - Lit surfaces: `style.material`'s three presets, the scene-wide `light` that makes them agree, and why the material follows the box and not a `shape`'s own geometry
 - [rules/depth-of-field.md](rules/depth-of-field.md) - Defocus by plane: `camera.focus`/`aperture` on the `style.depth` scale, rack focus by keyframe, and why nothing moves without distinct depths
+- [rules/text-component-parity.md](rules/text-component-parity.md) - Where `text`, `rich_text` and `gradient_text` disagreed: colour alpha, literal whitespace and baseline, the CSS angle convention and explicit `stops`
 - [rules/geometry-safety.md](rules/geometry-safety.md) - Keep all content inside the viewport: `white-space`, `auto_scroll`, `overflow` semantics + violation kinds
 - [rules/clip-path.md](rules/clip-path.md) - Non-rectangular masking: the six `clip-path` shapes, how their percentages resolve, and why `node-path` is not one of them yet
 - [rules/overlapping-scenes.md](rules/overlapping-scenes.md) - Make an element outlive a cut: overlapping `at` windows composite instead of replacing, who supplies the background, and why `snap` never creates an overlap
