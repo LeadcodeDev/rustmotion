@@ -3,22 +3,20 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, Paint, PaintStyle, Rect};
 
-use rustmotion_core::engine::animator::ease;
-
 use rustmotion_core::css::style::{
     FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
     TextAlign as CssTextAlign, WhiteSpace as CssWhiteSpace,
 };
 use rustmotion_core::css::CssStyle;
-use rustmotion_core::engine::animator::{AnimatedProperties, ResolvedCharAnimation};
+use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
     typeface_with_fallback, wrap_text_with_tracking,
 };
 use rustmotion_core::schema::{
-    CaretConfig, CaretShape, CharAnimPreset, FontStyleType, FontWeight, Stroke, TextAlign,
-    TextAnimGranularity, TextBackground, TextShadow, TextState, TextSwapConfig, TimelineStep,
+    CaretConfig, CaretShape, FontStyleType, FontWeight, Stroke, TextAlign, TextBackground,
+    TextShadow, TextState, TextSwapConfig, TimelineStep,
 };
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
@@ -51,6 +49,10 @@ pub struct Text {
     /// How the crossing between `states` is animated. See [`TextSwapConfig`].
     #[serde(default)]
     pub swap: Option<TextSwapConfig>,
+    /// A letter-by-letter transition between two `states`, instead of the
+    /// whole-label rise-and-blur `swap` performs. See [`TextMorphConfig`].
+    #[serde(default)]
+    pub morph: Option<TextMorphConfig>,
 }
 
 rustmotion_core::impl_traits!(Text {
@@ -59,340 +61,56 @@ rustmotion_core::impl_traits!(Text {
     Styled => style,
 });
 
-fn unit_progress(cfg: &ResolvedCharAnimation, idx: usize, time: f64) -> f32 {
-    let unit_start = cfg.unit_start(idx);
-    let unit_end = unit_start + cfg.duration as f64;
-    let raw_t = if time <= unit_start {
-        0.0
-    } else if time >= unit_end {
-        1.0
-    } else {
-        (time - unit_start) / (unit_end - unit_start)
-    };
-    ease(raw_t, &cfg.easing) as f32
+/// How unmatched glyphs behave during a [`TextMorphConfig`] transition —
+/// characters present in the incoming label with no identical counterpart in
+/// the outgoing one.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum TextMorphUnmatched {
+    /// The unmatched glyph simply fades in (or out) at its resting position.
+    #[default]
+    Fade,
+    /// The unmatched glyph cycles through deterministic random characters
+    /// before settling on the real one, instead of just fading in blank.
+    Scramble,
 }
 
-fn ink_paint(cfg: &ResolvedCharAnimation, paint: &Paint, t: f32) -> Option<Paint> {
-    let from = cfg.ink_from.as_deref()?;
-    let start = paint_from_hex(from).color();
-    let end = paint.color();
-    let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t.clamp(0.0, 1.0)) as u8;
-    let mut p = paint.clone();
-    p.set_color(skia_safe::Color::from_argb(
-        end.a(),
-        lerp(start.r(), end.r()),
-        lerp(start.g(), end.g()),
-        lerp(start.b(), end.b()),
-    ));
-    Some(p)
+/// A letter-by-letter morph between two `states` labels: identical
+/// characters are paired left to right and slide from their old position to
+/// their new one; characters with no pair fade (or, with `unmatched:
+/// "scramble"`, cycle through placeholder glyphs before settling).
+///
+/// This is a different crossing than [`TextSwapConfig`]: `swap` treats each
+/// label as one rigid block (rise + blur); `morph` treats it as a bag of
+/// glyphs that rearranges itself. Setting both is not meaningful — `morph`
+/// takes over the transition window whenever it applies, `swap` is only
+/// consulted outside it.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TextMorphConfig {
+    /// How long the morph takes (seconds).
+    #[serde(default = "default_morph_duration")]
+    pub duration: f64,
+    /// Behaviour of glyphs that have no identical counterpart in the other label.
+    #[serde(default)]
+    pub unmatched: TextMorphUnmatched,
+    /// Seed for the deterministic scramble sequence. Same seed, same scramble.
+    #[serde(default)]
+    pub seed: u32,
 }
 
-fn apply_text_anim_preset(
-    canvas: &Canvas,
-    text: &str,
-    font: &Font,
-    emoji_font: &Option<Font>,
-    paint: &Paint,
-    cursor_x: f32,
-    line_y: f32,
-    unit_width: f32,
-    letter_spacing: f32,
-    cfg: &ResolvedCharAnimation,
-    t: f32,
-    time: f64,
-    unit_idx: usize,
-    font_size: f32,
-) {
-    let preset = &cfg.preset;
-    let overshoot = cfg.overshoot;
-    let blur_radius = cfg.blur;
-    let center_x = cursor_x + unit_width / 2.0;
-    let center_y = line_y;
-
-    let inked = ink_paint(cfg, paint, t);
-    let paint = inked.as_ref().unwrap_or(paint);
-    if let Some(from) = cfg.scale_from {
-        if !matches!(preset, CharAnimPreset::ScaleIn | CharAnimPreset::Bounce) {
-            let s = from + (1.0 - from) * t.clamp(0.0, 1.0);
-            canvas.translate((center_x, center_y));
-            canvas.scale((s, s));
-            canvas.translate((-center_x, -center_y));
-        }
-    }
-
-    match preset {
-        CharAnimPreset::ScaleIn => {
-            let scale = if overshoot > 0.001 {
-                if t < 0.7 {
-                    let p = t / 0.7;
-                    p * (1.0 + overshoot)
-                } else {
-                    let p = (t - 0.7) / 0.3;
-                    (1.0 + overshoot) - overshoot * p
-                }
-            } else {
-                t
-            };
-            if scale < 0.001 {
-                return;
-            }
-            canvas.translate((center_x, center_y));
-            canvas.scale((scale, scale));
-            canvas.translate((-center_x, -center_y));
-            draw_text_with_fallback(
-                canvas,
-                text,
-                font,
-                emoji_font,
-                letter_spacing,
-                cursor_x,
-                line_y,
-                paint,
-            );
-        }
-        CharAnimPreset::FadeIn => {
-            let mut p = paint.clone();
-            p.set_alpha_f(t * paint.alpha_f());
-            draw_text_with_fallback(
-                canvas,
-                text,
-                font,
-                emoji_font,
-                letter_spacing,
-                cursor_x,
-                line_y,
-                &p,
-            );
-        }
-        CharAnimPreset::Wave => {
-            let wave_offset =
-                (time as f32 * 4.0 + unit_idx as f32 * 0.5).sin() * 8.0 * (1.0 - t * 0.5);
-            let mut p = paint.clone();
-            p.set_alpha_f(t.min(1.0) * paint.alpha_f());
-            draw_text_with_fallback(
-                canvas,
-                text,
-                font,
-                emoji_font,
-                letter_spacing,
-                cursor_x,
-                line_y + wave_offset,
-                &p,
-            );
-        }
-        CharAnimPreset::Bounce => {
-            let peak = 1.0 + overshoot.max(0.3);
-            let scale = if t < 0.5 {
-                t * 2.0 * peak
-            } else {
-                peak - (peak - 1.0) * ((t - 0.5) * 2.0)
-            };
-            let scale = scale.max(0.001);
-            canvas.translate((center_x, center_y));
-            canvas.scale((scale, scale));
-            canvas.translate((-center_x, -center_y));
-            draw_text_with_fallback(
-                canvas,
-                text,
-                font,
-                emoji_font,
-                letter_spacing,
-                cursor_x,
-                line_y,
-                paint,
-            );
-        }
-        CharAnimPreset::RotateIn => {
-            let angle = (1.0 - t) * -90.0;
-            let mut p = paint.clone();
-            p.set_alpha_f(t * paint.alpha_f());
-            canvas.translate((center_x, center_y));
-            canvas.rotate(angle, None);
-            canvas.translate((-center_x, -center_y));
-            draw_text_with_fallback(
-                canvas,
-                text,
-                font,
-                emoji_font,
-                letter_spacing,
-                cursor_x,
-                line_y,
-                &p,
-            );
-        }
-        CharAnimPreset::SlideUp => {
-            let travel = (1.0 - t) * font_size * 0.8 * cfg.distance;
-            let (dx, dy) = cfg.direction.offset(travel);
-            let mut p = paint.clone();
-            p.set_alpha_f(t * paint.alpha_f());
-            draw_text_with_fallback(
-                canvas,
-                text,
-                font,
-                emoji_font,
-                letter_spacing,
-                cursor_x + dx,
-                line_y + dy,
-                &p,
-            );
-        }
-        CharAnimPreset::BlurIn => {
-            let tt = t.clamp(0.0, 1.0);
-            let travel = (1.0 - tt) * font_size * 0.12 * cfg.distance;
-            let (dx, dy) = cfg.direction.offset(travel);
-            let sigma = ((1.0 - tt) * blur_radius).max(0.0);
-            let mut p = paint.clone();
-            p.set_alpha_f(tt * paint.alpha_f());
-            if sigma > 0.05 {
-                if let Some(filter) = skia_safe::image_filters::blur(
-                    (sigma, sigma),
-                    skia_safe::TileMode::Clamp,
-                    None,
-                    None,
-                ) {
-                    p.set_image_filter(filter);
-                }
-            }
-            draw_text_with_fallback(
-                canvas,
-                text,
-                font,
-                emoji_font,
-                letter_spacing,
-                cursor_x + dx,
-                line_y + dy,
-                &p,
-            );
+impl Default for TextMorphConfig {
+    fn default() -> Self {
+        Self {
+            duration: default_morph_duration(),
+            unmatched: TextMorphUnmatched::default(),
+            seed: 0,
         }
     }
 }
 
-fn render_char_animation(
-    canvas: &Canvas,
-    _content: &str,
-    font: &Font,
-    emoji_font: &Option<Font>,
-    paint: &Paint,
-    letter_spacing: f32,
-    align: TextAlign,
-    align_width: f32,
-    line_height_val: f32,
-    baseline_offset: f32,
-    lines: &[String],
-    char_anim: &ResolvedCharAnimation,
-    time: f64,
-) {
-    let is_word_mode = matches!(char_anim.granularity, TextAnimGranularity::Word);
-    let mut global_unit_idx = 0usize;
-
-    for (line_idx, line) in lines.iter().enumerate() {
-        if line.is_empty() {
-            continue;
-        }
-
-        let advance_width = measure_text_with_fallback(line, font, emoji_font, letter_spacing);
-        let line_x = match align {
-            TextAlign::Left => 0.0,
-            TextAlign::Center => (align_width - advance_width) / 2.0,
-            TextAlign::Right => align_width - advance_width,
-        };
-        let line_y = line_idx as f32 * line_height_val + baseline_offset;
-
-        if is_word_mode {
-            let mut cursor_x = line_x;
-            let mut chars = line.chars().peekable();
-
-            while chars.peek().is_some() {
-                let mut spaces = String::new();
-                while let Some(&c) = chars.peek() {
-                    if c.is_whitespace() {
-                        spaces.push(c);
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                if !spaces.is_empty() {
-                    let space_w =
-                        measure_text_with_fallback(&spaces, font, emoji_font, letter_spacing);
-                    draw_text_with_fallback(
-                        canvas, &spaces, font, emoji_font, 0.0, cursor_x, line_y, paint,
-                    );
-                    cursor_x += space_w;
-                }
-
-                let mut word = String::new();
-                while let Some(&c) = chars.peek() {
-                    if c.is_whitespace() {
-                        break;
-                    }
-                    word.push(c);
-                    chars.next();
-                }
-                if word.is_empty() {
-                    continue;
-                }
-
-                let word_width =
-                    measure_text_with_fallback(&word, font, emoji_font, letter_spacing);
-
-                let t = unit_progress(char_anim, global_unit_idx, time);
-
-                canvas.save();
-                apply_text_anim_preset(
-                    canvas,
-                    &word,
-                    font,
-                    emoji_font,
-                    paint,
-                    cursor_x,
-                    line_y,
-                    word_width,
-                    letter_spacing,
-                    char_anim,
-                    t,
-                    time,
-                    global_unit_idx,
-                    font.size(),
-                );
-                canvas.restore();
-
-                cursor_x += word_width;
-                global_unit_idx += 1;
-            }
-        } else {
-            let mut cursor_x = line_x;
-            for ch in line.chars() {
-                let ch_str = ch.to_string();
-                let (ch_width, _) = font.measure_str(&ch_str, None);
-                let ch_width = ch_width + letter_spacing;
-
-                let t = unit_progress(char_anim, global_unit_idx, time);
-
-                canvas.save();
-                apply_text_anim_preset(
-                    canvas,
-                    &ch_str,
-                    font,
-                    emoji_font,
-                    paint,
-                    cursor_x,
-                    line_y,
-                    ch_width,
-                    0.0,
-                    char_anim,
-                    t,
-                    time,
-                    global_unit_idx,
-                    font.size(),
-                );
-                canvas.restore();
-
-                cursor_x += ch_width;
-                global_unit_idx += 1;
-            }
-        }
-    }
+fn default_morph_duration() -> f64 {
+    0.6
 }
 
 impl Text {
@@ -429,6 +147,30 @@ impl Text {
             progress: ((time - state.at) / cfg.duration) as f32,
             distance: cfg.distance,
             blur: cfg.blur,
+        })
+    }
+
+    fn active_morph(&self, time: f64) -> Option<ActiveMorph> {
+        let cfg = self.morph.as_ref()?;
+        if cfg.duration <= 0.0 {
+            return None;
+        }
+        let (idx, state) = self
+            .states
+            .iter()
+            .enumerate()
+            .find(|(_, s)| time >= s.at && time < s.at + cfg.duration)?;
+        let from = if idx == 0 {
+            self.content.clone()
+        } else {
+            self.states[idx - 1].content.clone()
+        };
+        Some(ActiveMorph {
+            from,
+            to: state.content.clone(),
+            progress: ((time - state.at) / cfg.duration) as f32,
+            unmatched: cfg.unmatched,
+            seed: cfg.seed,
         })
     }
 
@@ -591,9 +333,8 @@ impl Text {
         };
 
         if let Some(ref resolved) = props.char_animation {
-            render_char_animation(
+            crate::intrinsic::render_char_animation(
                 canvas,
-                &content,
                 &font,
                 &emoji_font,
                 &paint,
@@ -604,6 +345,24 @@ impl Text {
                 baseline_offset,
                 &lines,
                 resolved,
+                time,
+            );
+            return Ok(());
+        }
+
+        if let Some(morph) = self.active_morph(time) {
+            paint_morph(
+                canvas,
+                &morph,
+                &font,
+                &emoji_font,
+                &paint,
+                letter_spacing,
+                wrap_width,
+                align,
+                align_width,
+                line_height_val,
+                baseline_offset,
                 time,
             );
             return Ok(());
@@ -788,6 +547,211 @@ impl ActiveSwap {
     }
 }
 
+struct ActiveMorph {
+    from: String,
+    to: String,
+    progress: f32,
+    unmatched: TextMorphUnmatched,
+    seed: u32,
+}
+
+fn smoothstep(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn char_positions(
+    lines: &[String],
+    font: &Font,
+    emoji_font: &Option<Font>,
+    letter_spacing: f32,
+    align: &TextAlign,
+    align_width: f32,
+    line_height_val: f32,
+    baseline_offset: f32,
+) -> Vec<(f32, f32)> {
+    let mut out = Vec::new();
+    for (line_idx, line) in lines.iter().enumerate() {
+        let advance_width = measure_text_with_fallback(line, font, emoji_font, letter_spacing);
+        let line_x = match align {
+            TextAlign::Left => 0.0,
+            TextAlign::Center => (align_width - advance_width) / 2.0,
+            TextAlign::Right => align_width - advance_width,
+        };
+        let y = line_idx as f32 * line_height_val + baseline_offset;
+        let mut cursor_x = line_x;
+        for ch in line.chars() {
+            out.push((cursor_x, y));
+            let ch_str = ch.to_string();
+            let ch_width = measure_text_with_fallback(&ch_str, font, emoji_font, letter_spacing);
+            cursor_x += ch_width;
+        }
+    }
+    out
+}
+
+fn lcs_pairs(from: &[char], to: &[char]) -> Vec<(usize, usize)> {
+    let n = from.len();
+    let m = to.len();
+    let mut dp = vec![vec![0u32; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[i][j] = if from[i] == to[j] {
+                dp[i + 1][j + 1] + 1
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
+        }
+    }
+    let mut pairs = Vec::new();
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < n && j < m {
+        if from[i] == to[j] {
+            pairs.push((i, j));
+            i += 1;
+            j += 1;
+        } else if dp[i + 1][j] >= dp[i][j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    pairs
+}
+
+const SCRAMBLE_POOL: &[char] = &[
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S',
+    'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '#', '%',
+    '&', '*', '?',
+];
+
+fn scrambled_char(seed: u32, idx: usize, time: f64) -> char {
+    let bucket = (time * 20.0) as u64;
+    let mut h = (idx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (seed as u64);
+    h ^= bucket.wrapping_mul(0xD1B5_4A32_D192_ED03);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+    h ^= h >> 33;
+    let pool_idx = (h % SCRAMBLE_POOL.len() as u64) as usize;
+    SCRAMBLE_POOL[pool_idx]
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_morph(
+    canvas: &Canvas,
+    morph: &ActiveMorph,
+    font: &Font,
+    emoji_font: &Option<Font>,
+    paint: &Paint,
+    letter_spacing: f32,
+    wrap_width: Option<f32>,
+    align: TextAlign,
+    align_width: f32,
+    line_height_val: f32,
+    baseline_offset: f32,
+    time: f64,
+) {
+    let from_lines =
+        wrap_text_with_tracking(&morph.from, font, emoji_font, wrap_width, letter_spacing);
+    let to_lines = wrap_text_with_tracking(&morph.to, font, emoji_font, wrap_width, letter_spacing);
+
+    let from_positions = char_positions(
+        &from_lines,
+        font,
+        emoji_font,
+        letter_spacing,
+        &align,
+        align_width,
+        line_height_val,
+        baseline_offset,
+    );
+    let to_positions = char_positions(
+        &to_lines,
+        font,
+        emoji_font,
+        letter_spacing,
+        &align,
+        align_width,
+        line_height_val,
+        baseline_offset,
+    );
+
+    let from_chars: Vec<char> = from_lines.iter().flat_map(|l| l.chars()).collect();
+    let to_chars: Vec<char> = to_lines.iter().flat_map(|l| l.chars()).collect();
+
+    let pairs = lcs_pairs(&from_chars, &to_chars);
+    let mut matched_from = vec![false; from_chars.len()];
+    let mut matched_to = vec![false; to_chars.len()];
+    for &(i, j) in &pairs {
+        matched_from[i] = true;
+        matched_to[j] = true;
+    }
+
+    let p = smoothstep(morph.progress);
+
+    for &(i, j) in &pairs {
+        let (fx, fy) = from_positions[i];
+        let (tx, ty) = to_positions[j];
+        let x = fx + (tx - fx) * p;
+        let y = fy + (ty - fy) * p;
+        draw_text_with_fallback(
+            canvas,
+            &to_chars[j].to_string(),
+            font,
+            emoji_font,
+            0.0,
+            x,
+            y,
+            paint,
+        );
+    }
+
+    for (i, &(x, y)) in from_positions.iter().enumerate() {
+        if matched_from[i] {
+            continue;
+        }
+        let alpha = 1.0 - p;
+        if alpha <= 0.001 {
+            continue;
+        }
+        let mut ap = paint.clone();
+        ap.set_alpha_f(alpha * paint.alpha_f());
+        draw_text_with_fallback(
+            canvas,
+            &from_chars[i].to_string(),
+            font,
+            emoji_font,
+            0.0,
+            x,
+            y,
+            &ap,
+        );
+    }
+
+    for (j, &(x, y)) in to_positions.iter().enumerate() {
+        if matched_to[j] {
+            continue;
+        }
+        let alpha = p;
+        if alpha <= 0.001 {
+            continue;
+        }
+        let mut ap = paint.clone();
+        ap.set_alpha_f(alpha * paint.alpha_f());
+        let glyph = match morph.unmatched {
+            TextMorphUnmatched::Fade => to_chars[j],
+            TextMorphUnmatched::Scramble => {
+                if p < 0.7 {
+                    scrambled_char(morph.seed, j, time)
+                } else {
+                    to_chars[j]
+                }
+            }
+        };
+        draw_text_with_fallback(canvas, &glyph.to_string(), font, emoji_font, 0.0, x, y, &ap);
+    }
+}
+
 fn draw_caret(
     canvas: &Canvas,
     cfg: &CaretConfig,
@@ -851,7 +815,7 @@ mod tests {
     use rustmotion_core::css::Length;
     use rustmotion_core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
     use rustmotion_core::schema::{
-        AnimationEffect, CharAnimationTiming, EasingType, TextAnimDirection,
+        AnimationEffect, CharAnimationTiming, EasingType, TextAnimDirection, TextAnimGranularity,
     };
 
     fn make_text(content: &str, white_space: Option<CssWhiteSpace>) -> Text {
@@ -873,6 +837,7 @@ mod tests {
             caret: None,
             states: Vec::new(),
             swap: None,
+            morph: None,
         }
     }
 
@@ -991,6 +956,7 @@ mod tests {
             caret: None,
             states: Vec::new(),
             swap: None,
+            morph: None,
         };
         const W: i32 = 400;
         const H: i32 = 200;
@@ -1027,6 +993,7 @@ mod tests {
             caret: None,
             states: Vec::new(),
             swap: None,
+            morph: None,
         };
         const W: i32 = 400;
         const H: i32 = 200;
@@ -1955,6 +1922,160 @@ mod tests {
             settled > 250.0,
             "once settled the word must be the text's own white, not a tint of it \
              (mean green {settled:.1})"
+        );
+    }
+
+    fn morphing_text(from: &str, to: &str, morph: Option<TextMorphConfig>) -> Text {
+        let mut text = make_text(from, Some(CssWhiteSpace::Nowrap));
+        text.style.font_size = Some(Length::Px(90.0));
+        text.states = vec![TextState {
+            at: 1.0,
+            content: to.into(),
+        }];
+        text.morph = morph;
+        text
+    }
+
+    #[test]
+    fn lcs_pairs_matches_identical_characters_left_to_right() {
+        let from: Vec<char> = "AX".chars().collect();
+        let to: Vec<char> = "YA".chars().collect();
+        assert_eq!(
+            lcs_pairs(&from, &to),
+            vec![(0, 1)],
+            "the shared 'A' must be paired even though it moves from index 0 to index 1"
+        );
+    }
+
+    #[test]
+    fn scrambled_char_is_deterministic_and_varies_across_time() {
+        let a = scrambled_char(4, 2, 0.31);
+        let b = scrambled_char(4, 2, 0.31);
+        assert_eq!(
+            a, b,
+            "the same seed/index/time must always scramble to the same glyph"
+        );
+
+        let distinct: std::collections::HashSet<char> = (0..30)
+            .map(|i| scrambled_char(4, 2, i as f64 * 0.05))
+            .collect();
+        assert!(
+            distinct.len() > 1,
+            "the scramble must vary as time advances, not freeze on one glyph"
+        );
+    }
+
+    #[test]
+    fn morph_looks_different_from_a_hard_cut_mid_transition() {
+        let morphed = morphing_text(
+            "AX",
+            "YA",
+            Some(TextMorphConfig {
+                duration: 1.0,
+                unmatched: TextMorphUnmatched::Fade,
+                seed: 0,
+            }),
+        );
+        let cut = morphing_text("AX", "YA", None);
+
+        assert_ne!(
+            render_plain(&morphed, 1.5),
+            render_plain(&cut, 1.5),
+            "50% through the morph, the frame must differ from an immediate hard cut to the \
+             final label — the matched letter should still be travelling and the unmatched \
+             letters should still be fading, not already fully settled"
+        );
+    }
+
+    #[test]
+    fn morph_keeps_progressing_between_two_instants_in_the_window() {
+        let morphed = morphing_text(
+            "AX",
+            "YA",
+            Some(TextMorphConfig {
+                duration: 1.0,
+                unmatched: TextMorphUnmatched::Fade,
+                seed: 0,
+            }),
+        );
+
+        assert_ne!(
+            render_plain(&morphed, 1.1),
+            render_plain(&morphed, 1.9),
+            "the morph must keep changing across its window, not snap to one position and hold"
+        );
+    }
+
+    #[test]
+    fn scramble_mode_paints_a_glyph_other_than_the_target_before_settling() {
+        let seed = 3u32;
+        let idx = 0usize;
+        let visibly_faded_in_but_before_the_settle_threshold = 20..60;
+        let sample_time = visibly_faded_in_but_before_the_settle_threshold
+            .map(|i| 1.0 + i as f64 * 0.01)
+            .find(|&t| scrambled_char(seed, idx, t) != 'B')
+            .expect("at least one sampled instant must scramble to something other than 'B'");
+
+        let fade = morphing_text(
+            "A",
+            "B",
+            Some(TextMorphConfig {
+                duration: 1.0,
+                unmatched: TextMorphUnmatched::Fade,
+                seed,
+            }),
+        );
+        let scramble = morphing_text(
+            "A",
+            "B",
+            Some(TextMorphConfig {
+                duration: 1.0,
+                unmatched: TextMorphUnmatched::Scramble,
+                seed,
+            }),
+        );
+
+        const W: i32 = 400;
+        const H: i32 = 200;
+        let ctx = test_ctx();
+        let props = AnimatedProperties::default();
+
+        let render = |text: &Text| -> Vec<u8> {
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+            text.paint(surface.canvas(), W as f32, None, sample_time, &props, &ctx)
+                .expect("paint succeeds");
+            alpha_grid(&mut surface, W, H)
+        };
+
+        let fade_grid = render(&fade);
+        let scramble_grid = render(&scramble);
+
+        assert_ne!(
+            fade_grid, scramble_grid,
+            "at t={sample_time}, `unmatched: scramble` must paint a different glyph than \
+             `unmatched: fade` — scramble is supposed to cycle through placeholder characters \
+             instead of just fading the real one in"
+        );
+    }
+
+    #[test]
+    fn morph_settles_on_a_plain_cut_once_the_window_has_passed() {
+        let morphed = morphing_text(
+            "AX",
+            "YA",
+            Some(TextMorphConfig {
+                duration: 1.0,
+                unmatched: TextMorphUnmatched::Fade,
+                seed: 0,
+            }),
+        );
+        let cut = morphing_text("AX", "YA", None);
+
+        assert_eq!(
+            render_plain(&morphed, 2.0),
+            render_plain(&cut, 2.0),
+            "once the morph window has passed, the frame must match a plain cut to the final label"
         );
     }
 }
