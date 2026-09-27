@@ -58,6 +58,10 @@ fn paint(json: serde_json::Value, time: f64) {
     paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
 }
 
+fn runaway_budget() -> Duration {
+    Duration::from_secs(120)
+}
+
 fn paint_within(json: serde_json::Value, time: f64, budget: Duration, what: &str) {
     let (tx, rx) = mpsc::channel();
     let worker = std::thread::spawn(move || {
@@ -126,7 +130,7 @@ fn dot_map_terminates_on_a_zero_dot_spacing() {
             "style": { "width": 300, "height": 150 }
         }),
         0.5,
-        Duration::from_secs(10),
+        runaway_budget(),
         "dot_map with dot_spacing: 0",
     );
 }

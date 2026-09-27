@@ -236,6 +236,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/halo-shapes.md](rules/halo-shapes.md) - `halo` beyond circles: `radius_x`/`radius_y`/`rotation` for a wide thin band of light, and why the blur follows the short axis
 - [rules/zoom-blur-transition.md](rules/zoom-blur-transition.md) - The radial "tunnel" cut: `zoom_blur`'s `strength`/`origin`, why it had to be a transition and not an effect, and the pivot-coincident-edge trap
 - [rules/chromatic-aberration.md](rules/chromatic-aberration.md) - Per-element red/cyan fringe on arrival: `chromatic_aberration`'s `amount`, how its curve differs from `chromatic_wipe`'s, and the `amount`-not-`amplitude` trap
+- [rules/inflated-material.md](rules/inflated-material.md) - `material: "inflated"`: shading derived from the clipped silhouette, so each branch of a star gets its own relief — and why `bevel` must stay small relative to the shape
 - [rules/material-and-light.md](rules/material-and-light.md) - Lit surfaces: `style.material`'s three presets, the scene-wide `light` that makes them agree, and why the material follows the box and not a `shape`'s own geometry
 - [rules/depth-of-field.md](rules/depth-of-field.md) - Defocus by plane: `camera.focus`/`aperture` on the `style.depth` scale, rack focus by keyframe, and why nothing moves without distinct depths
 - [rules/text-component-parity.md](rules/text-component-parity.md) - Where `text`, `rich_text` and `gradient_text` disagreed: colour alpha, literal whitespace and baseline, the CSS angle convention and explicit `stops`

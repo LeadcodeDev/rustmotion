@@ -1491,7 +1491,119 @@ fn material_recipe(preset: MaterialPreset) -> MaterialRecipe {
             edge_alpha: 0.0,
             shade_alpha: 0.22,
         },
+        MaterialPreset::Inflated => MaterialRecipe {
+            highlight_alpha: 0.0,
+            highlight_spread: 0.0,
+            edge_alpha: 0.0,
+            shade_alpha: 0.0,
+        },
     }
+}
+
+fn silhouette_alpha_field(
+    path: &skia_safe::Path,
+    layout: &BoxLayout,
+    bevel: f32,
+) -> Option<(Vec<f32>, usize, usize)> {
+    let width = layout.width.ceil() as i32;
+    let height = layout.height.ceil() as i32;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+
+    let info = skia_safe::ImageInfo::new(
+        (width, height),
+        skia_safe::ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    let mut surface = skia_safe::surfaces::raster(&info, None, None)?;
+    let canvas = surface.canvas();
+    canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+    canvas.translate((-layout.x, -layout.y));
+
+    let mut paint = Paint::default();
+    paint.set_anti_alias(true);
+    paint.set_color(SColor::from_argb(255, 255, 255, 255));
+    paint.set_image_filter(skia_safe::image_filters::blur(
+        (bevel.max(1.0) / 2.0, bevel.max(1.0) / 2.0),
+        skia_safe::TileMode::Decal,
+        None,
+        None,
+    )?);
+    canvas.draw_path(path, &paint);
+
+    let mut buf = vec![0u8; (width * height * 4) as usize];
+    surface.read_pixels(&info, &mut buf, (width * 4) as usize, (0, 0));
+
+    let field = buf
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|px| px[3] as f32 / 255.0)
+        .collect();
+    Some((field, width as usize, height as usize))
+}
+
+fn paint_inflated_material(
+    canvas: &Canvas,
+    layout: &BoxLayout,
+    silhouette: &skia_safe::Path,
+    light: &LightDirection,
+    strength: f32,
+    bevel: f32,
+    softness: f32,
+) {
+    let Some((field, width, height)) = silhouette_alpha_field(silhouette, layout, bevel) else {
+        return;
+    };
+    let (lx, ly) = light.normalized();
+    let curvature = 1.0 + softness.clamp(0.0, 1.0) * 3.0;
+
+    let reach = ((bevel.max(1.0) * 0.25) as usize).clamp(1, 12);
+    let relief = 6.0 / reach as f32;
+
+    let mut lit = vec![0u8; width * height * 4];
+    for y in 0..height {
+        for x in 0..width {
+            let at = |ix: usize, iy: usize| field[iy * width + ix];
+            let left = at(x.saturating_sub(reach), y);
+            let right = at((x + reach).min(width - 1), y);
+            let up = at(x, y.saturating_sub(reach));
+            let down = at(x, (y + reach).min(height - 1));
+
+            let slope_x = (right - left) * relief;
+            let slope_y = (down - up) * relief;
+            let lambert = (-(slope_x * lx + slope_y * ly)).clamp(-1.0, 1.0);
+            let shaped = lambert.abs().powf(1.0 / curvature) * lambert.signum();
+            let amount = (shaped * strength).clamp(-1.0, 1.0);
+
+            let index = (y * width + x) * 4;
+            let coverage = field[y * width + x];
+            let alpha = (amount.abs() * coverage * 255.0) as u8;
+            let tone = if amount >= 0.0 {
+                (light.color.r(), light.color.g(), light.color.b())
+            } else {
+                (0, 0, 0)
+            };
+            lit[index] = (tone.0 as f32 * alpha as f32 / 255.0) as u8;
+            lit[index + 1] = (tone.1 as f32 * alpha as f32 / 255.0) as u8;
+            lit[index + 2] = (tone.2 as f32 * alpha as f32 / 255.0) as u8;
+            lit[index + 3] = alpha;
+        }
+    }
+
+    let info = skia_safe::ImageInfo::new(
+        (width as i32, height as i32),
+        skia_safe::ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    let data = skia_safe::Data::new_copy(&lit);
+    let Some(image) = skia_safe::images::raster_from_data(&info, data, width * 4) else {
+        return;
+    };
+    canvas.draw_image(&image, (layout.x, layout.y), None);
 }
 
 fn paint_material(
@@ -1517,15 +1629,34 @@ fn paint_material(
     let rrect = padding_rrect(layout, radius);
     let rect = *rrect.rect();
 
-    canvas.save();
-    match css
+    let silhouette = css
         .clip_path
         .as_ref()
         .and_then(|c| clip_path_to_skia(c, layout, ctx))
-    {
-        Some(path) => canvas.clip_path(&path, ClipOp::Intersect, true),
-        None => canvas.clip_rrect(rrect, ClipOp::Intersect, true),
-    };
+        .unwrap_or_else(|| {
+            let mut builder = PathBuilder::new();
+            builder.add_rrect(rrect, None, None);
+            builder.detach()
+        });
+
+    if material.preset() == MaterialPreset::Inflated {
+        canvas.save();
+        canvas.clip_path(&silhouette, ClipOp::Intersect, true);
+        paint_inflated_material(
+            canvas,
+            layout,
+            &silhouette,
+            light,
+            strength,
+            material.bevel(),
+            material.softness(),
+        );
+        canvas.restore();
+        return;
+    }
+
+    canvas.save();
+    canvas.clip_path(&silhouette, ClipOp::Intersect, true);
 
     let tint = light.color;
     let half_diagonal = (rect.width().powi(2) + rect.height().powi(2)).sqrt() / 2.0;
@@ -3628,6 +3759,123 @@ mod paint_order_tests {
         0.299 * buf[i] as f32 + 0.587 * buf[i + 1] as f32 + 0.114 * buf[i + 2] as f32
     }
 
+    fn star_points() -> Vec<(CLP, CLP)> {
+        (0..10)
+            .map(|i| {
+                let r = if i % 2 == 0 { 90.0f32 } else { 38.0 };
+                let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
+                (CLP::Px(100.0 + r * a.cos()), CLP::Px(100.0 + r * a.sin()))
+            })
+            .collect()
+    }
+
+    fn star_tile(material: Material) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(0.0)),
+                top: Some(CLP::Px(0.0)),
+                width: Some(CSize::Length(CLP::Px(200.0))),
+                height: Some(CSize::Length(CLP::Px(200.0))),
+                background: Some(Background::Color(CssColor::String("#7C3AED".into()))),
+                clip_path: Some(ClipPath::Polygon {
+                    points: star_points(),
+                }),
+                material: Some(material),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    /// Bright runs along one scanline: one per lit branch if the shading
+    /// follows the silhouette, one for the whole box if it does not.
+    fn bright_runs(buf: &[u8], y: usize) -> usize {
+        let mut runs = 0;
+        let mut inside = false;
+        for x in 0..400 {
+            let i = (y * 400 + x) * 4;
+            let luma =
+                0.299 * buf[i] as f32 + 0.587 * buf[i + 1] as f32 + 0.114 * buf[i + 2] as f32;
+            let bright = luma > 150.0;
+            if bright && !inside {
+                runs += 1;
+            }
+            inside = bright;
+        }
+        runs
+    }
+
+    #[test]
+    fn inflated_lights_each_branch_where_glossy_lights_the_whole_box() {
+        let glossy = render_lit(star_tile(Material::Preset(MaterialPreset::Glossy)), None);
+        let inflated = render_lit(
+            star_tile(Material::Tuned {
+                preset: MaterialPreset::Inflated,
+                intensity: 1.0,
+                bevel: 10.0,
+                softness: 0.2,
+            }),
+            None,
+        );
+
+        let scanline = 78;
+        let glossy_runs = bright_runs(&glossy, scanline);
+        let inflated_runs = bright_runs(&inflated, scanline);
+        assert!(
+            inflated_runs > glossy_runs,
+            "across a row cutting two branches, an inflated star must show more separate \
+             bright runs than a glossy one, which lights the bounding box as a single band: \
+             glossy={glossy_runs}, inflated={inflated_runs}"
+        );
+    }
+
+    #[test]
+    fn inflated_paints_nothing_outside_the_silhouette() {
+        let buf = render_lit(
+            star_tile(Material::Tuned {
+                preset: MaterialPreset::Inflated,
+                intensity: 1.0,
+                bevel: 14.0,
+                softness: 0.5,
+            }),
+            None,
+        );
+        let corner = luma_at(&buf, 6, 6);
+        assert_eq!(
+            corner, 0.0,
+            "the shading is derived from the silhouette and clipped to it — a star's \
+             bounding-box corner must stay background"
+        );
+    }
+
+    #[test]
+    fn inflated_at_zero_intensity_is_the_bare_shape() {
+        let flat = render_lit(
+            star_tile(Material::Tuned {
+                preset: MaterialPreset::Inflated,
+                intensity: 0.0,
+                bevel: 14.0,
+                softness: 0.5,
+            }),
+            None,
+        );
+        let none = {
+            let mut node = star_tile(Material::Preset(MaterialPreset::Matte));
+            node.css.material = None;
+            render_lit(node, None)
+        };
+        assert_eq!(
+            flat, none,
+            "intensity 0 must be byte-identical to declaring no material at all"
+        );
+    }
+
     #[test]
     fn a_node_without_a_material_is_untouched() {
         let plain = render_lit(material_tile(None), None);
@@ -3635,6 +3883,8 @@ mod paint_order_tests {
             material_tile(Some(Material::Tuned {
                 preset: MaterialPreset::Glossy,
                 intensity: 0.0,
+                bevel: 18.0,
+                softness: 0.6,
             })),
             None,
         );
