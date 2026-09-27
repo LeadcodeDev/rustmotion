@@ -243,6 +243,9 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/char-animation-rich-and-gradient-text.md](rules/char-animation-rich-and-gradient-text.md) - `char_*` presets on `rich_text` and `gradient_text`: stagger across span boundaries, per-span `ink_from`, and why `ink_from` is inert on a gradient
 - [rules/text-morph.md](rules/text-morph.md) - `text.morph`: matched letters travel, unmatched ones fade or scramble — how it differs from `text.states` + `swap`
 - [rules/text-component-parity.md](rules/text-component-parity.md) - Where `text`, `rich_text` and `gradient_text` disagreed: colour alpha, literal whitespace and baseline, the CSS angle convention and explicit `stops`
+- [rules/mask-transition.md](rules/mask-transition.md) - `mask` and `blob`: reveal through any silhouette, and an organic wobbling edge whose covering radius solves itself
+- [rules/feathered-wipes.md](rules/feathered-wipes.md) - `feather` and `band_color`, shared by every `wipe_*` plus `mask` and `blob`
+- [rules/shape-draw-start-and-path-morph.md](rules/shape-draw-start-and-path-morph.md) - `shape.draw_start` and `shape.path_morph` — and why they are component fields, not `style.animation` keyframe properties
 - [rules/iris-transition.md](rules/iris-transition.md) - `iris` beyond a centred circle: `origin`, `shape`, `fill`+`hold`, `ring` and `reverse`, and the pill coverage approximation
 - [rules/whip-transition.md](rules/whip-transition.md) - The whip cut: a directional slide that streaks **both** frames along its axis, unlike `zoom_blur` which streaks only the outgoing one
 - [rules/draw-progress-stroke.md](rules/draw-progress-stroke.md) - `draw_progress` at 0 paints nothing, and an `svg` draw-on matches the finished mark's stroke width, cap and join
