@@ -911,6 +911,13 @@ mod tests {
         );
     }
 
+    fn a_family_this_host_actually_has() -> Option<String> {
+        shared_svg_fontdb()
+            .faces()
+            .next()
+            .and_then(|face| face.families.first().map(|(name, _)| name.clone()))
+    }
+
     fn text_svg(font_family: &str) -> Svg {
         Svg {
             src: None,
@@ -930,7 +937,10 @@ mod tests {
 
     #[test]
     fn svg_text_with_a_system_font_is_rasterized() {
-        let svg = text_svg("Helvetica");
+        let Some(family) = a_family_this_host_actually_has() else {
+            return;
+        };
+        let svg = text_svg(&family);
         let layout = BoxLayout {
             x: 0.0,
             y: 0.0,
@@ -983,8 +993,26 @@ mod tests {
     }
 
     #[test]
+    fn a_host_with_no_font_at_all_says_so_instead_of_dropping_the_text() {
+        let svg_data = text_svg("Helvetica").data.unwrap().into_bytes();
+        let empty_db = usvg::Options::default();
+        let tree = usvg::Tree::from_data(&svg_data, &empty_db).expect("valid svg");
+
+        assert_eq!(count_svg_text_elements(&svg_data), 1);
+        assert_eq!(
+            count_resolved_text_nodes(tree.root()),
+            0,
+            "with an empty fontdb usvg drops the <text> node from the tree entirely — this \
+             is the condition the warning exists for, and the one a bare CI container is in"
+        );
+    }
+
+    #[test]
     fn a_resolvable_font_family_matches_declared_and_resolved_text_counts() {
-        let svg = text_svg("Helvetica");
+        let Some(family) = a_family_this_host_actually_has() else {
+            return;
+        };
+        let svg = text_svg(&family);
         let svg_data = svg.data.as_ref().unwrap().as_bytes().to_vec();
         let opt = svg_parse_options();
         let tree = usvg::Tree::from_data(&svg_data, &opt).expect("valid svg");
@@ -993,7 +1021,7 @@ mod tests {
         assert_eq!(
             count_resolved_text_nodes(tree.root()),
             1,
-            "Helvetica is a system font and must resolve once system fonts are loaded"
+            "a family this host actually has must resolve once system fonts are loaded"
         );
     }
 

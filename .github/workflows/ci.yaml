@@ -27,7 +27,9 @@ jobs:
         # xkbcommon-x11/wayland/xcb-cursor: required to LINK the studio (gpui).
         # clippy passes without them — it never links — so the failure only shows in tests.
         # asound: required by cpal, which rodio pulls in for preview audio
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libxkbcommon-x11-dev libwayland-dev libxcb-cursor-dev libasound2-dev
+        # fonts-dejavu-core: font *files*, not just the libraries. A bare runner has none,
+        # and usvg silently drops an <svg>'s <text> when no face resolves.
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libxkbcommon-x11-dev libwayland-dev libxcb-cursor-dev libasound2-dev fonts-dejavu-core
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable channel, 2026-09-22
         with:
           components: clippy
@@ -48,7 +50,9 @@ jobs:
         # xkbcommon-x11/wayland/xcb-cursor: required to LINK the studio (gpui).
         # clippy passes without them — it never links — so the failure only shows in tests.
         # asound: required by cpal, which rodio pulls in for preview audio
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libxkbcommon-x11-dev libwayland-dev libxcb-cursor-dev libasound2-dev
+        # fonts-dejavu-core: font *files*, not just the libraries. A bare runner has none,
+        # and usvg silently drops an <svg>'s <text> when no face resolves.
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libxkbcommon-x11-dev libwayland-dev libxcb-cursor-dev libasound2-dev fonts-dejavu-core
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable channel, 2026-09-22
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Run tests
