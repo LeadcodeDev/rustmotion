@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle};
 
 use rustmotion_core::css::style::{
-    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign,
+    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
+    TextAlign as CssTextAlign, WhiteSpace as CssWhiteSpace,
 };
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -136,6 +137,7 @@ pub struct RichTextLayout {
     pub max_width: f32,
     pub line_height: f32,
     pub max_ascent: f32,
+    pub max_descent: f32,
 }
 
 impl RichText {
@@ -187,31 +189,52 @@ impl RichText {
             text: String,
             space_before: bool,
         }
+        let literal_whitespace = matches!(
+            style.white_space,
+            Some(CssWhiteSpace::Nowrap | CssWhiteSpace::Pre)
+        );
         let mut tokens: Vec<Tok> = Vec::new();
-        let mut prev_trailing_ws = true;
-        for (span_idx, text) in texts.iter().enumerate() {
-            if span_fonts.get(span_idx).and_then(|f| f.as_ref()).is_none() || text.is_empty() {
-                continue;
-            }
-            let starts_ws = text.chars().next().is_some_and(char::is_whitespace);
-            for (wi, w) in text.split_whitespace().enumerate() {
-                let space_before = if tokens.is_empty() {
-                    false
-                } else if wi > 0 {
-                    true
-                } else {
-                    prev_trailing_ws || starts_ws
-                };
+        if literal_whitespace {
+            for (span_idx, text) in texts.iter().enumerate() {
+                if span_fonts.get(span_idx).and_then(|f| f.as_ref()).is_none() || text.is_empty() {
+                    continue;
+                }
                 tokens.push(Tok {
                     span_idx,
-                    text: w.to_string(),
-                    space_before,
+                    text: text.clone(),
+                    space_before: false,
                 });
             }
-            prev_trailing_ws = text.chars().last().is_none_or(char::is_whitespace);
+        } else {
+            let mut prev_trailing_ws = true;
+            for (span_idx, text) in texts.iter().enumerate() {
+                if span_fonts.get(span_idx).and_then(|f| f.as_ref()).is_none() || text.is_empty() {
+                    continue;
+                }
+                let starts_ws = text.chars().next().is_some_and(char::is_whitespace);
+                for (wi, w) in text.split_whitespace().enumerate() {
+                    let space_before = if tokens.is_empty() {
+                        false
+                    } else if wi > 0 {
+                        true
+                    } else {
+                        prev_trailing_ws || starts_ws
+                    };
+                    tokens.push(Tok {
+                        span_idx,
+                        text: w.to_string(),
+                        space_before,
+                    });
+                }
+                prev_trailing_ws = text.chars().last().is_none_or(char::is_whitespace);
+            }
         }
 
-        let effective_wrap = wrap_width.unwrap_or(f32::INFINITY);
+        let effective_wrap = if literal_whitespace {
+            f32::INFINITY
+        } else {
+            wrap_width.unwrap_or(f32::INFINITY)
+        };
         let mut lines: Vec<RichTextLine> = vec![RichTextLine {
             tokens: Vec::new(),
             width: 0.0,
@@ -268,12 +291,21 @@ impl RichText {
                 -m.ascent
             })
             .fold(0.0f32, f32::max);
+        let max_descent = span_fonts
+            .iter()
+            .flatten()
+            .map(|sf| {
+                let (_, m) = sf.font.metrics();
+                m.descent
+            })
+            .fold(0.0f32, f32::max);
 
         RichTextLayout {
             lines,
             max_width,
             line_height: line_height_val,
             max_ascent,
+            max_descent,
         }
     }
 
@@ -326,7 +358,7 @@ impl RichText {
             layout.max_width
         };
 
-        let baseline_offset = (layout.line_height + layout.max_ascent) / 2.0;
+        let baseline_offset = (layout.line_height + layout.max_ascent - layout.max_descent) / 2.0;
 
         for (line_idx, line) in layout.lines.iter().enumerate() {
             let line_x_offset = match align {
@@ -469,5 +501,194 @@ mod tests {
         let layout = RichText::compute_layout(&spans, &s, 1920.0, 1080.0, None, -1.0);
         assert_eq!(layout.lines.len(), 1);
         assert_eq!(layout.max_width, 0.0);
+    }
+
+    #[test]
+    fn white_space_pre_keeps_leading_spaces_as_a_single_literal_token() {
+        let spans = vec![span("    AB")];
+        let mut s = style(20.0);
+        s.white_space = Some(CssWhiteSpace::Pre);
+        let layout = RichText::compute_layout(&spans, &s, 1920.0, 1080.0, Some(80.0), -1.0);
+
+        assert_eq!(layout.lines.len(), 1, "pre must not wrap onto extra lines");
+        let tokens = &layout.lines[0].tokens;
+        assert_eq!(
+            tokens.len(),
+            1,
+            "pre must not split the span into words, losing the run of spaces"
+        );
+        assert_eq!(
+            tokens[0].text, "    AB",
+            "white-space: pre must keep the leading spaces verbatim"
+        );
+    }
+
+    fn alpha_grid(surface: &mut skia_safe::Surface, width: i32, height: i32) -> Vec<u8> {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (width, height),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (width * height * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (width * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        (0..(width * height) as usize)
+            .map(|i| buf[i * 4 + 3])
+            .collect()
+    }
+
+    fn min_ink_x(grid: &[u8], surface_width: i32, height: i32) -> Option<i32> {
+        for x in 0..surface_width {
+            for y in 0..height {
+                if grid[(y * surface_width + x) as usize] > 0 {
+                    return Some(x);
+                }
+            }
+        }
+        None
+    }
+
+    fn min_ink_y(grid: &[u8], surface_width: i32, height: i32) -> Option<i32> {
+        for y in 0..height {
+            for x in 0..surface_width {
+                if grid[(y * surface_width + x) as usize] > 0 {
+                    return Some(y);
+                }
+            }
+        }
+        None
+    }
+
+    fn test_ctx() -> PaintCtx {
+        PaintCtx {
+            time: 0.0,
+            scenario_time: 0.0,
+            scene_duration: 1.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 900,
+            video_height: 400,
+            stagger_offset: 0.0,
+        }
+    }
+
+    #[test]
+    fn white_space_pre_preserves_leading_spaces_at_the_pixel_level() {
+        let plain = RichText {
+            spans: vec![span("AB")],
+            max_width: None,
+            timing: Default::default(),
+            style: style(60.0),
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        let padded = RichText {
+            spans: vec![span("    AB")],
+            max_width: None,
+            timing: Default::default(),
+            style: CssStyle {
+                white_space: Some(CssWhiteSpace::Pre),
+                ..style(60.0)
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        };
+
+        const W: i32 = 400;
+        const H: i32 = 150;
+        let ctx = test_ctx();
+        let props = AnimatedProperties::default();
+
+        let plain_x = {
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+            plain.paint(surface.canvas(), W as f32, &props, &ctx);
+            let grid = alpha_grid(&mut surface, W, H);
+            min_ink_x(&grid, W, H).expect("plain text paints")
+        };
+        let padded_x = {
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+            padded.paint(surface.canvas(), W as f32, &props, &ctx);
+            let grid = alpha_grid(&mut surface, W, H);
+            min_ink_x(&grid, W, H).expect("padded text paints")
+        };
+
+        assert!(
+            padded_x > plain_x + 20,
+            "white-space: pre must preserve the 4 leading spaces, shifting first ink right \
+             (plain first ink at {plain_x}, padded first ink at {padded_x})"
+        );
+    }
+
+    #[test]
+    fn baseline_offset_matches_the_text_components_formula() {
+        let content = "Hamburgefonts";
+        let font_px = 72.0;
+        let s = style(font_px);
+        let rt = RichText {
+            spans: vec![span(content)],
+            max_width: None,
+            timing: Default::default(),
+            style: s.clone(),
+            timeline: Vec::new(),
+            stagger: None,
+        };
+
+        const W: i32 = 900;
+        const H: i32 = 200;
+        let ctx = test_ctx();
+        let props = AnimatedProperties::default();
+
+        let rich_text_top = {
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+            rt.paint(surface.canvas(), W as f32, &props, &ctx);
+            let grid = alpha_grid(&mut surface, W, H);
+            min_ink_y(&grid, W, H).expect("rich_text must paint ink")
+        };
+
+        let typeface =
+            typeface_with_fallback("Inter", FontStyle::default()).expect("typeface resolves");
+        let font = Font::from_typeface(typeface, font_px);
+        let (_, m) = font.metrics();
+        let ascent = -m.ascent;
+        let descent = m.descent;
+        let base_ctx = crate::intrinsic::font_size_ctx(1920.0, 1080.0, 0.0);
+        let (_, _, line_height) = s.typography_px_ctx(&base_ctx, 48.0);
+        let expected_baseline = (line_height + ascent - descent) / 2.0;
+
+        let reference_top = {
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+            let paint = paint_from_hex("#FFFFFF");
+            draw_text_with_fallback(
+                surface.canvas(),
+                content,
+                &font,
+                &None,
+                0.0,
+                0.0,
+                expected_baseline,
+                &paint,
+            );
+            let grid = alpha_grid(&mut surface, W, H);
+            min_ink_y(&grid, W, H).expect("reference draw must paint ink")
+        };
+
+        assert!(
+            (rich_text_top - reference_top).abs() <= 1,
+            "rich_text's baseline must be computed as (line_height + ascent - descent) / 2, the \
+             same formula text.rs uses — got top {rich_text_top}, expected {reference_top} \
+             (formula gave baseline {expected_baseline})"
+        );
     }
 }
