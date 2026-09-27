@@ -247,6 +247,8 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/svg-text-fonts.md](rules/svg-text-fonts.md) - Why `<text>` inside an `svg` needs a resolvable font face, and what happens when the host has none
 - [rules/vhs-tear.md](rules/vhs-tear.md) - The `vhs` scene effect: bands slid sideways, noise, scanlines and a travelling tracking line — bounded by `at`/`duration` because it is a beat, not a filter
 - [rules/rich-text-pills.md](rules/rich-text-pills.md) - Pill spans in `rich_text`: padding that moves the following span, `box-decoration-break: clone` on a wrap, and rotation that turns the box without touching layout
+- [rules/motion-blur-and-trail.md](rules/motion-blur-and-trail.md) - `motion_blur` and `trail`: ghosts never take a flex slot, they carry their node's children, and `mode: "smear"` replaces them with a displacement blur
+- [rules/directional-blur.md](rules/directional-blur.md) - Blur on one axis: `radius-x`/`radius-y`, the `directional-blur` filter, and the animatable `blur_x`/`blur_y`
 - [rules/geometry-safety.md](rules/geometry-safety.md) - Keep all content inside the viewport: `white-space`, `auto_scroll`, `overflow` semantics + violation kinds
 - [rules/border-style.md](rules/border-style.md) - `dashed`, `dotted` and `double` borders, their cadence formulas, and animating `border-radius` by keyframe
 - [rules/clip-path-morph.md](rules/clip-path-morph.md) - Animating a `clip-path` via `kind: "morph"` and the scalar `clip_path_progress`, what interpolates, and what a kind mismatch does
