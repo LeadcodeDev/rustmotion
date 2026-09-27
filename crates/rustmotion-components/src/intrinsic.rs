@@ -932,6 +932,10 @@ mod tests {
             font_family: None,
             font_style: None,
             letter_spacing: None,
+            background: None,
+            padding: None,
+            border_radius: None,
+            rotation: None,
         }
     }
 

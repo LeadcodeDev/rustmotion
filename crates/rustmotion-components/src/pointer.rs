@@ -26,6 +26,20 @@ pub enum PointerTone {
     Outline,
 }
 
+/// Which glyph the pointer draws. `click_glyph` can swap to a different one
+/// only for the duration of a click, then it reverts to this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PointerGlyph {
+    /// The classic pointer arrow, tip at the hotspot.
+    #[default]
+    Arrow,
+    /// An open hand pointing with its index finger, fingertip at the hotspot.
+    Hand,
+    /// A closed fist, as if grabbing the point under the hotspot.
+    Grab,
+}
+
 /// How loud the click ring is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +79,13 @@ pub struct Pointer {
     /// Height of the arrow in px. The click ring scales with it.
     #[serde(default = "default_pointer_size")]
     pub size: f32,
+    /// Which glyph is drawn. Defaults to the classic arrow.
+    #[serde(default)]
+    pub glyph: PointerGlyph,
+    /// Glyph shown for the duration of a click, then back to `glyph`. Absent
+    /// keeps `glyph` unchanged through the click — only the scale dip shows.
+    #[serde(default)]
+    pub click_glyph: Option<PointerGlyph>,
     /// Colour scheme. Overridden by `color` / `outline_color` when set.
     #[serde(default)]
     pub tone: PointerTone,
@@ -154,6 +175,18 @@ impl Pointer {
         }
     }
 
+    fn add_contour(path: &mut PathBuilder, points: &[(f32, f32)], size: f32) {
+        for (i, (x, y)) in points.iter().enumerate() {
+            let p = (x * size, y * size);
+            if i == 0 {
+                path.move_to(p);
+            } else {
+                path.line_to(p);
+            }
+        }
+        path.close();
+    }
+
     fn arrow_path(size: f32) -> Path {
         const OUTLINE: [(f32, f32); 7] = [
             (0.0, 0.0),
@@ -165,16 +198,48 @@ impl Pointer {
             (0.54, 0.51),
         ];
         let mut path = PathBuilder::new();
-        for (i, (x, y)) in OUTLINE.iter().enumerate() {
-            let p = (x * size, y * size);
-            if i == 0 {
-                path.move_to(p);
-            } else {
-                path.line_to(p);
-            }
-        }
-        path.close();
+        Self::add_contour(&mut path, &OUTLINE, size);
         path.detach()
+    }
+
+    const HAND_FIST: [(f32, f32); 8] = [
+        (0.08, 0.38),
+        (0.30, 0.30),
+        (0.54, 0.36),
+        (0.62, 0.58),
+        (0.54, 0.82),
+        (0.30, 0.92),
+        (0.12, 0.82),
+        (0.04, 0.58),
+    ];
+
+    fn hand_path(size: f32) -> Path {
+        const FINGER: [(f32, f32); 3] = [(0.00, 0.00), (0.40, 0.06), (0.10, 0.30)];
+        let mut path = PathBuilder::new();
+        Self::add_contour(&mut path, &FINGER, size);
+        Self::add_contour(&mut path, &Self::HAND_FIST, size);
+        path.detach()
+    }
+
+    fn grab_path(size: f32) -> Path {
+        let mut path = PathBuilder::new();
+        Self::add_contour(&mut path, &Self::HAND_FIST, size);
+        path.detach()
+    }
+
+    fn glyph_path(glyph: PointerGlyph, size: f32) -> Path {
+        match glyph {
+            PointerGlyph::Arrow => Self::arrow_path(size),
+            PointerGlyph::Hand => Self::hand_path(size),
+            PointerGlyph::Grab => Self::grab_path(size),
+        }
+    }
+
+    fn active_glyph(&self, click: Option<f32>) -> PointerGlyph {
+        match click {
+            Some(_) => self.click_glyph.unwrap_or(self.glyph),
+            None => self.glyph,
+        }
     }
 }
 
@@ -220,7 +285,7 @@ impl Painter for Pointer {
             canvas.scale((scale, scale));
         }
 
-        let path = Self::arrow_path(self.size);
+        let path = Self::glyph_path(self.active_glyph(click), self.size);
         let mut outline_paint = paint_from_hex(&outline);
         outline_paint.set_style(PaintStyle::Stroke);
         outline_paint.set_stroke_width((self.size * 0.07).max(1.0));
@@ -490,6 +555,113 @@ mod tests {
         assert!(
             ring.0 > 100 && ring.1 > 100 && ring.2 > 100,
             "the click ring on an outline pointer must default to the outline's white, not a hard-coded or transparent-derived colour, got {ring:?}"
+        );
+    }
+
+    fn finger_probe(size: f32) -> (f32, f32) {
+        (0.08 * size, 0.05 * size)
+    }
+
+    #[test]
+    fn finger_probe_is_inside_the_open_hand_but_outside_the_closed_fist() {
+        const SIZE: f32 = 200.0;
+        let (fx, fy) = finger_probe(SIZE);
+        assert!(
+            Pointer::hand_path(SIZE).contains((fx, fy)),
+            "probe point must sit on the extended finger of the open hand"
+        );
+        assert!(
+            !Pointer::grab_path(SIZE).contains((fx, fy)),
+            "probe point must fall outside the fist alone, or it cannot prove the finger retracted"
+        );
+    }
+
+    #[test]
+    fn a_default_pointer_still_draws_the_classic_arrow() {
+        let p = pointer(serde_json::json!({}));
+        assert_eq!(
+            p.glyph,
+            PointerGlyph::Arrow,
+            "arrow stays the default glyph"
+        );
+        assert_eq!(
+            p.active_glyph(None),
+            PointerGlyph::Arrow,
+            "no glyph/click_glyph configured must resolve to the classic arrow"
+        );
+    }
+
+    #[test]
+    fn hand_glyph_closes_into_a_grab_during_a_click_and_reopens_after() {
+        let p = pointer(serde_json::json!({
+            "glyph": "hand",
+            "click_glyph": "grab",
+            "tone": "light",
+            "size": SIZE_FOR_HAND_TEST,
+            "click_at": [1.0],
+            "click_duration": 0.5
+        }));
+        const W: i32 = 300;
+        const H: i32 = 300;
+        let background = skia_safe::Color::from_argb(255, 0, 128, 0);
+        let (fx, fy) = finger_probe(SIZE_FOR_HAND_TEST);
+
+        let mut before_click = render(&p, W, H, 0.0, background);
+        let open = pixel(&mut before_click, W, H, fx, fy);
+        assert_eq!(
+            open,
+            (255, 255, 255, 255),
+            "before any click the open hand must paint its extended finger (white fill), got {open:?}"
+        );
+
+        let mut mid_click = render(&p, W, H, 1.0, background);
+        let closed = pixel(&mut mid_click, W, H, fx, fy);
+        assert_eq!(
+            closed,
+            (0, 128, 0, 255),
+            "at the moment of the click the finger must have retracted into the fist, \
+             leaving the background showing through at the same point, got {closed:?}"
+        );
+
+        let mut after_click = render(&p, W, H, 1.6, background);
+        let reopened = pixel(&mut after_click, W, H, fx, fy);
+        assert_eq!(
+            reopened, open,
+            "once the click finishes the hand must reopen to exactly its resting pose"
+        );
+    }
+
+    const SIZE_FOR_HAND_TEST: f32 = 200.0;
+
+    #[test]
+    fn the_open_hand_pose_is_stable_when_no_click_is_happening() {
+        let p = pointer(serde_json::json!({
+            "glyph": "hand",
+            "click_glyph": "grab",
+            "tone": "light",
+            "size": SIZE_FOR_HAND_TEST,
+            "click_at": [1.0],
+            "click_duration": 0.5
+        }));
+        const W: i32 = 300;
+        const H: i32 = 300;
+        let background = skia_safe::Color::from_argb(255, 0, 128, 0);
+        let (fx, fy) = finger_probe(SIZE_FOR_HAND_TEST);
+
+        let mut at_zero = render(&p, W, H, 0.0, background);
+        let mut long_before_the_click = render(&p, W, H, 0.4, background);
+        let mut long_after_the_click = render(&p, W, H, 3.0, background);
+
+        let a = pixel(&mut at_zero, W, H, fx, fy);
+        let b = pixel(&mut long_before_the_click, W, H, fx, fy);
+        let c = pixel(&mut long_after_the_click, W, H, fx, fy);
+        assert_eq!(
+            a, b,
+            "resting hand pose must not drift with time before a click"
+        );
+        assert_eq!(
+            a, c,
+            "resting hand pose must not drift with time after a click"
         );
     }
 }

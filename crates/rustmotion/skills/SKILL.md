@@ -244,6 +244,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/draw-progress-stroke.md](rules/draw-progress-stroke.md) - `draw_progress` at 0 paints nothing, and an `svg` draw-on matches the finished mark's stroke width, cap and join
 - [rules/svg-text-fonts.md](rules/svg-text-fonts.md) - Why `<text>` inside an `svg` needs a resolvable font face, and what happens when the host has none
 - [rules/vhs-tear.md](rules/vhs-tear.md) - The `vhs` scene effect: bands slid sideways, noise, scanlines and a travelling tracking line — bounded by `at`/`duration` because it is a beat, not a filter
+- [rules/rich-text-pills.md](rules/rich-text-pills.md) - Pill spans in `rich_text`: padding that moves the following span, `box-decoration-break: clone` on a wrap, and rotation that turns the box without touching layout
 - [rules/geometry-safety.md](rules/geometry-safety.md) - Keep all content inside the viewport: `white-space`, `auto_scroll`, `overflow` semantics + violation kinds
 - [rules/clip-path.md](rules/clip-path.md) - Non-rectangular masking: the six `clip-path` shapes, how their percentages resolve, and why `node-path` is not one of them yet
 - [rules/overlapping-scenes.md](rules/overlapping-scenes.md) - Make an element outlive a cut: overlapping `at` windows composite instead of replacing, who supplies the background, and why `snap` never creates an overlap
