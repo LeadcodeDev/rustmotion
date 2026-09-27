@@ -1,5 +1,5 @@
 use crate::css::style::CssStyle;
-use crate::css::style::{FilterFn, Size, TransformFn};
+use crate::css::style::{BorderRadius, ClipPath, FilterFn, Size, TransformFn};
 use crate::css::units::{Length, LengthPercentage};
 use crate::engine::animator::AnimatedProperties;
 
@@ -73,6 +73,18 @@ pub fn apply_animated_props(css: &mut CssStyle, props: &AnimatedProperties) {
     }
     if props.height >= 0.0 {
         css.height = Some(Size::Length(LengthPercentage::Px(props.height)));
+    }
+
+    if props.border_radius >= 0.0 {
+        css.border_radius = Some(BorderRadius::Uniform(LengthPercentage::Px(
+            props.border_radius,
+        )));
+    }
+
+    if props.clip_path_progress >= 0.0 {
+        if let Some(ClipPath::Morph { progress, .. }) = css.clip_path.as_mut() {
+            *progress = props.clip_path_progress;
+        }
     }
 }
 
@@ -150,6 +162,78 @@ mod tests {
             TransformFn::Rotate { deg } => assert!((*deg - 33.5).abs() < 1e-6),
             other => panic!("expected Rotate second, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn animated_border_radius_reaches_the_css_style() {
+        let mut css = CssStyle::default();
+        let props = AnimatedProperties {
+            border_radius: 100.0,
+            ..AnimatedProperties::default()
+        };
+        apply_animated_props(&mut css, &props);
+
+        match css.border_radius {
+            Some(BorderRadius::Uniform(LengthPercentage::Px(v))) => {
+                assert!((v - 100.0).abs() < 1e-6)
+            }
+            other => panic!("expected a uniform 100px border-radius, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn animated_clip_path_progress_writes_onto_the_morph_variant() {
+        let mut css = CssStyle {
+            clip_path: Some(ClipPath::Morph {
+                from: Box::new(ClipPath::Circle {
+                    radius: LengthPercentage::Px(10.0),
+                    origin: None,
+                }),
+                to: Box::new(ClipPath::Circle {
+                    radius: LengthPercentage::Px(50.0),
+                    origin: None,
+                }),
+                progress: 0.0,
+            }),
+            ..CssStyle::default()
+        };
+        let props = AnimatedProperties {
+            clip_path_progress: 0.75,
+            ..AnimatedProperties::default()
+        };
+        apply_animated_props(&mut css, &props);
+
+        match css.clip_path {
+            Some(ClipPath::Morph { progress, .. }) => {
+                assert!((progress - 0.75).abs() < 1e-6)
+            }
+            other => panic!("expected the morph's progress to be updated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_clip_path_progress_leaves_a_non_morph_clip_path_untouched() {
+        let mut css = CssStyle {
+            clip_path: Some(ClipPath::Circle {
+                radius: LengthPercentage::Px(10.0),
+                origin: None,
+            }),
+            ..CssStyle::default()
+        };
+        let props = AnimatedProperties {
+            clip_path_progress: 0.5,
+            ..AnimatedProperties::default()
+        };
+        apply_animated_props(&mut css, &props);
+
+        assert_eq!(
+            css.clip_path,
+            Some(ClipPath::Circle {
+                radius: LengthPercentage::Px(10.0),
+                origin: None,
+            }),
+            "a static (non-morph) clip-path must not be mutated by clip_path_progress"
+        );
     }
 
     #[test]

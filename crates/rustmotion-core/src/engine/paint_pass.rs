@@ -1301,15 +1301,79 @@ fn paint_border(
         .map(|r| resolve_border_radius(r, layout, ctx))
         .unwrap_or([0.0; 4]);
 
-    let outer = border_rrect(layout, radius);
-    let inner = inner_rrect(layout, radius);
+    match style {
+        BorderStyle::None => {}
+        BorderStyle::Solid => {
+            let outer = border_rrect(layout, radius);
+            let inner = inner_rrect(layout, radius);
 
-    let mut paint = Paint::default();
-    paint.set_anti_alias(true);
-    paint.set_style(PaintStyle::Fill);
-    paint.set_color(color);
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_style(PaintStyle::Fill);
+            paint.set_color(color);
 
-    canvas.draw_drrect(outer, inner, &paint);
+            canvas.draw_drrect(outer, inner, &paint);
+        }
+        BorderStyle::Dashed | BorderStyle::Dotted => {
+            let centerline = border_stroke_rrect(layout, radius, max_w / 2.0);
+            let mut builder = PathBuilder::new();
+            builder.add_rrect(centerline, None, None);
+            let path = builder.detach();
+
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_style(PaintStyle::Stroke);
+            paint.set_color(color);
+            paint.set_stroke_width(max_w);
+
+            let intervals = if matches!(style, BorderStyle::Dotted) {
+                paint.set_stroke_cap(skia_safe::PaintCap::Round);
+                [0.001, max_w * 2.0]
+            } else {
+                [max_w * 3.0, max_w * 3.0]
+            };
+            if let Some(dash) = skia_safe::PathEffect::dash(&intervals, 0.0) {
+                paint.set_path_effect(dash);
+            }
+
+            canvas.draw_path(&path, &paint);
+        }
+        BorderStyle::Double => {
+            let stroke_w = max_w / 3.0;
+            if stroke_w <= 0.0 {
+                return;
+            }
+
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_style(PaintStyle::Stroke);
+            paint.set_color(color);
+            paint.set_stroke_width(stroke_w);
+
+            for inset in [stroke_w / 2.0, max_w - stroke_w / 2.0] {
+                let centerline = border_stroke_rrect(layout, radius, inset);
+                let mut builder = PathBuilder::new();
+                builder.add_rrect(centerline, None, None);
+                canvas.draw_path(&builder.detach(), &paint);
+            }
+        }
+    }
+}
+
+fn border_stroke_rrect(layout: &BoxLayout, radius: [f32; 4], inset: f32) -> RRect {
+    let rect = Rect::from_xywh(
+        layout.x + inset,
+        layout.y + inset,
+        (layout.width - inset * 2.0).max(0.0),
+        (layout.height - inset * 2.0).max(0.0),
+    );
+    let r = [
+        (radius[0] - inset).max(0.0),
+        (radius[1] - inset).max(0.0),
+        (radius[2] - inset).max(0.0),
+        (radius[3] - inset).max(0.0),
+    ];
+    rrect_from_corners(rect, r)
 }
 
 fn paint_gradient_border(
@@ -1685,6 +1749,187 @@ fn clip_path_to_skia(
                  yet — reading another node's geometry needs a resolved-path lookup the paint \
                  pass does not have. Nothing is clipped. Use kind: path with the same data, or \
                  follow the tracking issue."
+            );
+            None
+        }
+
+        ClipPath::Morph { from, to, progress } => {
+            morph_clip_path_to_skia(from, to, *progress, layout, ctx)
+        }
+    }
+}
+
+fn clip_path_kind_name(clip: &ClipPath) -> &'static str {
+    match clip {
+        ClipPath::None => "none",
+        ClipPath::Inset { .. } => "inset",
+        ClipPath::Circle { .. } => "circle",
+        ClipPath::Ellipse { .. } => "ellipse",
+        ClipPath::Polygon { .. } => "polygon",
+        ClipPath::Path { .. } => "path",
+        ClipPath::NodePath { .. } => "node-path",
+        ClipPath::Morph { .. } => "morph",
+    }
+}
+
+fn lerp_f32(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+fn morph_clip_path_to_skia(
+    from: &ClipPath,
+    to: &ClipPath,
+    progress: f32,
+    layout: &BoxLayout,
+    ctx: &LengthContext,
+) -> Option<skia_safe::Path> {
+    let ctx_w = LengthContext {
+        parent_size: layout.width,
+        ..*ctx
+    };
+    let ctx_h = LengthContext {
+        parent_size: layout.height,
+        ..*ctx
+    };
+    let t = progress;
+
+    match (from, to) {
+        (
+            ClipPath::Inset {
+                top: t0,
+                right: r0,
+                bottom: b0,
+                left: l0,
+                radius: rad0,
+            },
+            ClipPath::Inset {
+                top: t1,
+                right: r1,
+                bottom: b1,
+                left: l1,
+                radius: rad1,
+            },
+        ) => {
+            let top = lerp_f32(t0.resolve(&ctx_h), t1.resolve(&ctx_h), t);
+            let right = lerp_f32(r0.resolve(&ctx_w), r1.resolve(&ctx_w), t);
+            let bottom = lerp_f32(b0.resolve(&ctx_h), b1.resolve(&ctx_h), t);
+            let left = lerp_f32(l0.resolve(&ctx_w), l1.resolve(&ctx_w), t);
+            let width = (layout.width - left - right).max(0.0);
+            let height = (layout.height - top - bottom).max(0.0);
+            let rect = Rect::from_xywh(layout.x + left, layout.y + top, width, height);
+            let corners0 = rad0
+                .as_ref()
+                .map(|r| resolve_border_radius(r, layout, ctx))
+                .unwrap_or([0.0; 4]);
+            let corners1 = rad1
+                .as_ref()
+                .map(|r| resolve_border_radius(r, layout, ctx))
+                .unwrap_or([0.0; 4]);
+            let corners = [
+                lerp_f32(corners0[0], corners1[0], t),
+                lerp_f32(corners0[1], corners1[1], t),
+                lerp_f32(corners0[2], corners1[2], t),
+                lerp_f32(corners0[3], corners1[3], t),
+            ];
+            let mut builder = PathBuilder::new();
+            builder.add_rrect(rrect_from_corners(rect, corners), None, None);
+            Some(builder.detach())
+        }
+
+        (
+            ClipPath::Circle {
+                radius: r0,
+                origin: o0,
+            },
+            ClipPath::Circle {
+                radius: r1,
+                origin: o1,
+            },
+        ) => {
+            let (cx0, cy0, _) = resolve_origin(o0.as_ref(), layout, ctx);
+            let (cx1, cy1, _) = resolve_origin(o1.as_ref(), layout, ctx);
+            let reference = LengthContext {
+                parent_size: (layout.width.powi(2) + layout.height.powi(2)).sqrt()
+                    / std::f32::consts::SQRT_2,
+                ..*ctx
+            };
+            let radius = lerp_f32(r0.resolve(&reference), r1.resolve(&reference), t);
+            let cx = lerp_f32(cx0, cx1, t);
+            let cy = lerp_f32(cy0, cy1, t);
+            if radius <= 0.0 {
+                return Some(PathBuilder::new().detach());
+            }
+            let mut builder = PathBuilder::new();
+            builder.add_circle((cx, cy), radius, None);
+            Some(builder.detach())
+        }
+
+        (
+            ClipPath::Ellipse {
+                rx: rx0,
+                ry: ry0,
+                origin: o0,
+            },
+            ClipPath::Ellipse {
+                rx: rx1,
+                ry: ry1,
+                origin: o1,
+            },
+        ) => {
+            let (cx0, cy0, _) = resolve_origin(o0.as_ref(), layout, ctx);
+            let (cx1, cy1, _) = resolve_origin(o1.as_ref(), layout, ctx);
+            let a = lerp_f32(rx0.resolve(&ctx_w), rx1.resolve(&ctx_w), t);
+            let b = lerp_f32(ry0.resolve(&ctx_h), ry1.resolve(&ctx_h), t);
+            let cx = lerp_f32(cx0, cx1, t);
+            let cy = lerp_f32(cy0, cy1, t);
+            if a <= 0.0 || b <= 0.0 {
+                return Some(PathBuilder::new().detach());
+            }
+            let mut builder = PathBuilder::new();
+            builder.add_oval(
+                Rect::from_xywh(cx - a, cy - b, a * 2.0, b * 2.0),
+                None,
+                None,
+            );
+            Some(builder.detach())
+        }
+
+        (ClipPath::Polygon { points: p0 }, ClipPath::Polygon { points: p1 }) => {
+            if p0.len() != p1.len() {
+                eprintln!(
+                    "rustmotion: clip-path morph between two polygons with different vertex \
+                     counts ({} vs {}) has no point-by-point correspondence to interpolate \
+                     along. Nothing is clipped this frame — give both keyframes the same \
+                     number of points.",
+                    p0.len(),
+                    p1.len()
+                );
+                return None;
+            }
+            if p0.len() < 3 {
+                return Some(PathBuilder::new().detach());
+            }
+            let mut builder = PathBuilder::new();
+            for (i, ((x0, y0), (x1, y1))) in p0.iter().zip(p1.iter()).enumerate() {
+                let x = layout.x + lerp_f32(x0.resolve(&ctx_w), x1.resolve(&ctx_w), t);
+                let y = layout.y + lerp_f32(y0.resolve(&ctx_h), y1.resolve(&ctx_h), t);
+                if i == 0 {
+                    builder.move_to((x, y));
+                } else {
+                    builder.line_to((x, y));
+                }
+            }
+            builder.close();
+            Some(builder.detach())
+        }
+
+        _ => {
+            eprintln!(
+                "rustmotion: clip-path morph needs both keyframes to be the same kind \
+                 (inset/circle/ellipse/polygon, each with itself) — got \"{}\" and \"{}\". \
+                 Nothing is clipped this frame.",
+                clip_path_kind_name(from),
+                clip_path_kind_name(to)
             );
             None
         }
@@ -3198,6 +3443,144 @@ mod paint_order_tests {
         );
     }
 
+    #[test]
+    fn animated_border_radius_reaches_the_paint_pass() {
+        use crate::css::apply_animated_props;
+        use crate::engine::animator::AnimatedProperties;
+
+        let mut css = CssStyle {
+            position: Some(Position::Absolute),
+            left: Some(CLP::Px(100.0)),
+            top: Some(CLP::Px(50.0)),
+            width: Some(CSize::Length(CLP::Px(200.0))),
+            height: Some(CSize::Length(CLP::Px(200.0))),
+            background: Some(Background::Color(CssColor::String("#000000".into()))),
+            ..Default::default()
+        };
+        apply_animated_props(
+            &mut css,
+            &AnimatedProperties {
+                border_radius: 100.0,
+                ..AnimatedProperties::default()
+            },
+        );
+
+        let node = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css,
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        };
+        let mut root = root_node(400.0, 300.0, "#ffffff", vec![node]);
+        let buf = render_pixels(&mut root, 400, 300);
+
+        let corner = probe(&buf, 400, 105, 55);
+        assert_eq!(
+            corner,
+            (255, 255, 255),
+            "a border-radius produced by an animation (not a literal style value) must round \
+             the square's corner away — got {corner:?}, meaning the animated value never \
+             reached css.border_radius"
+        );
+    }
+
+    fn bordered_box(w: f32, h: f32, style: BorderStyle) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(20.0)),
+                top: Some(CLP::Px(20.0)),
+                width: Some(CSize::Length(CLP::Px(w))),
+                height: Some(CSize::Length(CLP::Px(h))),
+                border: Some(BorderEdges {
+                    width: Some(Edges::Uniform(CLP::Px(8.0))),
+                    style: Some(style),
+                    color: Some(CssColor::String("#000000".into())),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn count_background_gaps_on_top_edge(buf: &[u8], w: u32, x0: u32, x1: u32, y: u32) -> usize {
+        let mut gaps = 0;
+        let mut in_gap = false;
+        for x in x0..x1 {
+            let i = ((y * w + x) * 4) as usize;
+            let is_background = buf[i] > 200 && buf[i + 1] > 200 && buf[i + 2] > 200;
+            if is_background {
+                if !in_gap {
+                    gaps += 1;
+                }
+                in_gap = true;
+            } else {
+                in_gap = false;
+            }
+        }
+        gaps
+    }
+
+    #[test]
+    fn dashed_border_leaves_background_coloured_gaps_along_the_edge() {
+        let mut solid_root = root_node(
+            400.0,
+            400.0,
+            "#ffffff",
+            vec![bordered_box(300.0, 100.0, BorderStyle::Solid)],
+        );
+        let solid_buf = render_pixels(&mut solid_root, 400, 400);
+        let solid_gaps = count_background_gaps_on_top_edge(&solid_buf, 400, 40, 300, 24);
+        assert_eq!(
+            solid_gaps, 0,
+            "a solid border's top edge must be painted over its full length — got {solid_gaps} \
+             background-coloured gaps"
+        );
+
+        let mut dashed_root = root_node(
+            400.0,
+            400.0,
+            "#ffffff",
+            vec![bordered_box(300.0, 100.0, BorderStyle::Dashed)],
+        );
+        let dashed_buf = render_pixels(&mut dashed_root, 400, 400);
+        let dashed_gaps = count_background_gaps_on_top_edge(&dashed_buf, 400, 40, 300, 24);
+        assert!(
+            dashed_gaps > 0,
+            "a dashed border must leave background-coloured gaps along its top edge — got \
+             {dashed_gaps}, meaning border.style was read only to gate BorderStyle::None and \
+             every other variant painted the same solid ring"
+        );
+    }
+
+    #[test]
+    fn dotted_and_double_borders_are_not_painted_as_a_solid_fill() {
+        for style in [BorderStyle::Dotted, BorderStyle::Double] {
+            let mut root = root_node(
+                400.0,
+                400.0,
+                "#ffffff",
+                vec![bordered_box(300.0, 100.0, style)],
+            );
+            let buf = render_pixels(&mut root, 400, 400);
+            let gaps = count_background_gaps_on_top_edge(&buf, 400, 40, 300, 24);
+            assert!(
+                gaps > 0,
+                "{style:?} border must not paint a solid filled ring — got {gaps} \
+                 background-coloured gaps along the top edge"
+            );
+        }
+    }
+
     fn material_tile(material: Option<Material>) -> BoxNode {
         BoxNode {
             id: 0,
@@ -3766,6 +4149,243 @@ mod paint_order_tests {
             right_edge,
             (255, 255, 255),
             "no effect means no fringe on the right edge either, got {right_edge:?}"
+        );
+    }
+
+    #[test]
+    fn clip_path_morph_interpolates_a_circles_radius_between_two_keyframes() {
+        let morph_at = |progress: f32| ClipPath::Morph {
+            from: Box::new(ClipPath::Circle {
+                radius: CLP::Px(50.0),
+                origin: None,
+            }),
+            to: Box::new(ClipPath::Circle {
+                radius: CLP::Px(150.0),
+                origin: None,
+            }),
+            progress,
+        };
+
+        assert!(
+            is_red_at(Some(morph_at(0.0)), 230, 200),
+            "progress 0: 30px from centre must be inside the `from` circle (r=50)"
+        );
+        assert!(
+            !is_red_at(Some(morph_at(0.0)), 280, 200),
+            "progress 0 must match the `from` shape exactly (r=50), not something in between"
+        );
+
+        assert!(
+            is_red_at(Some(morph_at(1.0)), 280, 200),
+            "progress 1 must match the `to` shape's larger radius (r=150)"
+        );
+
+        assert!(
+            is_red_at(Some(morph_at(0.5)), 280, 200),
+            "progress 0.5 interpolates the radius to 100 (halfway between 50 and 150); 80px \
+             from centre must be inside"
+        );
+        assert!(
+            !is_red_at(Some(morph_at(0.5)), 350, 200),
+            "150px from centre must be outside the interpolated radius of 100"
+        );
+    }
+
+    #[test]
+    fn clip_path_morph_supports_inset_and_ellipse_too() {
+        let inset_morph_at = |progress: f32| ClipPath::Morph {
+            from: Box::new(ClipPath::Inset {
+                top: CLP::Px(0.0),
+                right: CLP::Px(200.0),
+                bottom: CLP::Px(0.0),
+                left: CLP::Px(0.0),
+                radius: None,
+            }),
+            to: Box::new(ClipPath::Inset {
+                top: CLP::Px(0.0),
+                right: CLP::Px(0.0),
+                bottom: CLP::Px(0.0),
+                left: CLP::Px(0.0),
+                radius: None,
+            }),
+            progress,
+        };
+        assert!(
+            !is_red_at(Some(inset_morph_at(0.0)), 380, 200),
+            "an inset morph at progress 0 must match the `from` shape (right:200 cuts x=380)"
+        );
+        assert!(
+            is_red_at(Some(inset_morph_at(1.0)), 380, 200),
+            "an inset morph at progress 1 must match the `to` shape (the full box, right:0)"
+        );
+
+        let ellipse_morph_at = |progress: f32| ClipPath::Morph {
+            from: Box::new(ClipPath::Ellipse {
+                rx: CLP::Px(10.0),
+                ry: CLP::Px(10.0),
+                origin: None,
+            }),
+            to: Box::new(ClipPath::Ellipse {
+                rx: CLP::Px(180.0),
+                ry: CLP::Px(40.0),
+                origin: None,
+            }),
+            progress,
+        };
+        assert!(
+            !is_red_at(Some(ellipse_morph_at(0.0)), 360, 200),
+            "an ellipse morph at progress 0 must match the `from` shape (rx=10 excludes x=360)"
+        );
+        assert!(
+            is_red_at(Some(ellipse_morph_at(1.0)), 360, 200),
+            "an ellipse morph at progress 1 must match the `to` shape's rx=180"
+        );
+    }
+
+    #[test]
+    fn clip_path_morph_interpolates_polygon_points_when_vertex_counts_match() {
+        let big = ClipPath::Polygon {
+            points: vec![
+                (CLP::Px(0.0), CLP::Px(0.0)),
+                (CLP::Px(400.0), CLP::Px(0.0)),
+                (CLP::Px(400.0), CLP::Px(400.0)),
+                (CLP::Px(0.0), CLP::Px(400.0)),
+            ],
+        };
+        let small = ClipPath::Polygon {
+            points: vec![
+                (CLP::Px(150.0), CLP::Px(150.0)),
+                (CLP::Px(250.0), CLP::Px(150.0)),
+                (CLP::Px(250.0), CLP::Px(250.0)),
+                (CLP::Px(150.0), CLP::Px(250.0)),
+            ],
+        };
+        let morph = ClipPath::Morph {
+            from: Box::new(big),
+            to: Box::new(small),
+            progress: 1.0,
+        };
+        assert!(
+            is_red_at(Some(morph.clone()), 200, 200),
+            "the shrunk square's centre must stay inside at progress 1"
+        );
+        assert!(
+            !is_red_at(Some(morph), 20, 20),
+            "the corner must be outside the fully-morphed small square at progress 1"
+        );
+    }
+
+    #[test]
+    fn clip_path_morph_between_mismatched_kinds_leaves_the_node_unclipped() {
+        let mismatched = ClipPath::Morph {
+            from: Box::new(ClipPath::Circle {
+                radius: CLP::Px(50.0),
+                origin: None,
+            }),
+            to: Box::new(ClipPath::Polygon {
+                points: vec![
+                    (CLP::Px(0.0), CLP::Px(0.0)),
+                    (CLP::Px(400.0), CLP::Px(0.0)),
+                    (CLP::Px(200.0), CLP::Px(400.0)),
+                ],
+            }),
+            progress: 0.5,
+        };
+        for (x, y) in [(20, 20), (200, 200), (380, 380)] {
+            assert_eq!(
+                is_red_at(Some(mismatched.clone()), x, y),
+                is_red_at(None, x, y),
+                "a clip-path morph between two different kinds cannot be interpolated — it \
+                 must leave the node unclipped rather than silently snap between the two \
+                 shapes, at ({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn clip_path_morph_between_polygons_with_different_vertex_counts_leaves_the_node_unclipped() {
+        let triangle = ClipPath::Polygon {
+            points: vec![
+                (CLP::Px(200.0), CLP::Px(0.0)),
+                (CLP::Px(400.0), CLP::Px(400.0)),
+                (CLP::Px(0.0), CLP::Px(400.0)),
+            ],
+        };
+        let square = ClipPath::Polygon {
+            points: vec![
+                (CLP::Px(0.0), CLP::Px(0.0)),
+                (CLP::Px(400.0), CLP::Px(0.0)),
+                (CLP::Px(400.0), CLP::Px(400.0)),
+                (CLP::Px(0.0), CLP::Px(400.0)),
+            ],
+        };
+        let mismatched = ClipPath::Morph {
+            from: Box::new(triangle),
+            to: Box::new(square),
+            progress: 0.5,
+        };
+        for (x, y) in [(20, 20), (200, 200), (380, 380)] {
+            assert_eq!(
+                is_red_at(Some(mismatched.clone()), x, y),
+                is_red_at(None, x, y),
+                "a polygon vertex-count mismatch (3 vs 4) cannot be interpolated point-by-point \
+                 — it must leave the node unclipped, at ({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn animated_clip_path_progress_reaches_the_paint_pass() {
+        use crate::css::apply_animated_props;
+        use crate::engine::animator::AnimatedProperties;
+
+        let mut css = CssStyle {
+            position: Some(Position::Absolute),
+            left: Some(CLP::Px(0.0)),
+            top: Some(CLP::Px(0.0)),
+            width: Some(CSize::Length(CLP::Px(400.0))),
+            height: Some(CSize::Length(CLP::Px(400.0))),
+            background: Some(Background::Color(CssColor::String("#ff0000".into()))),
+            clip_path: Some(ClipPath::Morph {
+                from: Box::new(ClipPath::Circle {
+                    radius: CLP::Px(50.0),
+                    origin: None,
+                }),
+                to: Box::new(ClipPath::Circle {
+                    radius: CLP::Px(150.0),
+                    origin: None,
+                }),
+                progress: 0.0,
+            }),
+            ..Default::default()
+        };
+        apply_animated_props(
+            &mut css,
+            &AnimatedProperties {
+                clip_path_progress: 1.0,
+                ..AnimatedProperties::default()
+            },
+        );
+
+        let node = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css,
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        };
+        let mut root = root_node(400.0, 400.0, "#000000", vec![node]);
+        let buf = render_pixels(&mut root, 400, 400);
+
+        let inside_the_grown_circle = probe(&buf, 400, 280, 200);
+        assert_eq!(
+            inside_the_grown_circle,
+            (255, 0, 0),
+            "clip_path_progress written by an animation must reach the morph's `progress` \
+             field — got {inside_the_grown_circle:?}, expected the fully-swept 150px `to` \
+             circle to cover this point (80px from centre)"
         );
     }
 }

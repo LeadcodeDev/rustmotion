@@ -47,7 +47,12 @@ attendant.
 
 ## Ce que `clip-path` ne fait pas
 
-Il ne s'interpole pas dans un `timeline`. C'est une propriété de peinture non
+Il s'anime par `keyframes`, mais pas comme les autres propriétés : on déclare les
+deux formes d'un coup avec `kind: "morph"` et c'est un scalaire,
+`clip_path_progress`, qui balaie de l'une à l'autre. Voir
+[clip-path-morph.md](clip-path-morph.md).
+
+En revanche il ne s'interpole pas dans un `timeline`. C'est une propriété de peinture non
 supportée à l'animation — voir [timeline-sequencing.md](timeline-sequencing.md).
 Pour une révélation progressive, animer un `transform` sous un parent
 `overflow: hidden` reste la voie.

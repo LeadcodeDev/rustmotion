@@ -1442,6 +1442,26 @@ pub enum ClipPath {
     NodePath {
         id: String,
     },
+    /// A shape that sweeps continuously from `from` to `to` as `progress`
+    /// goes `0.0` → `1.0` (#384) — the chamfered-wall-style beat where the
+    /// clip itself is the animation, not a transform riding on top of a
+    /// frozen shape.
+    ///
+    /// `progress` is meant to be driven by an ordinary `keyframes` animation
+    /// on the `clip_path_progress` property (see `KNOWN_MOTION_PROPERTIES`);
+    /// the literal value here is only the resting position when nothing
+    /// animates it.
+    ///
+    /// `from` and `to` must be the same variant — and, for `polygon`, the
+    /// same vertex count — for the paint pass to have a correspondence to
+    /// interpolate along. A mismatch is reported on stderr and the node is
+    /// left unclipped for that frame; see `engine::paint_pass::morph_clip_path_to_skia`.
+    Morph {
+        from: Box<ClipPath>,
+        to: Box<ClipPath>,
+        #[serde(default)]
+        progress: f32,
+    },
 }
 
 #[cfg(test)]
