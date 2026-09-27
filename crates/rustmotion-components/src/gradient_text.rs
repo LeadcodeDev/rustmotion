@@ -14,7 +14,7 @@ use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
     parse_hex_color, typeface_with_fallback, wrap_text_with_tracking,
 };
-use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::schema::{TextAlign, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_colors() -> Vec<String> {
@@ -97,6 +97,7 @@ impl GradientText {
         layout_width: f32,
         content_height: Option<f32>,
         time: f64,
+        props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
         let has_stops = self.stops.as_ref().is_some_and(|s| !s.is_empty());
@@ -240,6 +241,29 @@ impl GradientText {
             }
         };
 
+        if let Some(ref resolved) = props.char_animation {
+            let schema_align = match align {
+                CssTextAlign::Center => TextAlign::Center,
+                CssTextAlign::Right | CssTextAlign::End => TextAlign::Right,
+                _ => TextAlign::Left,
+            };
+            crate::intrinsic::render_char_animation(
+                canvas,
+                &font,
+                &emoji_font,
+                &fill_paint,
+                letter_spacing,
+                schema_align,
+                align_width,
+                line_height_val,
+                ascent,
+                &lines,
+                resolved,
+                time,
+            );
+            return;
+        }
+
         for (i, line) in lines.iter().enumerate() {
             if line.is_empty() {
                 continue;
@@ -270,13 +294,13 @@ impl Painter for GradientText {
         &self,
         canvas: &Canvas,
         layout: &BoxLayout,
-        _props: &AnimatedProperties,
+        props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
         let (_, _, _, content_height) = layout.content_box();
         let content_height =
             (content_height > 0.0 && content_height.is_finite()).then_some(content_height);
-        self.paint(canvas, layout.width, content_height, ctx.time, ctx);
+        self.paint(canvas, layout.width, content_height, ctx.time, props, ctx);
     }
 }
 
@@ -285,6 +309,9 @@ mod tests {
     use super::*;
     use rustmotion_core::css::style::CssStyle;
     use rustmotion_core::css::Length;
+    use rustmotion_core::schema::{
+        AnimationEffect, CharAnimationTiming, EasingType, TextAnimGranularity,
+    };
 
     fn make_gradient_text(content: &str, white_space: Option<CssWhiteSpace>) -> GradientText {
         GradientText {
@@ -382,8 +409,18 @@ mod tests {
     }
 
     fn render_unpremul(gt: &GradientText, w: i32, h: i32) -> (Vec<u8>, Vec<u8>) {
+        render_unpremul_at(gt, w, h, 0.0, &AnimatedProperties::default())
+    }
+
+    fn render_unpremul_at(
+        gt: &GradientText,
+        w: i32,
+        h: i32,
+        time: f64,
+        props: &AnimatedProperties,
+    ) -> (Vec<u8>, Vec<u8>) {
         let mut surface = skia_safe::surfaces::raster_n32_premul((w, h)).expect("raster surface");
-        gt.paint(surface.canvas(), w as f32, None, 0.0, &test_ctx());
+        gt.paint(surface.canvas(), w as f32, None, time, props, &test_ctx());
         let snapshot = surface.image_snapshot();
         let info = skia_safe::ImageInfo::new(
             (w, h),
@@ -460,7 +497,14 @@ mod tests {
         gt.style.text_align = Some(CssTextAlign::Center);
 
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
-        gt.paint(surface.canvas(), BOX_W, None, 0.0, &test_ctx());
+        gt.paint(
+            surface.canvas(),
+            BOX_W,
+            None,
+            0.0,
+            &AnimatedProperties::default(),
+            &test_ctx(),
+        );
         let grid = alpha_grid(&mut surface, W, H);
         let (lo, hi) = ink_x_span(&grid, W, H).expect("centred gradient_text must paint something");
 
@@ -487,7 +531,14 @@ mod tests {
         gt.style.text_align = Some(CssTextAlign::Right);
 
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
-        gt.paint(surface.canvas(), BOX_W, None, 0.0, &test_ctx());
+        gt.paint(
+            surface.canvas(),
+            BOX_W,
+            None,
+            0.0,
+            &AnimatedProperties::default(),
+            &test_ctx(),
+        );
         let grid = alpha_grid(&mut surface, W, H);
         let (lo, hi) = ink_x_span(&grid, W, H).expect("right-aligned gradient_text must paint");
 
@@ -505,7 +556,14 @@ mod tests {
 
         let gt = make_gradient_text("GRADIENT", Some(CssWhiteSpace::Nowrap));
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
-        gt.paint(surface.canvas(), 600.0, None, 0.0, &test_ctx());
+        gt.paint(
+            surface.canvas(),
+            600.0,
+            None,
+            0.0,
+            &AnimatedProperties::default(),
+            &test_ctx(),
+        );
         let grid = alpha_grid(&mut surface, W, H);
         let (lo, _) = ink_x_span(&grid, W, H).expect("gradient_text must paint");
 
@@ -526,7 +584,14 @@ mod tests {
             gt.style.text_align = align;
             let mut surface =
                 skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
-            gt.paint(surface.canvas(), BOX_W, None, 0.0, &test_ctx());
+            gt.paint(
+                surface.canvas(),
+                BOX_W,
+                None,
+                0.0,
+                &AnimatedProperties::default(),
+                &test_ctx(),
+            );
 
             let snapshot = surface.image_snapshot();
             let info = skia_safe::ImageInfo::new(
@@ -577,7 +642,14 @@ mod tests {
         const H: i32 = 200;
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         let canvas = surface.canvas();
-        gt.paint(canvas, 80.0, None, 0.0, &test_ctx());
+        gt.paint(
+            canvas,
+            80.0,
+            None,
+            0.0,
+            &AnimatedProperties::default(),
+            &test_ctx(),
+        );
         let grid = alpha_grid(&mut surface, W, H);
 
         assert!(
@@ -597,7 +669,14 @@ mod tests {
         const H: i32 = 200;
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         let canvas = surface.canvas();
-        gt.paint(canvas, 80.0, None, 0.0, &test_ctx());
+        gt.paint(
+            canvas,
+            80.0,
+            None,
+            0.0,
+            &AnimatedProperties::default(),
+            &test_ctx(),
+        );
         let grid = alpha_grid(&mut surface, W, H);
 
         assert!(
@@ -631,7 +710,14 @@ mod tests {
         const H: i32 = 200;
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         let canvas = surface.canvas();
-        gt.paint(canvas, 300.0, None, 0.0, &test_ctx());
+        gt.paint(
+            canvas,
+            300.0,
+            None,
+            0.0,
+            &AnimatedProperties::default(),
+            &test_ctx(),
+        );
         let grid = alpha_grid(&mut surface, W, H);
 
         assert!(
@@ -689,7 +775,14 @@ mod tests {
         const H: i32 = 300;
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         let canvas = surface.canvas();
-        gt.paint(canvas, BOX_W, None, 0.0, &test_ctx());
+        gt.paint(
+            canvas,
+            BOX_W,
+            None,
+            0.0,
+            &AnimatedProperties::default(),
+            &test_ctx(),
+        );
         let grid = alpha_grid(&mut surface, W, H);
         let ink_right = max_ink_x(&grid, W, H).expect("gradient_text must paint some ink");
 
@@ -715,7 +808,14 @@ mod tests {
         const H: i32 = 200;
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         let canvas = surface.canvas();
-        gt.paint(canvas, 80.0, Some(45.0), 0.0, &test_ctx());
+        gt.paint(
+            canvas,
+            80.0,
+            Some(45.0),
+            0.0,
+            &AnimatedProperties::default(),
+            &test_ctx(),
+        );
         let grid = alpha_grid(&mut surface, W, H);
 
         assert!(
@@ -738,7 +838,14 @@ mod tests {
             let mut surface =
                 skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
             let canvas = surface.canvas();
-            gt.paint(canvas, 300.0, Some(60.0), t, &test_ctx());
+            gt.paint(
+                canvas,
+                300.0,
+                Some(60.0),
+                t,
+                &AnimatedProperties::default(),
+                &test_ctx(),
+            );
             alpha_grid(&mut surface, W, H)
         };
 
@@ -871,6 +978,133 @@ mod tests {
             "moving the middle stop from its even-spacing position (0.5) to 0.9 must move the \
              ramp: the text's midpoint should read far less green than the even-spacing case \
              (even={mid_even:?}, skewed={mid_skewed:?})"
+        );
+    }
+
+    fn props_for(gt: &GradientText) -> AnimatedProperties {
+        AnimatedProperties {
+            char_animation: rustmotion_core::engine::animator::extract_effects(&gt.style.animation)
+                .char_animation,
+            ..Default::default()
+        }
+    }
+
+    fn soft_pixel_fraction(
+        grid: &[u8],
+        surface_width: i32,
+        x0: i32,
+        x1: i32,
+        y0: i32,
+        y1: i32,
+    ) -> f32 {
+        let mut inked = 0u32;
+        let mut soft = 0u32;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let a = grid[(y * surface_width + x) as usize];
+                if a > 0 {
+                    inked += 1;
+                    if a < 250 {
+                        soft += 1;
+                    }
+                }
+            }
+        }
+        if inked == 0 {
+            return 0.0;
+        }
+        soft as f32 / inked as f32
+    }
+
+    #[test]
+    fn char_blur_in_animates_a_gradient_text_word_instead_of_painting_it_sharp_immediately() {
+        let mut gt = make_gradient_text("BLUR", Some(CssWhiteSpace::Nowrap));
+        gt.style.font_size = Some(Length::Px(100.0));
+        gt.style.animation = vec![AnimationEffect::CharBlurIn(CharAnimationTiming {
+            delay: 0.0,
+            duration: 0.5,
+            stagger: 0.03,
+            granularity: TextAnimGranularity::Word,
+            easing: EasingType::Linear,
+            ..Default::default()
+        })];
+
+        const W: i32 = 700;
+        const H: i32 = 220;
+        let props = props_for(&gt);
+
+        let early = alpha_grid(
+            &mut {
+                let mut s = skia_safe::surfaces::raster_n32_premul((W, H)).expect("surface");
+                gt.paint(s.canvas(), W as f32, None, 0.15, &props, &test_ctx());
+                s
+            },
+            W,
+            H,
+        );
+        let settled = alpha_grid(
+            &mut {
+                let mut s = skia_safe::surfaces::raster_n32_premul((W, H)).expect("surface");
+                gt.paint(s.canvas(), W as f32, None, 1.0, &props, &test_ctx());
+                s
+            },
+            W,
+            H,
+        );
+
+        assert!(
+            has_ink_in(&early, W, 0, W, 0, H),
+            "the word must have started painting by t=0.15 — a char_* preset on gradient_text \
+             used to be silently ignored and paint the word fully sharp from frame 0"
+        );
+
+        let early_soft = soft_pixel_fraction(&early, W, 0, W, 0, H);
+        let settled_soft = soft_pixel_fraction(&settled, W, 0, W, 0, H);
+        assert!(
+            early_soft > settled_soft + 0.15,
+            "mid-reveal soft-pixel fraction ({early_soft:.3}) must be clearly higher than the \
+             settled fraction ({settled_soft:.3}) — gradient_text must actually blur while \
+             animating, not just render the sharp glyph unconditionally"
+        );
+        assert!(
+            settled_soft < 0.25,
+            "settled frame should read as sharp text, not blur (soft fraction {settled_soft:.3})"
+        );
+    }
+
+    #[test]
+    fn char_animation_never_restarts_the_gradient_ramp_per_unit() {
+        let mut gt = two_color_gradient(default_angle());
+        gt.content = "IIII IIII IIII IIII".into();
+        gt.style.white_space = Some(CssWhiteSpace::Nowrap);
+        gt.style.animation = vec![AnimationEffect::CharFadeIn(CharAnimationTiming {
+            delay: 0.0,
+            duration: 0.1,
+            stagger: 0.0,
+            granularity: TextAnimGranularity::Word,
+            easing: EasingType::Linear,
+            ..Default::default()
+        })];
+
+        const W: i32 = 1400;
+        const H: i32 = 300;
+        let props = props_for(&gt);
+        let (buf, alpha) = render_unpremul_at(&gt, W, H, 5.0, &props);
+        let (lo, hi) = ink_x_span(&alpha, W, H).expect("must paint some ink");
+
+        let left = best_pixel_in_column(&buf, &alpha, W, H, (lo + 2).min(hi));
+        let right = best_pixel_in_column(&buf, &alpha, W, H, (hi - 2).max(lo));
+
+        assert!(
+            left.0 as i32 - left.2 as i32 > 60,
+            "the leftmost word must still read close to the ramp's first colour (red) once \
+             settled — got {left:?}"
+        );
+        assert!(
+            right.2 as i32 - right.0 as i32 > 60,
+            "the rightmost word must still read close to the ramp's last colour (blue) — \
+             splitting the run into per-word animated units must not restart the gradient for \
+             each word, got {right:?}"
         );
     }
 }

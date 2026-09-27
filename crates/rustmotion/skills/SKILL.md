@@ -240,6 +240,8 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/material-and-light.md](rules/material-and-light.md) - Lit surfaces: `style.material`'s three presets, the scene-wide `light` that makes them agree, and why the material follows the box and not a `shape`'s own geometry
 - [rules/camera-3d.md](rules/camera-3d.md) - Tilt a whole shot with `camera.rotate_x`/`rotate_y`/`perspective`: one shared vanishing point, and rotation scaled by each plane's `style.depth`
 - [rules/depth-of-field.md](rules/depth-of-field.md) - Defocus by plane: `camera.focus`/`aperture` on the `style.depth` scale, rack focus by keyframe, and why nothing moves without distinct depths
+- [rules/char-animation-rich-and-gradient-text.md](rules/char-animation-rich-and-gradient-text.md) - `char_*` presets on `rich_text` and `gradient_text`: stagger across span boundaries, per-span `ink_from`, and why `ink_from` is inert on a gradient
+- [rules/text-morph.md](rules/text-morph.md) - `text.morph`: matched letters travel, unmatched ones fade or scramble — how it differs from `text.states` + `swap`
 - [rules/text-component-parity.md](rules/text-component-parity.md) - Where `text`, `rich_text` and `gradient_text` disagreed: colour alpha, literal whitespace and baseline, the CSS angle convention and explicit `stops`
 - [rules/iris-transition.md](rules/iris-transition.md) - `iris` beyond a centred circle: `origin`, `shape`, `fill`+`hold`, `ring` and `reverse`, and the pill coverage approximation
 - [rules/whip-transition.md](rules/whip-transition.md) - The whip cut: a directional slide that streaks **both** frames along its axis, unlike `zoom_blur` which streaks only the outgoing one
@@ -1861,7 +1863,7 @@ See Rule 13 for usage guidance.
 | 3D         | `flip_in_x`, `flip_in_y`, `flip_out_x`, `flip_out_y` (3D card flip), `tilt_in` (3D tilt with rotate_x + rotate_y)                                                                                         |
 | Stroke     | `draw_in` (animate `draw_progress` 0→1 for arrows/connectors/lines), `stroke_reveal` (draw_in + fade-in opacity over first 20%)                                                                            |
 | Special    | `typewriter`, `wipe_left`, `wipe_right`                                                                                                                                                                    |
-| Char (text only) | `char_scale_in`, `char_fade_in`, `char_wave`, `char_bounce`, `char_rotate_in`, `char_slide_up` (per-char/word animation, extra fields: `stagger`, `granularity`, `overshoot`) |
+| Char (text, rich_text, gradient_text) | `char_scale_in`, `char_fade_in`, `char_wave`, `char_bounce`, `char_rotate_in`, `char_slide_up` (per-char/word animation, extra fields: `stagger`, `granularity`, `overshoot`) |
 
 #### Wiggle (Procedural Noise)
 

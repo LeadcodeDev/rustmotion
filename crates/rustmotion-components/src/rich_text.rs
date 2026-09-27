@@ -7,13 +7,15 @@ use rustmotion_core::css::style::{
     TextAlign as CssTextAlign, WhiteSpace as CssWhiteSpace,
 };
 use rustmotion_core::css::CssStyle;
-use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::animator::{AnimatedProperties, ResolvedCharAnimation};
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
     typeface_with_fallback,
 };
-use rustmotion_core::schema::{FontStyleType, FontWeight, TextAlign, TimelineStep};
+use rustmotion_core::schema::{
+    FontStyleType, FontWeight, TextAlign, TextAnimGranularity, TimelineStep,
+};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// Padding around a pill span's background box, in px on each side. `left`
@@ -419,6 +421,22 @@ impl RichText {
 
         let baseline_offset = (layout.line_height + layout.max_ascent - layout.max_descent) / 2.0;
 
+        if let Some(ref resolved) = props.char_animation {
+            render_rich_text_char_animation(
+                canvas,
+                &layout,
+                &self.spans,
+                &span_fonts,
+                &emoji_tf,
+                align,
+                align_width,
+                baseline_offset,
+                resolved,
+                ctx.time,
+            );
+            return;
+        }
+
         for (line_idx, line) in layout.lines.iter().enumerate() {
             let line_x_offset = match align {
                 TextAlign::Left => 0.0,
@@ -536,6 +554,155 @@ impl RichText {
     }
 }
 
+fn paint_pill_background(
+    canvas: &Canvas,
+    span: &RichTextSpan,
+    run: &[RichTextToken],
+    span_fonts: &[Option<SpanFontInfo>],
+    line_x_offset: f32,
+    y: f32,
+) {
+    let (Some(first), Some(last)) = (run.first(), run.last()) else {
+        return;
+    };
+    let sf = span_fonts[first.span_idx]
+        .as_ref()
+        .expect("font presence matches compute_layout's tokenization");
+    let (_, metrics) = sf.font.metrics();
+    let ascent = -metrics.ascent;
+    let descent = metrics.descent;
+    let padding = span.pill_padding();
+
+    let x0 = line_x_offset + first.x - padding.left;
+    let x1 = line_x_offset + last.x + last.width + padding.right;
+    let y0 = y - ascent - padding.top;
+    let y1 = y + descent + padding.bottom;
+    let rect = Rect::from_ltrb(x0, y0, x1, y1);
+    let radius = span.border_radius.unwrap_or(0.0).max(0.0);
+    let rrect = RRect::new_rect_xy(rect, radius, radius);
+    let center = Point::new((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let rotation = span.rotation.unwrap_or(0.0);
+
+    let background = span
+        .background
+        .as_deref()
+        .expect("paint_pill_background is only called for spans with a background");
+    let bg_paint = paint_from_hex(background);
+
+    canvas.save();
+    if rotation != 0.0 {
+        canvas.rotate(rotation, Some(center));
+    }
+    canvas.draw_rrect(rrect, &bg_paint);
+    canvas.restore();
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_rich_text_char_animation(
+    canvas: &Canvas,
+    layout: &RichTextLayout,
+    spans: &[RichTextSpan],
+    span_fonts: &[Option<SpanFontInfo>],
+    emoji_tf: &Option<Typeface>,
+    align: TextAlign,
+    align_width: f32,
+    baseline_offset: f32,
+    char_anim: &ResolvedCharAnimation,
+    time: f64,
+) {
+    let is_word_mode = matches!(char_anim.granularity, TextAnimGranularity::Word);
+    let mut global_unit_idx = 0usize;
+
+    for (line_idx, line) in layout.lines.iter().enumerate() {
+        if line.tokens.is_empty() {
+            continue;
+        }
+        let line_x_offset = match align {
+            TextAlign::Left => 0.0,
+            TextAlign::Center => (align_width - line.width) / 2.0,
+            TextAlign::Right => align_width - line.width,
+        };
+        let y = line_idx as f32 * layout.line_height + baseline_offset;
+
+        let mut i = 0;
+        while i < line.tokens.len() {
+            let span_idx = line.tokens[i].span_idx;
+            let mut j = i + 1;
+            while j < line.tokens.len() && line.tokens[j].span_idx == span_idx {
+                j += 1;
+            }
+            let run = &line.tokens[i..j];
+            if spans[span_idx].background.is_some() {
+                paint_pill_background(canvas, &spans[span_idx], run, span_fonts, line_x_offset, y);
+            }
+            i = j;
+        }
+
+        for tok in &line.tokens {
+            let sf = span_fonts[tok.span_idx]
+                .as_ref()
+                .expect("font presence matches compute_layout's tokenization");
+            let paint = paint_from_hex(&sf.color);
+            let emoji_font = emoji_tf
+                .as_ref()
+                .map(|tf| Font::from_typeface(tf.clone(), sf.font.size()));
+
+            if is_word_mode {
+                let t = crate::intrinsic::unit_progress(char_anim, global_unit_idx, time);
+                canvas.save();
+                crate::intrinsic::apply_text_anim_preset(
+                    canvas,
+                    &tok.text,
+                    &sf.font,
+                    &emoji_font,
+                    &paint,
+                    line_x_offset + tok.x,
+                    y,
+                    tok.width,
+                    sf.letter_spacing,
+                    char_anim,
+                    t,
+                    time,
+                    global_unit_idx,
+                    sf.font.size(),
+                );
+                canvas.restore();
+                global_unit_idx += 1;
+            } else {
+                let mut cursor_x = line_x_offset + tok.x;
+                for ch in tok.text.chars() {
+                    let ch_str = ch.to_string();
+                    let (ch_width, _) = sf.font.measure_str(&ch_str, None);
+                    let ch_width = ch_width + sf.letter_spacing;
+
+                    let t = crate::intrinsic::unit_progress(char_anim, global_unit_idx, time);
+                    canvas.save();
+                    crate::intrinsic::apply_text_anim_preset(
+                        canvas,
+                        &ch_str,
+                        &sf.font,
+                        &emoji_font,
+                        &paint,
+                        cursor_x,
+                        y,
+                        ch_width,
+                        0.0,
+                        char_anim,
+                        t,
+                        time,
+                        global_unit_idx,
+                        sf.font.size(),
+                    );
+                    canvas.restore();
+
+                    cursor_x += ch_width;
+                    global_unit_idx += 1;
+                }
+            }
+        }
+    }
+}
+
 impl Painter for RichText {
     fn paint_content(
         &self,
@@ -552,6 +719,9 @@ impl Painter for RichText {
 mod tests {
     use super::*;
     use rustmotion_core::css::CssStyle;
+    use rustmotion_core::schema::{
+        AnimationEffect, CharAnimationTiming, EasingType, TextAnimGranularity,
+    };
 
     fn span(text: &str) -> RichTextSpan {
         RichTextSpan {
@@ -1110,6 +1280,304 @@ mod tests {
             corner_rotated, corner_flat,
             "rotating the pill 45° about its own centre must move its corner away from the \
              unrotated position, got the same pixel {corner_rotated:?} at both"
+        );
+    }
+
+    fn richtext_with_char_anim(
+        spans: Vec<RichTextSpan>,
+        effect: AnimationEffect,
+        font_px: f32,
+    ) -> RichText {
+        RichText {
+            spans,
+            max_width: None,
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(rustmotion_core::css::Length::Px(font_px)),
+                white_space: Some(CssWhiteSpace::Nowrap),
+                animation: vec![effect],
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        }
+    }
+
+    fn props_for(rt: &RichText) -> AnimatedProperties {
+        AnimatedProperties {
+            char_animation: rustmotion_core::engine::animator::extract_effects(&rt.style.animation)
+                .char_animation,
+            ..Default::default()
+        }
+    }
+
+    fn ctx_at(time: f64, video_width: u32, video_height: u32) -> PaintCtx {
+        PaintCtx {
+            time,
+            scenario_time: time,
+            scene_duration: 2.0,
+            frame_index: 0,
+            fps: 30,
+            video_width,
+            video_height,
+            stagger_offset: 0.0,
+        }
+    }
+
+    fn has_ink_in(grid: &[u8], surface_width: i32, x0: i32, x1: i32, y0: i32, y1: i32) -> bool {
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if grid[(y * surface_width + x) as usize] > 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn soft_pixel_fraction(
+        grid: &[u8],
+        surface_width: i32,
+        x0: i32,
+        x1: i32,
+        y0: i32,
+        y1: i32,
+    ) -> f32 {
+        let mut inked = 0u32;
+        let mut soft = 0u32;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let a = grid[(y * surface_width + x) as usize];
+                if a > 0 {
+                    inked += 1;
+                    if a < 250 {
+                        soft += 1;
+                    }
+                }
+            }
+        }
+        if inked == 0 {
+            return 0.0;
+        }
+        soft as f32 / inked as f32
+    }
+
+    fn inter_font_px(px: f32) -> Font {
+        let typeface = typeface_with_fallback("Inter", FontStyle::default()).expect("resolves");
+        Font::from_typeface(typeface, px)
+    }
+
+    #[test]
+    fn char_blur_in_animates_a_rich_text_word_instead_of_painting_it_sharp_immediately() {
+        let font_px = 100.0;
+        let rt = richtext_with_char_anim(
+            vec![span("BLUR")],
+            AnimationEffect::CharBlurIn(CharAnimationTiming {
+                delay: 0.0,
+                duration: 0.5,
+                stagger: 0.03,
+                granularity: TextAnimGranularity::Word,
+                easing: EasingType::Linear,
+                ..Default::default()
+            }),
+            font_px,
+        );
+
+        const W: i32 = 700;
+        const H: i32 = 220;
+        let props = props_for(&rt);
+
+        let render_at = |t: f64| -> Vec<u8> {
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+            {
+                let canvas = surface.canvas();
+                rt.paint(canvas, W as f32, &props, &ctx_at(t, W as u32, H as u32));
+            }
+            alpha_grid(&mut surface, W, H)
+        };
+
+        let early = render_at(0.15);
+        let settled = render_at(1.0);
+
+        assert!(
+            has_ink_in(&early, W, 0, W, 0, H),
+            "the word must have started painting by t=0.15 — a char_* preset on rich_text used \
+             to be silently ignored and paint the word fully sharp from frame 0"
+        );
+
+        let early_soft = soft_pixel_fraction(&early, W, 0, W, 0, H);
+        let settled_soft = soft_pixel_fraction(&settled, W, 0, W, 0, H);
+
+        assert!(
+            early_soft > settled_soft + 0.15,
+            "mid-reveal soft-pixel fraction ({early_soft:.3}) must be clearly higher than the \
+             settled fraction ({settled_soft:.3}) — rich_text must actually blur while animating, \
+             not just render the sharp glyph unconditionally"
+        );
+        assert!(
+            settled_soft < 0.25,
+            "settled frame should read as sharp text, not blur (soft fraction {settled_soft:.3})"
+        );
+    }
+
+    #[test]
+    fn char_blur_in_word_stagger_carries_across_a_span_boundary() {
+        let font_px = 90.0;
+        let rt = richtext_with_char_anim(
+            vec![span("ONE "), span("TWO")],
+            AnimationEffect::CharBlurIn(CharAnimationTiming {
+                delay: 0.5,
+                duration: 0.3,
+                stagger: 0.6,
+                granularity: TextAnimGranularity::Word,
+                easing: EasingType::Linear,
+                blur: Some(16.0),
+                ..Default::default()
+            }),
+            font_px,
+        );
+
+        const W: i32 = 900;
+        const H: i32 = 180;
+        let props = props_for(&rt);
+        let font = inter_font_px(font_px);
+        let word1_end = measure_text_with_fallback("ONE", &font, &None, 0.0) as i32;
+
+        let mut before = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = before.canvas();
+            rt.paint(canvas, W as f32, &props, &ctx_at(0.1, W as u32, H as u32));
+        }
+        let before_grid = alpha_grid(&mut before, W, H);
+        assert!(
+            !has_ink_in(&before_grid, W, 0, W, 0, H),
+            "nothing should paint before `delay` has elapsed"
+        );
+
+        let mut mid = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = mid.canvas();
+            rt.paint(canvas, W as f32, &props, &ctx_at(0.65, W as u32, H as u32));
+        }
+        let mid_grid = alpha_grid(&mut mid, W, H);
+        assert!(
+            has_ink_in(&mid_grid, W, 0, word1_end, 0, H),
+            "the first span's word should show ink by t=0.65 (mid-reveal)"
+        );
+        assert!(
+            !has_ink_in(&mid_grid, W, word1_end + 70, W, 0, H),
+            "the SECOND span's word (a different RichTextSpan, starting at delay+stagger=1.1s) \
+             must still be fully invisible at t=0.65 — the stagger index must run across the span \
+             boundary rather than resetting per span"
+        );
+    }
+
+    #[test]
+    fn ink_from_converges_to_each_spans_own_colour_not_a_shared_default() {
+        let font_px = 90.0;
+        let spans = vec![
+            RichTextSpan {
+                color: Some("#00FF00".into()),
+                ..span("AAAA")
+            },
+            RichTextSpan {
+                color: Some("#0000FF".into()),
+                ..span(" BBBB")
+            },
+        ];
+        let rt = richtext_with_char_anim(
+            spans.clone(),
+            AnimationEffect::CharFadeIn(CharAnimationTiming {
+                delay: 0.0,
+                duration: 1.0,
+                stagger: 0.0,
+                granularity: TextAnimGranularity::Word,
+                easing: EasingType::Linear,
+                ink_from: Some("#FF0000".into()),
+                ..Default::default()
+            }),
+            font_px,
+        );
+
+        const W: i32 = 900;
+        const H: i32 = 200;
+        let props = props_for(&rt);
+
+        let layout = RichText::compute_layout(&spans, &rt.style, W as f32, H as f32, None, -1.0);
+        let win = |idx: usize| {
+            let tok = &layout.lines[0].tokens[idx];
+            (tok.x as i32, (tok.x + tok.width) as i32)
+        };
+        let (w1_x0, w1_x1) = win(0);
+        let (w2_x0, w2_x1) = win(1);
+
+        let mean_rgb = |time: f64, x0: i32, x1: i32| -> (f32, f32, f32) {
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+            {
+                let canvas = surface.canvas();
+                rt.paint(canvas, W as f32, &props, &ctx_at(time, W as u32, H as u32));
+            }
+            let snapshot = surface.image_snapshot();
+            let info = skia_safe::ImageInfo::new(
+                (W, H),
+                skia_safe::ColorType::RGBA8888,
+                skia_safe::AlphaType::Unpremul,
+                None,
+            );
+            let mut buf = vec![0u8; (W * H * 4) as usize];
+            assert!(snapshot.read_pixels(
+                &info,
+                &mut buf,
+                (W * 4) as usize,
+                skia_safe::IPoint::new(0, 0),
+                skia_safe::image::CachingHint::Disallow,
+            ));
+            let mut sum = (0u64, 0u64, 0u64);
+            let mut alpha_sum = 0u64;
+            for y in 0..H {
+                for x in x0.max(0)..x1.min(W) {
+                    let i = ((y * W + x) * 4) as usize;
+                    let a = buf[i + 3] as u64;
+                    sum.0 += buf[i] as u64 * a;
+                    sum.1 += buf[i + 1] as u64 * a;
+                    sum.2 += buf[i + 2] as u64 * a;
+                    alpha_sum += a;
+                }
+            }
+            assert!(
+                alpha_sum > 0,
+                "some inked pixels must exist in this window at t={time}"
+            );
+            (
+                sum.0 as f32 / alpha_sum as f32,
+                sum.1 as f32 / alpha_sum as f32,
+                sum.2 as f32 / alpha_sum as f32,
+            )
+        };
+
+        let (r1_early, g1_early, b1_early) = mean_rgb(0.05, w1_x0, w1_x1);
+        let (r2_early, g2_early, b2_early) = mean_rgb(0.05, w2_x0, w2_x1);
+        assert!(
+            r1_early > g1_early && r1_early > b1_early,
+            "span 1 should read close to ink_from (red) early on, got rgb=({r1_early},{g1_early},{b1_early})"
+        );
+        assert!(
+            r2_early > g2_early && r2_early > b2_early,
+            "span 2 should read close to ink_from (red) early on, got rgb=({r2_early},{g2_early},{b2_early})"
+        );
+
+        let (r1, g1, b1) = mean_rgb(5.0, w1_x0, w1_x1);
+        let (r2, g2, b2) = mean_rgb(5.0, w2_x0, w2_x1);
+        assert!(
+            g1 > r1 && g1 > b1,
+            "settled span 1 must converge to ITS OWN colour (green), got rgb=({r1},{g1},{b1})"
+        );
+        assert!(
+            b2 > r2 && b2 > g2,
+            "settled span 2 must converge to ITS OWN colour (blue), not span 1's — a shared \
+             default would fail this, got rgb=({r2},{g2},{b2})"
         );
     }
 }

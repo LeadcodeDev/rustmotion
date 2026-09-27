@@ -733,6 +733,348 @@ impl IntrinsicMeasure for RichTextIntrinsic {
     }
 }
 
+use rustmotion_core::engine::animator::{ease, ResolvedCharAnimation};
+use rustmotion_core::engine::renderer::{draw_text_with_fallback, paint_from_hex};
+use rustmotion_core::schema::{CharAnimPreset, TextAlign, TextAnimGranularity};
+use skia_safe::{Canvas, Paint};
+
+pub fn unit_progress(cfg: &ResolvedCharAnimation, idx: usize, time: f64) -> f32 {
+    let unit_start = cfg.unit_start(idx);
+    let unit_end = unit_start + cfg.duration as f64;
+    let raw_t = if time <= unit_start {
+        0.0
+    } else if time >= unit_end {
+        1.0
+    } else {
+        (time - unit_start) / (unit_end - unit_start)
+    };
+    ease(raw_t, &cfg.easing) as f32
+}
+
+fn ink_paint(cfg: &ResolvedCharAnimation, paint: &Paint, t: f32) -> Option<Paint> {
+    let from = cfg.ink_from.as_deref()?;
+    let start = paint_from_hex(from).color();
+    let end = paint.color();
+    let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t.clamp(0.0, 1.0)) as u8;
+    let mut p = paint.clone();
+    p.set_color(skia_safe::Color::from_argb(
+        end.a(),
+        lerp(start.r(), end.r()),
+        lerp(start.g(), end.g()),
+        lerp(start.b(), end.b()),
+    ));
+    Some(p)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn apply_text_anim_preset(
+    canvas: &Canvas,
+    text: &str,
+    font: &Font,
+    emoji_font: &Option<Font>,
+    paint: &Paint,
+    cursor_x: f32,
+    line_y: f32,
+    unit_width: f32,
+    letter_spacing: f32,
+    cfg: &ResolvedCharAnimation,
+    t: f32,
+    time: f64,
+    unit_idx: usize,
+    font_size: f32,
+) {
+    let preset = &cfg.preset;
+    let overshoot = cfg.overshoot;
+    let blur_radius = cfg.blur;
+    let center_x = cursor_x + unit_width / 2.0;
+    let center_y = line_y;
+
+    let inked = ink_paint(cfg, paint, t);
+    let paint = inked.as_ref().unwrap_or(paint);
+    if let Some(from) = cfg.scale_from {
+        if !matches!(preset, CharAnimPreset::ScaleIn | CharAnimPreset::Bounce) {
+            let s = from + (1.0 - from) * t.clamp(0.0, 1.0);
+            canvas.translate((center_x, center_y));
+            canvas.scale((s, s));
+            canvas.translate((-center_x, -center_y));
+        }
+    }
+
+    match preset {
+        CharAnimPreset::ScaleIn => {
+            let scale = if overshoot > 0.001 {
+                if t < 0.7 {
+                    let p = t / 0.7;
+                    p * (1.0 + overshoot)
+                } else {
+                    let p = (t - 0.7) / 0.3;
+                    (1.0 + overshoot) - overshoot * p
+                }
+            } else {
+                t
+            };
+            if scale < 0.001 {
+                return;
+            }
+            canvas.translate((center_x, center_y));
+            canvas.scale((scale, scale));
+            canvas.translate((-center_x, -center_y));
+            draw_text_with_fallback(
+                canvas,
+                text,
+                font,
+                emoji_font,
+                letter_spacing,
+                cursor_x,
+                line_y,
+                paint,
+            );
+        }
+        CharAnimPreset::FadeIn => {
+            let mut p = paint.clone();
+            p.set_alpha_f(t * paint.alpha_f());
+            draw_text_with_fallback(
+                canvas,
+                text,
+                font,
+                emoji_font,
+                letter_spacing,
+                cursor_x,
+                line_y,
+                &p,
+            );
+        }
+        CharAnimPreset::Wave => {
+            let wave_offset =
+                (time as f32 * 4.0 + unit_idx as f32 * 0.5).sin() * 8.0 * (1.0 - t * 0.5);
+            let mut p = paint.clone();
+            p.set_alpha_f(t.min(1.0) * paint.alpha_f());
+            draw_text_with_fallback(
+                canvas,
+                text,
+                font,
+                emoji_font,
+                letter_spacing,
+                cursor_x,
+                line_y + wave_offset,
+                &p,
+            );
+        }
+        CharAnimPreset::Bounce => {
+            let peak = 1.0 + overshoot.max(0.3);
+            let scale = if t < 0.5 {
+                t * 2.0 * peak
+            } else {
+                peak - (peak - 1.0) * ((t - 0.5) * 2.0)
+            };
+            let scale = scale.max(0.001);
+            canvas.translate((center_x, center_y));
+            canvas.scale((scale, scale));
+            canvas.translate((-center_x, -center_y));
+            draw_text_with_fallback(
+                canvas,
+                text,
+                font,
+                emoji_font,
+                letter_spacing,
+                cursor_x,
+                line_y,
+                paint,
+            );
+        }
+        CharAnimPreset::RotateIn => {
+            let angle = (1.0 - t) * -90.0;
+            let mut p = paint.clone();
+            p.set_alpha_f(t * paint.alpha_f());
+            canvas.translate((center_x, center_y));
+            canvas.rotate(angle, None);
+            canvas.translate((-center_x, -center_y));
+            draw_text_with_fallback(
+                canvas,
+                text,
+                font,
+                emoji_font,
+                letter_spacing,
+                cursor_x,
+                line_y,
+                &p,
+            );
+        }
+        CharAnimPreset::SlideUp => {
+            let travel = (1.0 - t) * font_size * 0.8 * cfg.distance;
+            let (dx, dy) = cfg.direction.offset(travel);
+            let mut p = paint.clone();
+            p.set_alpha_f(t * paint.alpha_f());
+            draw_text_with_fallback(
+                canvas,
+                text,
+                font,
+                emoji_font,
+                letter_spacing,
+                cursor_x + dx,
+                line_y + dy,
+                &p,
+            );
+        }
+        CharAnimPreset::BlurIn => {
+            let tt = t.clamp(0.0, 1.0);
+            let travel = (1.0 - tt) * font_size * 0.12 * cfg.distance;
+            let (dx, dy) = cfg.direction.offset(travel);
+            let sigma = ((1.0 - tt) * blur_radius).max(0.0);
+            let mut p = paint.clone();
+            p.set_alpha_f(tt * paint.alpha_f());
+            if sigma > 0.05 {
+                if let Some(filter) = skia_safe::image_filters::blur(
+                    (sigma, sigma),
+                    skia_safe::TileMode::Clamp,
+                    None,
+                    None,
+                ) {
+                    p.set_image_filter(filter);
+                }
+            }
+            draw_text_with_fallback(
+                canvas,
+                text,
+                font,
+                emoji_font,
+                letter_spacing,
+                cursor_x + dx,
+                line_y + dy,
+                &p,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn render_char_animation(
+    canvas: &Canvas,
+    font: &Font,
+    emoji_font: &Option<Font>,
+    paint: &Paint,
+    letter_spacing: f32,
+    align: TextAlign,
+    align_width: f32,
+    line_height_val: f32,
+    baseline_offset: f32,
+    lines: &[String],
+    char_anim: &ResolvedCharAnimation,
+    time: f64,
+) {
+    let is_word_mode = matches!(char_anim.granularity, TextAnimGranularity::Word);
+    let mut global_unit_idx = 0usize;
+
+    for (line_idx, line) in lines.iter().enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+
+        let advance_width = measure_text_with_fallback(line, font, emoji_font, letter_spacing);
+        let line_x = match align {
+            TextAlign::Left => 0.0,
+            TextAlign::Center => (align_width - advance_width) / 2.0,
+            TextAlign::Right => align_width - advance_width,
+        };
+        let line_y = line_idx as f32 * line_height_val + baseline_offset;
+
+        if is_word_mode {
+            let mut cursor_x = line_x;
+            let mut chars = line.chars().peekable();
+
+            while chars.peek().is_some() {
+                let mut spaces = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c.is_whitespace() {
+                        spaces.push(c);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if !spaces.is_empty() {
+                    let space_w =
+                        measure_text_with_fallback(&spaces, font, emoji_font, letter_spacing);
+                    draw_text_with_fallback(
+                        canvas, &spaces, font, emoji_font, 0.0, cursor_x, line_y, paint,
+                    );
+                    cursor_x += space_w;
+                }
+
+                let mut word = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c.is_whitespace() {
+                        break;
+                    }
+                    word.push(c);
+                    chars.next();
+                }
+                if word.is_empty() {
+                    continue;
+                }
+
+                let word_width =
+                    measure_text_with_fallback(&word, font, emoji_font, letter_spacing);
+
+                let t = unit_progress(char_anim, global_unit_idx, time);
+
+                canvas.save();
+                apply_text_anim_preset(
+                    canvas,
+                    &word,
+                    font,
+                    emoji_font,
+                    paint,
+                    cursor_x,
+                    line_y,
+                    word_width,
+                    letter_spacing,
+                    char_anim,
+                    t,
+                    time,
+                    global_unit_idx,
+                    font.size(),
+                );
+                canvas.restore();
+
+                cursor_x += word_width;
+                global_unit_idx += 1;
+            }
+        } else {
+            let mut cursor_x = line_x;
+            for ch in line.chars() {
+                let ch_str = ch.to_string();
+                let (ch_width, _) = font.measure_str(&ch_str, None);
+                let ch_width = ch_width + letter_spacing;
+
+                let t = unit_progress(char_anim, global_unit_idx, time);
+
+                canvas.save();
+                apply_text_anim_preset(
+                    canvas,
+                    &ch_str,
+                    font,
+                    emoji_font,
+                    paint,
+                    cursor_x,
+                    line_y,
+                    ch_width,
+                    0.0,
+                    char_anim,
+                    t,
+                    time,
+                    global_unit_idx,
+                    font.size(),
+                );
+                canvas.restore();
+
+                cursor_x += ch_width;
+                global_unit_idx += 1;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -758,6 +1100,7 @@ mod tests {
             caret: None,
             states: Vec::new(),
             swap: None,
+            morph: None,
         };
         let m = TextIntrinsic::from_text(&text);
         let (w, h) = m.measure(
@@ -790,6 +1133,7 @@ mod tests {
             caret: None,
             states: Vec::new(),
             swap: None,
+            morph: None,
         };
         let m = TextIntrinsic::from_text(&text);
         let (_w_unwrapped, h_unwrapped) = m.measure(
@@ -826,6 +1170,7 @@ mod tests {
             caret: None,
             states: Vec::new(),
             swap: None,
+            morph: None,
         };
         let m = TextIntrinsic::from_text(&text);
         let (w, h) = m.measure(
@@ -854,6 +1199,7 @@ mod tests {
             caret: None,
             states: Vec::new(),
             swap: None,
+            morph: None,
         }
     }
 
@@ -1127,6 +1473,7 @@ mod tests {
             caret: None,
             states: Vec::new(),
             swap: None,
+            morph: None,
         }
     }
 
@@ -1403,6 +1750,7 @@ mod tests {
             caret: None,
             states: Vec::new(),
             swap: None,
+            morph: None,
         }
     }
 
@@ -1518,6 +1866,7 @@ mod tests {
             caret: None,
             states: Vec::new(),
             swap: None,
+            morph: None,
         }
     }
 
