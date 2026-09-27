@@ -221,6 +221,121 @@ fn detect_ghost_effects(
     (mb, tr)
 }
 
+fn ghost_css_for(
+    child: &ChildComponent,
+    parent_css: &CssStyle,
+    extra_delay: f64,
+    scene_duration: f64,
+    ghost_time: f64,
+    ghost_opacity_scale: f32,
+) -> CssStyle {
+    let mut css = component_css(&child.component);
+    css.position = Some(Position::Absolute);
+    if let Some((x, y)) = child.absolute_position() {
+        css.left = Some(CLP::Px(x));
+        css.top = Some(CLP::Px(y));
+    }
+    if let Some(z) = child.z_index {
+        css.z_index = Some(z);
+    }
+    rustmotion_core::css::cascade::inherit_from(parent_css, &mut css);
+    if let Some(animatable) = child.component.as_animatable() {
+        let steps = animatable.timeline_steps();
+        if steps.iter().any(|s| s.style.is_some()) {
+            let skip_opacity = css.transition.is_some();
+            apply_style_states(&mut css, steps, ghost_time - extra_delay, skip_opacity);
+            let overrides = resolve_transition_css_overrides(
+                child.component.as_styled().style_config(),
+                steps,
+                ghost_time - extra_delay,
+            );
+            if let Some(br) = overrides.border_radius {
+                css.border_radius = Some(br);
+            }
+            if let Some(bg) = overrides.background {
+                css.background = Some(bg);
+            }
+        }
+    }
+    if let Some(ghost_effects) = effective_effects(&child.component, extra_delay, ghost_time) {
+        let props = resolve_props_for_effects(&ghost_effects, ghost_time, scene_duration);
+        if props_has_paint_overrides(&props) {
+            apply_animated_props(&mut css, &props);
+        }
+        apply_glow_effect(&mut css, &ghost_effects);
+        carry_paint_pass_effects(&mut css, &ghost_effects);
+        apply_directional_blur_props(&mut css, &props);
+    }
+    let base_opacity = css.opacity.unwrap_or(1.0);
+    css.opacity = Some((base_opacity * ghost_opacity_scale).clamp(0.0, 1.0));
+    css
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_one_ghost<'a>(
+    child: &'a ChildComponent,
+    components: &mut Vec<Option<&'a ChildComponent>>,
+    stagger_delays: &mut Vec<f64>,
+    time_params: &mut Vec<(f64, f64)>,
+    next_id: &mut NodeId,
+    anim: Option<BuildAnimationCtx>,
+    actx: BuildAnimationCtx,
+    stagger_delay: f64,
+    extra_delay: f64,
+    time_remap: (f64, f64),
+    parent_css: &CssStyle,
+    path: &str,
+    viewport: (f32, f32),
+    outer_scope: Option<&dyn Scope>,
+    warn_unresolved: bool,
+    offset: f64,
+    ghost_opacity_scale: f32,
+) -> BoxNode {
+    let ghost_time = actx.time - offset;
+    let ghost_time_remap = (time_remap.0, time_remap.1 - offset);
+    let ghost_css = ghost_css_for(
+        child,
+        parent_css,
+        extra_delay,
+        actx.scene_duration,
+        ghost_time,
+        ghost_opacity_scale,
+    );
+    let ghost_intrinsic = component_intrinsic(&child.component, &ghost_css);
+
+    let ghost_id = *next_id;
+    *next_id += 1;
+    components.push(Some(child));
+    stagger_delays.push(extra_delay);
+    time_params.push(ghost_time_remap);
+
+    let ghost_children = container_children(
+        &child.component,
+        components,
+        stagger_delays,
+        time_params,
+        next_id,
+        anim,
+        path,
+        stagger_delay,
+        ghost_time_remap,
+        &ghost_css,
+        viewport,
+        outer_scope,
+        warn_unresolved,
+    );
+
+    BoxNode {
+        id: ghost_id,
+        kind: BoxKind::Ghost(Arc::new(ghost_id)),
+        css: ghost_css,
+        children: ghost_children,
+        intrinsic: ghost_intrinsic,
+        source_path: None,
+        window: None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_ghosts<'a>(
     child: &'a ChildComponent,
@@ -228,11 +343,17 @@ fn build_ghosts<'a>(
     stagger_delays: &mut Vec<f64>,
     time_params: &mut Vec<(f64, f64)>,
     next_id: &mut NodeId,
+    anim: Option<BuildAnimationCtx>,
     actx: BuildAnimationCtx,
+    stagger_delay: f64,
     extra_delay: f64,
     time_remap: (f64, f64),
     effects: &[AnimationEffect],
     parent_css: &CssStyle,
+    path: &str,
+    viewport: (f32, f32),
+    outer_scope: Option<&dyn Scope>,
+    warn_unresolved: bool,
 ) -> Vec<BoxNode> {
     let (mb, tr) = detect_ghost_effects(effects);
 
@@ -248,6 +369,9 @@ fn build_ghosts<'a>(
         },
     }
     let strategy = if let Some(mc) = mb {
+        if mc.mode == rustmotion_core::schema::MotionBlurMode::Smear {
+            return Vec::new();
+        }
         let samples = mc.samples.clamp(1, 16);
         if samples <= 1 {
             return Vec::new();
@@ -268,58 +392,6 @@ fn build_ghosts<'a>(
         return Vec::new();
     };
 
-    let base_css_for_ghost = |ghost_time: f64, ghost_opacity_scale: f32| -> CssStyle {
-        let mut css = component_css(&child.component);
-        if let Some((x, y)) = child.absolute_position() {
-            css.position = Some(Position::Absolute);
-            css.left = Some(CLP::Px(x));
-            css.top = Some(CLP::Px(y));
-        }
-        if let Some(z) = child.z_index {
-            css.z_index = Some(z);
-        }
-        rustmotion_core::css::cascade::inherit_from(parent_css, &mut css);
-        if let Some(animatable) = child.component.as_animatable() {
-            let steps = animatable.timeline_steps();
-            if steps.iter().any(|s| s.style.is_some()) {
-                let skip_opacity = css.transition.is_some();
-                apply_style_states(&mut css, steps, ghost_time - extra_delay, skip_opacity);
-                let overrides = resolve_transition_css_overrides(
-                    child.component.as_styled().style_config(),
-                    steps,
-                    ghost_time - extra_delay,
-                );
-                if let Some(br) = overrides.border_radius {
-                    css.border_radius = Some(br);
-                }
-                if let Some(bg) = overrides.background {
-                    css.background = Some(bg);
-                }
-            }
-        }
-        let ghost_actx = BuildAnimationCtx {
-            time: ghost_time,
-            scenario_time: actx.scenario_time,
-            scene_duration: actx.scene_duration,
-            fps: actx.fps,
-        };
-        if let Some(ghost_effects) = effective_effects(&child.component, extra_delay, ghost_time) {
-            let props = resolve_props_for_effects(
-                &ghost_effects,
-                ghost_actx.time,
-                ghost_actx.scene_duration,
-            );
-            if props_has_paint_overrides(&props) {
-                apply_animated_props(&mut css, &props);
-            }
-            apply_glow_effect(&mut css, &ghost_effects);
-            carry_paint_pass_effects(&mut css, &ghost_effects);
-        }
-        let base_opacity = css.opacity.unwrap_or(1.0);
-        css.opacity = Some((base_opacity * ghost_opacity_scale).clamp(0.0, 1.0));
-        css
-    };
-
     let mut ghosts = Vec::new();
 
     match strategy {
@@ -329,24 +401,26 @@ fn build_ghosts<'a>(
         } => {
             let ghost_opacity_scale = 1.0 / (samples + 1) as f32;
             for i in 1..=samples {
-                let ghost_time = actx.time - (i as f64 * shutter_window / samples as f64);
-                let ghost_css = base_css_for_ghost(ghost_time, ghost_opacity_scale);
-
-                let ghost_id = *next_id;
-                *next_id += 1;
-                components.push(Some(child));
-                stagger_delays.push(extra_delay);
-                time_params.push(time_remap);
-
-                ghosts.push(BoxNode {
-                    id: ghost_id,
-                    kind: BoxKind::Ghost(Arc::new(ghost_id)),
-                    css: ghost_css,
-                    children: Vec::new(),
-                    intrinsic: None,
-                    source_path: None,
-                    window: None,
-                });
+                let offset = i as f64 * shutter_window / samples as f64;
+                ghosts.push(build_one_ghost(
+                    child,
+                    components,
+                    stagger_delays,
+                    time_params,
+                    next_id,
+                    anim,
+                    actx,
+                    stagger_delay,
+                    extra_delay,
+                    time_remap,
+                    parent_css,
+                    path,
+                    viewport,
+                    outer_scope,
+                    warn_unresolved,
+                    offset,
+                    ghost_opacity_scale,
+                ));
             }
         }
         Strategy::Trail {
@@ -356,25 +430,27 @@ fn build_ghosts<'a>(
         } => {
             let mut trail_nodes = Vec::with_capacity(copies as usize);
             for i in 1..=copies {
-                let ghost_time = actx.time - i as f64 * spacing;
+                let offset = i as f64 * spacing;
                 let ghost_opacity_scale = falloff.powi(i as i32);
-                let ghost_css = base_css_for_ghost(ghost_time, ghost_opacity_scale);
-
-                let ghost_id = *next_id;
-                *next_id += 1;
-                components.push(Some(child));
-                stagger_delays.push(extra_delay);
-                time_params.push(time_remap);
-
-                trail_nodes.push(BoxNode {
-                    id: ghost_id,
-                    kind: BoxKind::Ghost(Arc::new(ghost_id)),
-                    css: ghost_css,
-                    children: Vec::new(),
-                    intrinsic: None,
-                    source_path: None,
-                    window: None,
-                });
+                trail_nodes.push(build_one_ghost(
+                    child,
+                    components,
+                    stagger_delays,
+                    time_params,
+                    next_id,
+                    anim,
+                    actx,
+                    stagger_delay,
+                    extra_delay,
+                    time_remap,
+                    parent_css,
+                    path,
+                    viewport,
+                    outer_scope,
+                    warn_unresolved,
+                    offset,
+                    ghost_opacity_scale,
+                ));
             }
             trail_nodes.reverse();
             ghosts = trail_nodes;
@@ -426,11 +502,17 @@ fn build_child<'a>(
                 stagger_delays,
                 time_params,
                 next_id,
+                anim,
                 actx,
+                stagger_delay,
                 anim_delay,
                 time_remap,
                 &effects,
                 parent_css,
+                &path,
+                viewport,
+                outer_scope,
+                warn_unresolved,
             );
         }
     }
@@ -482,6 +564,16 @@ fn build_child<'a>(
             }
             apply_glow_effect(&mut css, &effects);
             carry_paint_pass_effects(&mut css, &effects);
+            apply_directional_blur_props(&mut css, &props);
+            apply_motion_blur_smear(
+                &mut css,
+                &effects,
+                &child.component,
+                anim_delay,
+                actx.time,
+                actx.scene_duration,
+                actx.fps,
+            );
         }
         resolve_computed_style(
             &mut css,
@@ -1001,6 +1093,70 @@ fn apply_glow_effect(css: &mut CssStyle, effects: &[rustmotion_core::schema::Ani
         color: Some(Color::Rgba { r, g, b, a: alpha }),
     };
     css.filter.get_or_insert_with(Vec::new).push(shadow);
+}
+
+fn apply_directional_blur_props(css: &mut CssStyle, props: &AnimatedProperties) {
+    use rustmotion_core::css::style::FilterFn;
+    use rustmotion_core::css::units::Length;
+
+    if props.blur_x <= 0.0 && props.blur_y <= 0.0 {
+        return;
+    }
+    css.filter
+        .get_or_insert_with(Vec::new)
+        .push(FilterFn::Blur {
+            radius: None,
+            radius_x: (props.blur_x > 0.0).then_some(Length::Px(props.blur_x)),
+            radius_y: (props.blur_y > 0.0).then_some(Length::Px(props.blur_y)),
+        });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_motion_blur_smear(
+    css: &mut CssStyle,
+    effects: &[rustmotion_core::schema::AnimationEffect],
+    component: &Component,
+    extra_delay: f64,
+    t: f64,
+    scene_duration: f64,
+    fps: u32,
+) {
+    use rustmotion_core::css::style::FilterFn;
+    use rustmotion_core::css::units::Length;
+    use rustmotion_core::schema::AnimationEffect;
+    use rustmotion_core::schema::MotionBlurMode;
+
+    let Some(cfg) = effects.iter().find_map(|e| match e {
+        AnimationEffect::MotionBlur(c) if c.mode == MotionBlurMode::Smear => Some(c),
+        _ => None,
+    }) else {
+        return;
+    };
+
+    let shutter_window = (cfg.shutter / fps.max(1) as f64).max(1e-6);
+    let sample = |at: f64| -> (f32, f32) {
+        match effective_effects(component, extra_delay, at) {
+            Some(e) => {
+                let p = resolve_props_for_effects(&e, at, scene_duration);
+                (p.translate_x, p.translate_y)
+            }
+            None => (0.0, 0.0),
+        }
+    };
+    let (x0, y0) = sample(t - shutter_window);
+    let (x1, y1) = sample(t);
+    let radius_x = (x1 - x0).abs();
+    let radius_y = (y1 - y0).abs();
+    if radius_x < 0.5 && radius_y < 0.5 {
+        return;
+    }
+    css.filter
+        .get_or_insert_with(Vec::new)
+        .push(FilterFn::Blur {
+            radius: None,
+            radius_x: Some(Length::Px(radius_x)),
+            radius_y: Some(Length::Px(radius_y)),
+        });
 }
 
 fn component_intrinsic(
@@ -2920,6 +3076,410 @@ mod tests {
             y: None,
             z_index: None,
             bleed: false,
+        }
+    }
+
+    use crate::legacy_dispatch::LegacyPaintDispatcher;
+    use rustmotion_core::css::style::{AlignItems, JustifyContent};
+    use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
+
+    #[test]
+    fn ghost_does_not_steal_a_flex_slot() {
+        let root_css = CssStyle {
+            display: Some(Display::Flex),
+            flex_direction: Some(FlexDirection::Column),
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            gap: Some(Gap::Uniform(CLP::Px(20.0))),
+            width: Some(CSize::Length(CLP::Px(640.0))),
+            height: Some(CSize::Length(CLP::Px(360.0))),
+            ..Default::default()
+        };
+        let scene = vec![
+            child_from_json(json!({
+                "type": "shape", "shape": "rect", "fill": "#FF4FB0",
+                "style": { "width": 200, "height": 60, "animation": [{ "name": "motion_blur" }] }
+            })),
+            child_from_json(json!({
+                "type": "shape", "shape": "rect", "fill": "#4B5BFF",
+                "style": { "width": 200, "height": 60 }
+            })),
+        ];
+        let anim = BuildAnimationCtx {
+            time: 10.0 / 30.0,
+            scenario_time: 10.0 / 30.0,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let built = build_scene_at_time(&scene, (640.0, 360.0), root_css, anim);
+        let layout = run_layout(&built.root, (640.0, 360.0), &ConversionContext::default());
+
+        let principals: Vec<_> = built
+            .root
+            .children
+            .iter()
+            .filter(|n| matches!(n.kind, BoxKind::Component(_)))
+            .collect();
+        assert_eq!(
+            principals.len(),
+            2,
+            "exactly the two real elements; ghosts must not be counted among them"
+        );
+
+        let first = layout.get(principals[0].id).expect("first box laid out");
+        let second = layout.get(principals[1].id).expect("second box laid out");
+
+        assert!(
+            (first.y - 110.0).abs() < 1.0,
+            "the motion-blurred box itself must sit at the flex-resolved position (110), got {}",
+            first.y
+        );
+        assert!(
+            (second.y - 190.0).abs() < 1.0,
+            "a motion-blurred sibling must not push the next flex item down (expected 190, \
+             regression of #66), got {}",
+            second.y
+        );
+    }
+
+    #[test]
+    fn ghost_of_a_container_carries_its_nested_child() {
+        let container_component: Component = serde_json::from_value(json!({
+            "type": "div",
+            "style": {
+                "width": 200, "height": 100,
+                "background": "#FF00FF",
+                "animation": [{ "name": "trail", "copies": 1, "spacing": 0.05, "falloff": 1.0 }]
+            },
+            "children": [{
+                "type": "shape", "shape": "rect", "fill": "#00FF00",
+                "position": "absolute", "x": 20, "y": 20,
+                "style": { "width": 40, "height": 40 }
+            }]
+        }))
+        .expect("container deserializes");
+        let scene = vec![ChildComponent {
+            id: None,
+            component: container_component,
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }];
+
+        let frame_time = 0.2;
+        let anim = BuildAnimationCtx {
+            time: frame_time,
+            scenario_time: frame_time,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let mut built = build_scene_at_time(
+            &scene,
+            (200.0, 100.0),
+            default_root_css((200.0, 100.0)),
+            anim,
+        );
+
+        let ghost_index = built
+            .root
+            .children
+            .iter()
+            .position(|n| matches!(n.kind, BoxKind::Ghost(_)))
+            .expect("a ghost was built for the trail effect");
+        let ghost = built.root.children.remove(ghost_index);
+        assert_eq!(
+            ghost.children.len(),
+            1,
+            "the ghost of a container must carry the container's own children, not an empty subtree"
+        );
+
+        let mini_root = BoxNode::container(default_root_css((200.0, 100.0)), vec![ghost]);
+        let layout = run_layout(&mini_root, (200.0, 100.0), &ConversionContext::default());
+
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((200, 100)).expect("raster surface");
+        let canvas = surface.canvas();
+        let dispatcher = LegacyPaintDispatcher::for_scene(&built);
+        let frame = PaintFrame {
+            light: Default::default(),
+            time: frame_time,
+            scenario_time: frame_time,
+            frame_index: 6,
+            fps: 30,
+            video_width: 200,
+            video_height: 100,
+            scene_duration: 1.0,
+            camera: None,
+        };
+        paint_tree(canvas, &mini_root, &layout, &frame, &dispatcher);
+
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (1, 1),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = [0u8; 4];
+        assert!(snapshot.read_pixels(
+            &info,
+            &mut buf,
+            4,
+            skia_safe::IPoint::new(40, 40),
+            skia_safe::image::CachingHint::Disallow,
+        ));
+        assert!(
+            buf[1] > 200 && buf[0] < 80 && buf[2] < 80,
+            "the ghost must paint the nested green shape, not just the container's own \
+             background; got {:?}",
+            buf
+        );
+    }
+
+    #[test]
+    fn ghost_of_a_measured_leaf_keeps_its_intrinsic_size() {
+        let scene = vec![child_from_json(json!({
+            "type": "text",
+            "content": "TEXT",
+            "position": "absolute", "x": 100, "y": 40,
+            "style": {
+                "font-size": 96, "color": "#FFFFFF",
+                "animation": [
+                    { "name": "keyframes", "keyframes": [{ "property": "translate_x", "easing": "linear", "keyframes": [
+                        { "time": 0, "value": 1200 }, { "time": 1, "value": -1200 }] }] },
+                    { "name": "motion_blur", "samples": 4, "shutter": 1.0 }
+                ]
+            }
+        }))];
+        let anim = BuildAnimationCtx {
+            time: 0.5,
+            scenario_time: 0.5,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let built = build_scene_at_time(
+            &scene,
+            (1280.0, 360.0),
+            default_root_css((1280.0, 360.0)),
+            anim,
+        );
+        let layout = run_layout(&built.root, (1280.0, 360.0), &ConversionContext::default());
+
+        let ghosts: Vec<_> = built
+            .root
+            .children
+            .iter()
+            .filter(|n| matches!(n.kind, BoxKind::Ghost(_)))
+            .collect();
+        assert!(
+            !ghosts.is_empty(),
+            "expected ghosts for a motion-blurred text node"
+        );
+        for g in &ghosts {
+            assert!(
+                g.intrinsic.is_some(),
+                "a ghost of a measured component (text) needs its own intrinsic to size itself"
+            );
+            let l = layout.get(g.id).expect("ghost laid out");
+            assert!(
+                l.width > 0.0 && l.height > 0.0,
+                "text ghost collapsed to a zero-size box, got {}x{}",
+                l.width,
+                l.height
+            );
+        }
+    }
+
+    #[test]
+    fn ghost_of_a_path_driven_pointer_samples_a_different_waypoint_offset() {
+        let scene = vec![child_from_json(json!({
+            "type": "pointer",
+            "size": 220, "tone": "dark",
+            "path": [
+                { "time": 0.0, "x": 1900, "y": 1000 },
+                { "time": 0.6, "x": 900, "y": 500 }
+            ],
+            "path_easing": "linear",
+            "style": { "animation": [{ "name": "motion_blur", "samples": 4, "shutter": 3.0 }] }
+        }))];
+        let frame_time = 0.5;
+        let anim = BuildAnimationCtx {
+            time: frame_time,
+            scenario_time: frame_time,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let built = build_scene_at_time(
+            &scene,
+            (1920.0, 1080.0),
+            default_root_css((1920.0, 1080.0)),
+            anim,
+        );
+
+        let (path, click_duration, path_easing) = match &scene[0].component {
+            Component::Pointer(p) => (p.path.clone(), p.click_duration, p.path_easing),
+            _ => panic!("expected a pointer component"),
+        };
+
+        let ghost_ids: Vec<NodeId> = built
+            .root
+            .children
+            .iter()
+            .filter(|n| matches!(n.kind, BoxKind::Ghost(_)))
+            .map(|n| n.id)
+            .collect();
+        assert!(ghost_ids.len() >= 2, "expected several ghosts");
+
+        let offsets: Vec<(f32, f32)> = ghost_ids
+            .iter()
+            .map(|&id| {
+                let (scale, shift) = built.time_params[id as usize];
+                let local_time = frame_time * scale + shift;
+                crate::cursor::waypoint_offset(&path, local_time, click_duration, path_easing)
+            })
+            .collect();
+
+        let distinct = offsets
+            .windows(2)
+            .any(|w| (w[0].0 - w[1].0).abs() > 1.0 || (w[0].1 - w[1].1).abs() > 1.0);
+        assert!(
+            distinct,
+            "ghosts of a path-driven pointer must sample different points along the path, got {:?}",
+            offsets
+        );
+
+        let live_offset =
+            crate::cursor::waypoint_offset(&path, frame_time, click_duration, path_easing);
+        assert!(
+            offsets
+                .iter()
+                .all(|o| (o.0 - live_offset.0).abs() > 1.0 || (o.1 - live_offset.1).abs() > 1.0),
+            "every ghost sampled the live pointer position instead of its own instant; \
+             got {:?} vs live {:?}",
+            offsets,
+            live_offset
+        );
+    }
+
+    #[test]
+    fn animated_blur_x_becomes_a_directional_blur_filter() {
+        use rustmotion_core::css::style::FilterFn;
+        use rustmotion_core::css::units::Length;
+
+        let scene = vec![child_from_json(json!({
+            "type": "shape", "shape": "rect", "fill": "#FFFFFF",
+            "style": {
+                "width": 100, "height": 100,
+                "animation": [{ "name": "keyframes", "duration": 1.0, "keyframes": [
+                    { "property": "blur_x", "easing": "linear", "keyframes": [
+                        { "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 40.0 }
+                    ] }
+                ] }]
+            }
+        }))];
+        let anim = BuildAnimationCtx {
+            time: 0.5,
+            scenario_time: 0.5,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let built = build_scene_at_time(
+            &scene,
+            (400.0, 400.0),
+            default_root_css((400.0, 400.0)),
+            anim,
+        );
+
+        let filters = built.root.children[0]
+            .css
+            .filter
+            .clone()
+            .expect("a blur filter was applied");
+        let blur = filters
+            .iter()
+            .find(|f| matches!(f, FilterFn::Blur { .. }))
+            .expect("a Blur filter");
+        match blur {
+            FilterFn::Blur {
+                radius,
+                radius_x,
+                radius_y,
+            } => {
+                assert!(radius.is_none(), "isotropic radius must stay unset");
+                assert!(
+                    matches!(radius_x, Some(Length::Px(v)) if (*v - 20.0).abs() < 1.0),
+                    "expected ~20px halfway through a 0->40 linear blur_x ramp, got {:?}",
+                    radius_x
+                );
+                assert!(
+                    radius_y.is_none(),
+                    "blur_y was never animated, must stay unset"
+                );
+            }
+            other => panic!("expected Blur, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn motion_blur_smear_mode_produces_no_ghosts_and_a_directional_filter_instead() {
+        use rustmotion_core::css::style::FilterFn;
+        use rustmotion_core::css::units::Length;
+
+        let scene = vec![child_from_json(json!({
+            "type": "shape", "shape": "rect", "fill": "#FFFFFF",
+            "position": "absolute", "x": 0, "y": 0,
+            "style": {
+                "width": 100, "height": 60,
+                "animation": [
+                    { "name": "keyframes", "duration": 1.0, "keyframes": [
+                        { "property": "translate_x", "easing": "linear", "keyframes": [
+                            { "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 900.0 }
+                        ] }
+                    ] },
+                    { "name": "motion_blur", "mode": "smear", "shutter": 1.0 }
+                ]
+            }
+        }))];
+        let anim = BuildAnimationCtx {
+            time: 0.5,
+            scenario_time: 0.5,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let built = build_scene_at_time(
+            &scene,
+            (1920.0, 1080.0),
+            default_root_css((1920.0, 1080.0)),
+            anim,
+        );
+
+        assert_eq!(
+            built.root.children.len(),
+            1,
+            "smear mode must not create ghost nodes"
+        );
+        assert!(matches!(built.root.children[0].kind, BoxKind::Component(_)));
+
+        let filters = built.root.children[0]
+            .css
+            .filter
+            .clone()
+            .expect("a smear filter was applied");
+        let blur = filters
+            .iter()
+            .find(|f| matches!(f, FilterFn::Blur { .. }))
+            .expect("a Blur filter");
+        match blur {
+            FilterFn::Blur { radius_x, .. } => {
+                assert!(
+                    matches!(radius_x, Some(Length::Px(v)) if (*v - 30.0).abs() < 3.0),
+                    "900px/s over a 1/30s shutter window is a ~30px streak, got {:?}",
+                    radius_x
+                );
+            }
+            other => panic!("expected Blur, got {:?}", other),
         }
     }
 }

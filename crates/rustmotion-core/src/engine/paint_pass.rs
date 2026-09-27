@@ -10,7 +10,9 @@ use crate::css::style::{
     Background, BackgroundLayer, BorderEdges, BorderRadius, BorderStyle, BoxShadow, ClipPath,
     Color, CssStyle, Edges, Material, MaterialPreset, Overflow, TransformFn, TransformOrigin,
 };
-use crate::css::units::{parse_origin_component, LengthContext, LengthPercentage, ParsedLength};
+use crate::css::units::{
+    parse_origin_component, Length, LengthContext, LengthPercentage, ParsedLength,
+};
 use crate::engine::box_tree::{BoxKind, BoxNode, NodeId};
 use crate::engine::layout_pass::{BoxLayout, LayoutResult};
 
@@ -263,7 +265,7 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
     }
 
     if let Some(filters) = node.css.backdrop_filter.as_deref() {
-        if let Some(backdrop) = filters_to_image_filter(filters, &length_ctx) {
+        if let Some(backdrop) = filters_to_image_filter(filters, &length_ctx, box_layout) {
             let radius = node
                 .css
                 .border_radius
@@ -286,7 +288,7 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         .css
         .filter
         .as_deref()
-        .and_then(|list| filters_to_image_filter(list, &length_ctx));
+        .and_then(|list| filters_to_image_filter(list, &length_ctx, box_layout));
     let aberration_shift = active_chromatic_aberration(&node.css, ctx.frame.time)
         .map(|(cfg, progress)| crate::engine::animator::chromatic_aberration_shift(cfg, progress));
     let aberration_filter = aberration_shift.and_then(chromatic_aberration_image_filter);
@@ -608,12 +610,39 @@ fn depth_of_field_image_filter(sigma: f32) -> Option<skia_safe::ImageFilter> {
     skia_safe::image_filters::blur((sigma, sigma), skia_safe::TileMode::Decal, None, None)
 }
 
+fn resolve_blur_radii(
+    radius: Option<&Length>,
+    radius_x: Option<&Length>,
+    radius_y: Option<&Length>,
+    ctx: &LengthContext,
+) -> (f32, f32) {
+    let iso = radius.map(|r| r.resolve(ctx).max(0.0));
+    let rx = radius_x
+        .map(|r| r.resolve(ctx).max(0.0))
+        .or(iso)
+        .unwrap_or(0.0);
+    let ry = radius_y
+        .map(|r| r.resolve(ctx).max(0.0))
+        .or(iso)
+        .unwrap_or(0.0);
+    (rx, ry)
+}
+
 fn filter_bleed(list: &[crate::css::style::FilterFn], ctx: &LengthContext) -> f32 {
     use crate::css::style::FilterFn;
     let mut bleed = 0.0f32;
     for f in list {
         let b = match f {
-            FilterFn::Blur { radius } => radius.resolve(ctx).max(0.0) * 1.5,
+            FilterFn::Blur {
+                radius,
+                radius_x,
+                radius_y,
+            } => {
+                let (rx, ry) =
+                    resolve_blur_radii(radius.as_ref(), radius_x.as_ref(), radius_y.as_ref(), ctx);
+                rx.max(ry) * 1.5
+            }
+            FilterFn::DirectionalBlur { radius, .. } => radius.resolve(ctx).max(0.0) * 1.5,
             FilterFn::DropShadow {
                 offset_x,
                 offset_y,
@@ -681,6 +710,7 @@ fn subtree_layout_bounds(node: &BoxNode, layout: &LayoutResult) -> Option<Rect> 
 fn filters_to_image_filter(
     list: &[crate::css::style::FilterFn],
     ctx: &LengthContext,
+    layout: &BoxLayout,
 ) -> Option<skia_safe::ImageFilter> {
     use crate::css::style::FilterFn;
     use skia_safe::image_filters;
@@ -688,12 +718,30 @@ fn filters_to_image_filter(
     let mut chain: Option<skia_safe::ImageFilter> = None;
     for f in list {
         chain = match f {
-            FilterFn::Blur { radius } => {
+            FilterFn::Blur {
+                radius,
+                radius_x,
+                radius_y,
+            } => {
+                let (rx, ry) =
+                    resolve_blur_radii(radius.as_ref(), radius_x.as_ref(), radius_y.as_ref(), ctx);
+                if rx <= 0.0 && ry <= 0.0 {
+                    chain
+                } else {
+                    image_filters::blur(
+                        (rx / 2.0, ry / 2.0),
+                        skia_safe::TileMode::Clamp,
+                        chain,
+                        None,
+                    )
+                }
+            }
+            FilterFn::DirectionalBlur { angle, radius } => {
                 let r = radius.resolve(ctx).max(0.0);
                 if r <= 0.0 {
                     chain
                 } else {
-                    image_filters::blur((r / 2.0, r / 2.0), skia_safe::TileMode::Clamp, chain, None)
+                    directional_blur_image_filter(r, *angle, (layout.cx(), layout.cy()), chain)
                 }
             }
             FilterFn::DropShadow {
@@ -725,6 +773,27 @@ fn filters_to_image_filter(
         };
     }
     chain
+}
+
+fn directional_blur_image_filter(
+    radius: f32,
+    angle_deg: f32,
+    pivot: (f32, f32),
+    input: Option<skia_safe::ImageFilter>,
+) -> Option<skia_safe::ImageFilter> {
+    use skia_safe::{image_filters, Matrix, Point, SamplingOptions, TileMode};
+
+    let sigma = radius / 2.0;
+    if sigma <= 0.0 {
+        return input;
+    }
+    let point = Point::new(pivot.0, pivot.1);
+    let sampling = SamplingOptions::default();
+    let to_axis = Matrix::rotate_deg_pivot(-angle_deg, point);
+    let back_to_angle = Matrix::rotate_deg_pivot(angle_deg, point);
+    let aligned = image_filters::matrix_transform(&to_axis, sampling, input);
+    let blurred = image_filters::blur((sigma, 0.0), TileMode::Clamp, aligned, None)?;
+    image_filters::matrix_transform(&back_to_angle, sampling, blurred)
 }
 
 fn noise_image_filter(intensity: f32, seed: u64) -> Option<skia_safe::ImageFilter> {
@@ -834,7 +903,10 @@ fn color_matrix_for(f: &crate::css::style::FilterFn) -> Option<[f32; 20]> {
             ];
             Some(m)
         }
-        FilterFn::Blur { .. } | FilterFn::DropShadow { .. } | FilterFn::Noise { .. } => None,
+        FilterFn::Blur { .. }
+        | FilterFn::DirectionalBlur { .. }
+        | FilterFn::DropShadow { .. }
+        | FilterFn::Noise { .. } => None,
     }
 }
 
@@ -2351,7 +2423,9 @@ mod hit_tests {
                 width: Some(CSize::Length(CLP::Px(100.0))),
                 height: Some(CSize::Length(CLP::Px(100.0))),
                 backdrop_filter: Some(vec![FilterFn::Blur {
-                    radius: Length::Px(10.0),
+                    radius: Some(Length::Px(10.0)),
+                    radius_x: None,
+                    radius_y: None,
                 }]),
                 ..Default::default()
             },
@@ -2443,7 +2517,9 @@ mod hit_tests {
                 width: Some(CSize::Length(CLP::Px(100.0))),
                 height: Some(CSize::Length(CLP::Px(100.0))),
                 backdrop_filter: Some(vec![FilterFn::Blur {
-                    radius: Length::Px(10.0),
+                    radius: Some(Length::Px(10.0)),
+                    radius_x: None,
+                    radius_y: None,
                 }]),
                 opacity: Some(0.99),
                 ..Default::default()
@@ -4342,7 +4418,9 @@ mod paint_order_tests {
                 background: Some(Background::Color(CssColor::String("#ff0000".into()))),
                 opacity: Some(0.999),
                 filter: Some(vec![FilterFn::Blur {
-                    radius: Length::Px(24.0),
+                    radius: Some(Length::Px(24.0)),
+                    radius_x: None,
+                    radius_y: None,
                 }]),
                 ..Default::default()
             },

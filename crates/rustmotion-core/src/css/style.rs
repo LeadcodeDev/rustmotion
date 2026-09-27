@@ -1258,7 +1258,24 @@ pub struct TransformOrigin {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "fn", rename_all = "kebab-case")]
 pub enum FilterFn {
+    /// Isotropic by default (`radius`). `radius-x`/`radius-y` make it
+    /// anisotropic — a horizontal-only smear is `radius-x` with `radius-y`
+    /// at 0 (or omitted). When both are given they win over `radius` on
+    /// their own axis; when neither is given the filter falls back to
+    /// `radius` on both axes.
     Blur {
+        #[serde(default)]
+        radius: Option<Length>,
+        #[serde(default, rename = "radius-x")]
+        radius_x: Option<Length>,
+        #[serde(default, rename = "radius-y")]
+        radius_y: Option<Length>,
+    },
+    /// A single-axis blur held at `angle` degrees (0 = along +x, 90 = along
+    /// +y) instead of being locked to the horizontal or vertical axis —
+    /// the diagonal case `radius-x`/`radius-y` can't express.
+    DirectionalBlur {
+        angle: f32,
         radius: Length,
     },
     Brightness {
@@ -1855,5 +1872,53 @@ mod tests {
             br.get("top_left").is_none(),
             "must not emit the legacy snake_case key any more"
         );
+    }
+
+    #[test]
+    fn blur_filter_accepts_isotropic_radius_with_no_axis_fields() {
+        let json = r#"{ "filter": [{ "fn": "blur", "radius": 24 }] }"#;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        let f = &s.filter.expect("filter set")[0];
+        assert!(matches!(
+            f,
+            FilterFn::Blur {
+                radius: Some(_),
+                radius_x: None,
+                radius_y: None
+            }
+        ));
+    }
+
+    #[test]
+    fn blur_filter_accepts_per_axis_radius_with_no_isotropic_radius() {
+        let json = r#"{ "filter": [{ "fn": "blur", "radius-x": 40, "radius-y": 0 }] }"#;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        let f = &s.filter.expect("filter set")[0];
+        match f {
+            FilterFn::Blur {
+                radius,
+                radius_x,
+                radius_y,
+            } => {
+                assert!(radius.is_none());
+                assert!(matches!(radius_x, Some(Length::Px(v)) if (*v - 40.0).abs() < 1e-6));
+                assert!(matches!(radius_y, Some(Length::Px(v)) if v.abs() < 1e-6));
+            }
+            other => panic!("expected Blur, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn directional_blur_deserializes_with_kebab_case_tag() {
+        let json = r#"{ "filter": [{ "fn": "directional-blur", "angle": 90, "radius": 40 }] }"#;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        let f = &s.filter.expect("filter set")[0];
+        match f {
+            FilterFn::DirectionalBlur { angle, radius } => {
+                assert!((*angle - 90.0).abs() < 1e-6);
+                assert!(matches!(radius, Length::Px(v) if (*v - 40.0).abs() < 1e-6));
+            }
+            other => panic!("expected DirectionalBlur, got {:?}", other),
+        }
     }
 }

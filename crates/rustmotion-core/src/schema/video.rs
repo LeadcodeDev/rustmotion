@@ -620,6 +620,8 @@ const KNOWN_MOTION_PROPERTIES: &[&str] = &[
     "rotate_x",
     "rotate_y",
     "blur",
+    "blur_x",
+    "blur_y",
     "visible_chars",
     "visible_chars_progress",
     "border_radius",
@@ -703,6 +705,12 @@ pub struct KeyframesConfig {
 ///
 /// `samples = 1` is the degenerate case: the single ghost falls at `t - 0` and
 /// superimposes exactly on the principal → visually equivalent to no blur.
+///
+/// `mode: "smear"` skips the ghost sampler entirely: the node's displacement
+/// over the `shutter / fps` window that precedes `t` is turned into a
+/// `{ "fn": "blur", "radius-x": …, "radius-y": … }` filter on the principal
+/// itself — one streaked copy instead of up to sixteen stacked ones, and no
+/// risk of a ghost taking a flex slot since none are created.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MotionBlurConfig {
@@ -713,12 +721,30 @@ pub struct MotionBlurConfig {
     pub intensity: f32,
     /// Number of ghost samples in the shutter window (default 6, clamped 1..=16).
     /// Use 1 to effectively disable (degenerate: ghost = principal position).
+    /// Ignored when `mode` is `"smear"`.
     #[serde(default = "default_motion_blur_samples")]
     pub samples: u32,
     /// Fraction of one frame duration used as the shutter window (default 0.5).
-    /// The temporal spread equals `shutter / fps` seconds.
+    /// The temporal spread equals `shutter / fps` seconds. Also the window
+    /// `mode: "smear"` samples velocity over.
     #[serde(default = "default_motion_blur_shutter")]
     pub shutter: f64,
+    /// `"stack"` (default) paints ghost copies at sampled instants. `"smear"`
+    /// derives a directional blur from instantaneous velocity instead.
+    #[serde(default)]
+    pub mode: MotionBlurMode,
+}
+
+/// How `motion_blur` renders its trail. See `MotionBlurConfig`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MotionBlurMode {
+    /// Ghost copies painted at sampled instants (the historical behaviour).
+    #[default]
+    Stack,
+    /// A directional `blur` derived from instantaneous velocity, applied to
+    /// the principal itself. Creates no ghost nodes; `samples` is ignored.
+    Smear,
 }
 
 fn default_motion_blur_samples() -> u32 {

@@ -46,7 +46,9 @@ pub fn apply_animated_props(css: &mut CssStyle, props: &AnimatedProperties) {
     let mut filters: Vec<FilterFn> = Vec::new();
     if props.blur > 0.0 {
         filters.push(FilterFn::Blur {
-            radius: Length::Px(props.blur),
+            radius: Some(Length::Px(props.blur)),
+            radius_x: None,
+            radius_y: None,
         });
     }
     if props.glow_radius > 0.0 && props.glow_intensity > 0.0 {
