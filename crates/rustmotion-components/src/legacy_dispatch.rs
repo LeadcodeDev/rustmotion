@@ -172,6 +172,7 @@ mod tests {
         let canvas = surface.canvas();
         let dispatcher = LegacyPaintDispatcher::new(&built.components);
         let frame = PaintFrame {
+            light: Default::default(),
             time: 0.0,
             scenario_time: 0.0,
             frame_index: 0,
@@ -236,6 +237,7 @@ mod tests {
         let canvas = surface.canvas();
         let dispatcher = LegacyPaintDispatcher::new(&built.components);
         let frame = PaintFrame {
+            light: Default::default(),
             time: 0.0,
             scenario_time: 0.0,
             frame_index: 0,
@@ -335,6 +337,7 @@ mod tests {
         let canvas = surface.canvas();
         let dispatcher = LegacyPaintDispatcher::new(&built.components);
         let frame = PaintFrame {
+            light: Default::default(),
             time: 0.0,
             scenario_time: 0.0,
             frame_index: 0,
@@ -434,6 +437,7 @@ mod tests {
             canvas.clear(skia_safe::Color::BLACK);
             let dispatcher = LegacyPaintDispatcher::new(&built.components);
             let frame = PaintFrame {
+                light: Default::default(),
                 time,
                 scenario_time: time,
                 frame_index: 0,
@@ -503,6 +507,7 @@ mod tests {
             ..Default::default()
         };
         let frame = PaintFrame {
+            light: Default::default(),
             time: 0.0,
             scenario_time: 0.0,
             frame_index: 0,

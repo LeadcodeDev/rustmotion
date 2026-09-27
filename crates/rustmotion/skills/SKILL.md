@@ -236,6 +236,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/halo-shapes.md](rules/halo-shapes.md) - `halo` beyond circles: `radius_x`/`radius_y`/`rotation` for a wide thin band of light, and why the blur follows the short axis
 - [rules/zoom-blur-transition.md](rules/zoom-blur-transition.md) - The radial "tunnel" cut: `zoom_blur`'s `strength`/`origin`, why it had to be a transition and not an effect, and the pivot-coincident-edge trap
 - [rules/chromatic-aberration.md](rules/chromatic-aberration.md) - Per-element red/cyan fringe on arrival: `chromatic_aberration`'s `amount`, how its curve differs from `chromatic_wipe`'s, and the `amount`-not-`amplitude` trap
+- [rules/material-and-light.md](rules/material-and-light.md) - Lit surfaces: `style.material`'s three presets, the scene-wide `light` that makes them agree, and why the material follows the box and not a `shape`'s own geometry
 - [rules/depth-of-field.md](rules/depth-of-field.md) - Defocus by plane: `camera.focus`/`aperture` on the `style.depth` scale, rack focus by keyframe, and why nothing moves without distinct depths
 - [rules/geometry-safety.md](rules/geometry-safety.md) - Keep all content inside the viewport: `white-space`, `auto_scroll`, `overflow` semantics + violation kinds
 - [rules/clip-path.md](rules/clip-path.md) - Non-rectangular masking: the six `clip-path` shapes, how their percentages resolve, and why `node-path` is not one of them yet

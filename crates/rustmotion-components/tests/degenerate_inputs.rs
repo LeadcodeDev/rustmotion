@@ -45,6 +45,7 @@ fn paint(json: serde_json::Value, time: f64) {
     );
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
+        light: Default::default(),
         time,
         scenario_time: time,
         frame_index: (time * 30.0) as u32,

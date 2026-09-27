@@ -133,6 +133,15 @@ pub struct CssStyle {
     pub opacity: Option<f32>,
     pub mix_blend_mode: Option<BlendMode>,
     pub clip_path: Option<ClipPath>,
+    /// Glossy surface treatment: a highlight on the lit side, a specular
+    /// edge along it, and a soft shade opposite. All three are derived from
+    /// the scene's `light`, so several materials in one scene agree about
+    /// where the light is.
+    ///
+    /// Follows the node's **box**, clipped by `border-radius` and by
+    /// `clip-path` when set — not by a `shape` component's own geometry,
+    /// which paints itself. Give the box the silhouette.
+    pub material: Option<Material>,
     /// Gradient-colored border painted instead of `border` when present.
     /// `{ "colors": [...], "width": 2, "angle": 0 }` — angle follows the same
     /// convention as `background` linear gradients.
@@ -261,6 +270,7 @@ struct CssStyleWire {
     opacity: Option<f32>,
     mix_blend_mode: Option<BlendMode>,
     clip_path: Option<ClipPath>,
+    material: Option<Material>,
     gradient_border: Option<GradientBorder>,
 
     backdrop_blur: Option<f32>,
@@ -1323,6 +1333,60 @@ pub enum BlendMode {
     Color,
     Luminosity,
     PlusLighter,
+}
+
+/// `style.material`, as either a bare preset name or an object tuning it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum Material {
+    /// `"material": "glossy"`.
+    Preset(MaterialPreset),
+    /// `"material": { "preset": "glossy", "intensity": 0.6 }`.
+    Tuned {
+        #[serde(default)]
+        preset: MaterialPreset,
+        /// Scales all three layers together. `1.0` is the calibrated look,
+        /// `0.0` paints nothing. Multiplied by the scene light's own
+        /// `intensity`.
+        #[serde(default = "default_material_intensity")]
+        intensity: f32,
+    },
+}
+
+/// Which surface a `material` imitates.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MaterialPreset {
+    /// A lit plastic or glass tile: bright highlight, hard specular edge,
+    /// soft shade opposite.
+    #[default]
+    Glossy,
+    /// The same light read as brushed metal: a tighter, dimmer highlight
+    /// and a stronger edge.
+    Metal,
+    /// Light with no specular return — shade only, no highlight and no
+    /// edge. Sits a flat surface next to glossy ones without looking unlit.
+    Matte,
+}
+
+fn default_material_intensity() -> f32 {
+    1.0
+}
+
+impl Material {
+    pub fn preset(&self) -> MaterialPreset {
+        match self {
+            Material::Preset(p) => *p,
+            Material::Tuned { preset, .. } => *preset,
+        }
+    }
+
+    pub fn intensity(&self) -> f32 {
+        match self {
+            Material::Preset(_) => 1.0,
+            Material::Tuned { intensity, .. } => *intensity,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

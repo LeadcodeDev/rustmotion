@@ -676,6 +676,15 @@ pub struct Scene {
     /// (world) Keep this scene visible after its time window ends.
     #[serde(default)]
     pub persist: bool,
+    /// Direction the light comes from, shared by every `style.material` in
+    /// the scene. Absent means upper-left, the convention an eye reads as
+    /// "lit from above" without being told.
+    ///
+    /// Declaring it once is what makes several materials look like they
+    /// belong to the same frame: a per-node preset cannot agree with its
+    /// neighbours about where the light is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub light: Option<SceneLight>,
     /// Post-processing effects applied to the full frame buffer after Skia renders.
     /// Effects are additive and applied in declaration order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -872,6 +881,52 @@ pub struct Camera {
     /// Keyframe animations for camera properties.
     #[serde(default)]
     pub keyframes: Vec<CameraKeyframe>,
+}
+
+/// Where the light comes from, and how strong it is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SceneLight {
+    /// Horizontal component of the vector pointing **toward** the light.
+    /// Negative puts the light on the left. Default `-0.35`.
+    #[serde(default = "default_light_x")]
+    pub x: f32,
+    /// Vertical component, same convention: negative puts the light above.
+    /// Default `-0.8`, so by default the light sits upper-left — where an
+    /// eye expects it without being told. The vector need not be a unit
+    /// vector; only its direction is read.
+    #[serde(default = "default_light_y")]
+    pub y: f32,
+    /// Overall strength of every material in the scene. `0` flattens them
+    /// all without editing each node. Default `1.0`.
+    #[serde(default = "default_light_intensity")]
+    pub intensity: f32,
+    /// Colour of the highlight and the specular edge. Default `#FFFFFF`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+fn default_light_x() -> f32 {
+    -0.35
+}
+
+fn default_light_y() -> f32 {
+    -0.8
+}
+
+fn default_light_intensity() -> f32 {
+    1.0
+}
+
+impl Default for SceneLight {
+    fn default() -> Self {
+        SceneLight {
+            x: default_light_x(),
+            y: default_light_y(),
+            intensity: default_light_intensity(),
+            color: None,
+        }
+    }
 }
 
 /// Focal point of the camera in frame pixels.

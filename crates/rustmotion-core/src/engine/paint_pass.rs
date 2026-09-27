@@ -8,7 +8,7 @@ use skia_safe::{
 
 use crate::css::style::{
     Background, BackgroundLayer, BorderEdges, BorderRadius, BorderStyle, BoxShadow, ClipPath,
-    Color, CssStyle, Edges, Overflow, TransformFn, TransformOrigin,
+    Color, CssStyle, Edges, Material, MaterialPreset, Overflow, TransformFn, TransformOrigin,
 };
 use crate::css::units::{parse_origin_component, LengthContext, LengthPercentage, ParsedLength};
 use crate::engine::box_tree::{BoxKind, BoxNode, NodeId};
@@ -16,6 +16,7 @@ use crate::engine::layout_pass::{BoxLayout, LayoutResult};
 
 #[derive(Debug, Clone, Copy)]
 pub struct PaintFrame {
+    pub light: LightDirection,
     pub time: f64,
     pub scenario_time: f64,
     pub frame_index: u32,
@@ -360,6 +361,16 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
     }
     if let Some(bg) = node.css.background.as_ref() {
         paint_background(canvas, box_layout, &node.css, bg, &length_ctx);
+    }
+    if let Some(material) = node.css.material.as_ref() {
+        paint_material(
+            canvas,
+            box_layout,
+            &node.css,
+            material,
+            &ctx.frame.light,
+            &length_ctx,
+        );
     }
     if let Some(gb) = node.css.gradient_border.as_ref() {
         paint_gradient_border(canvas, box_layout, &node.css, gb, &length_ctx);
@@ -1360,6 +1371,219 @@ fn paint_gradient_border(
     canvas.draw_drrect(outer, inner, &paint);
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct LightDirection {
+    pub x: f32,
+    pub y: f32,
+    pub intensity: f32,
+    pub color: SColor,
+}
+
+impl Default for LightDirection {
+    fn default() -> Self {
+        LightDirection {
+            x: -0.35,
+            y: -0.8,
+            intensity: 1.0,
+            color: SColor::from_argb(255, 255, 255, 255),
+        }
+    }
+}
+
+impl LightDirection {
+    fn normalized(&self) -> (f32, f32) {
+        let length = (self.x * self.x + self.y * self.y).sqrt();
+        if length <= f32::EPSILON {
+            return (0.0, -1.0);
+        }
+        (self.x / length, self.y / length)
+    }
+}
+
+struct MaterialRecipe {
+    highlight_alpha: f32,
+    highlight_spread: f32,
+    edge_alpha: f32,
+    shade_alpha: f32,
+}
+
+fn material_recipe(preset: MaterialPreset) -> MaterialRecipe {
+    match preset {
+        MaterialPreset::Glossy => MaterialRecipe {
+            highlight_alpha: 0.42,
+            highlight_spread: 0.85,
+            edge_alpha: 0.55,
+            shade_alpha: 0.30,
+        },
+        MaterialPreset::Metal => MaterialRecipe {
+            highlight_alpha: 0.26,
+            highlight_spread: 0.42,
+            edge_alpha: 0.78,
+            shade_alpha: 0.38,
+        },
+        MaterialPreset::Matte => MaterialRecipe {
+            highlight_alpha: 0.0,
+            highlight_spread: 0.0,
+            edge_alpha: 0.0,
+            shade_alpha: 0.22,
+        },
+    }
+}
+
+fn paint_material(
+    canvas: &Canvas,
+    layout: &BoxLayout,
+    css: &CssStyle,
+    material: &Material,
+    light: &LightDirection,
+    ctx: &LengthContext,
+) {
+    let strength = (material.intensity() * light.intensity).clamp(0.0, 4.0);
+    if strength <= 0.0 {
+        return;
+    }
+    let recipe = material_recipe(material.preset());
+    let (lx, ly) = light.normalized();
+
+    let radius = css
+        .border_radius
+        .as_ref()
+        .map(|r| resolve_border_radius(r, layout, ctx))
+        .unwrap_or([0.0; 4]);
+    let rrect = padding_rrect(layout, radius);
+    let rect = *rrect.rect();
+
+    canvas.save();
+    match css
+        .clip_path
+        .as_ref()
+        .and_then(|c| clip_path_to_skia(c, layout, ctx))
+    {
+        Some(path) => canvas.clip_path(&path, ClipOp::Intersect, true),
+        None => canvas.clip_rrect(rrect, ClipOp::Intersect, true),
+    };
+
+    let tint = light.color;
+    let half_diagonal = (rect.width().powi(2) + rect.height().powi(2)).sqrt() / 2.0;
+    let centre = (rect.center_x(), rect.center_y());
+    let lit_point = (
+        centre.0 + lx * rect.width() * 0.38,
+        centre.1 + ly * rect.height() * 0.38,
+    );
+    let shaded_point = (
+        centre.0 - lx * rect.width() * 0.45,
+        centre.1 - ly * rect.height() * 0.45,
+    );
+
+    if recipe.shade_alpha > 0.0 {
+        let alpha = (recipe.shade_alpha * strength).clamp(0.0, 1.0);
+        let stops = [
+            Color4f::new(0.0, 0.0, 0.0, alpha),
+            Color4f::new(0.0, 0.0, 0.0, 0.0),
+        ];
+        let gradient_colors = GradientColors::new(&stops, None, skia_safe::TileMode::Clamp, None);
+        let grad = Gradient::new(gradient_colors, gradient::Interpolation::default());
+        if let Some(shader) = gradient::shaders::radial_gradient(
+            (
+                Point::new(shaded_point.0, shaded_point.1),
+                half_diagonal * 1.05,
+            ),
+            &grad,
+            None,
+        ) {
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_shader(shader);
+            canvas.draw_rect(rect, &paint);
+        }
+    }
+
+    if recipe.highlight_alpha > 0.0 {
+        let alpha = (recipe.highlight_alpha * strength).clamp(0.0, 1.0);
+        let stops = [
+            Color4f::new(
+                tint.r() as f32 / 255.0,
+                tint.g() as f32 / 255.0,
+                tint.b() as f32 / 255.0,
+                alpha,
+            ),
+            Color4f::new(
+                tint.r() as f32 / 255.0,
+                tint.g() as f32 / 255.0,
+                tint.b() as f32 / 255.0,
+                0.0,
+            ),
+        ];
+        let gradient_colors = GradientColors::new(&stops, None, skia_safe::TileMode::Clamp, None);
+        let grad = Gradient::new(gradient_colors, gradient::Interpolation::default());
+        if let Some(shader) = gradient::shaders::radial_gradient(
+            (
+                Point::new(lit_point.0, lit_point.1),
+                (half_diagonal * recipe.highlight_spread).max(1.0),
+            ),
+            &grad,
+            None,
+        ) {
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_shader(shader);
+            canvas.draw_rect(rect, &paint);
+        }
+    }
+
+    if recipe.edge_alpha > 0.0 {
+        let alpha = (recipe.edge_alpha * strength).clamp(0.0, 1.0);
+        let width = (rect.width().min(rect.height()) * 0.012).clamp(1.0, 3.0);
+        let from = (
+            rect.center_x() + lx * rect.width() / 2.0,
+            rect.center_y() + ly * rect.height() / 2.0,
+        );
+        let to = (
+            rect.center_x() - lx * rect.width() / 2.0,
+            rect.center_y() - ly * rect.height() / 2.0,
+        );
+        let stops = [
+            Color4f::new(
+                tint.r() as f32 / 255.0,
+                tint.g() as f32 / 255.0,
+                tint.b() as f32 / 255.0,
+                alpha,
+            ),
+            Color4f::new(
+                tint.r() as f32 / 255.0,
+                tint.g() as f32 / 255.0,
+                tint.b() as f32 / 255.0,
+                0.0,
+            ),
+        ];
+        let gradient_colors = GradientColors::new(&stops, None, skia_safe::TileMode::Clamp, None);
+        let grad = Gradient::new(gradient_colors, gradient::Interpolation::default());
+        if let Some(shader) = gradient::shaders::linear_gradient(
+            (Point::new(from.0, from.1), Point::new(to.0, to.1)),
+            &grad,
+            None,
+        ) {
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_style(PaintStyle::Stroke);
+            paint.set_stroke_width(width);
+            paint.set_shader(shader);
+            let inset = skia_safe::RRect::new_rect_radii(
+                rect.with_inset((width / 2.0, width / 2.0)),
+                &[
+                    (radius[0], radius[0]).into(),
+                    (radius[1], radius[1]).into(),
+                    (radius[2], radius[2]).into(),
+                    (radius[3], radius[3]).into(),
+                ],
+            );
+            canvas.draw_rrect(inset, &paint);
+        }
+    }
+
+    canvas.restore();
+}
+
 fn clip_path_to_skia(
     clip: &ClipPath,
     layout: &BoxLayout,
@@ -1638,6 +1862,7 @@ mod hit_tests {
 
     fn test_frame(w: u32, h: u32) -> PaintFrame {
         PaintFrame {
+            light: Default::default(),
             time: 0.0,
             scenario_time: 0.0,
             frame_index: 0,
@@ -1959,6 +2184,7 @@ mod transform_origin_tests {
 
     fn test_frame(w: u32, h: u32) -> PaintFrame {
         PaintFrame {
+            light: Default::default(),
             time: 0.0,
             scenario_time: 0.0,
             frame_index: 0,
@@ -2347,6 +2573,7 @@ mod glassmorphism_tests {
 
     fn test_frame(w: u32, h: u32) -> PaintFrame {
         PaintFrame {
+            light: Default::default(),
             time: 0.0,
             scenario_time: 0.0,
             frame_index: 0,
@@ -2741,6 +2968,7 @@ mod paint_order_tests {
 
     fn test_frame(w: u32, h: u32) -> PaintFrame {
         PaintFrame {
+            light: Default::default(),
             time: 0.0,
             scenario_time: 0.0,
             frame_index: 0,
@@ -2967,6 +3195,175 @@ mod paint_order_tests {
             right_of_the_cut, 0,
             "clip-path clips the element itself, shadow included — unlike overflow:hidden, \
              which clips only the content and deliberately spares the node's own outset shadow"
+        );
+    }
+
+    fn material_tile(material: Option<Material>) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(100.0)),
+                top: Some(CLP::Px(100.0)),
+                width: Some(CSize::Length(CLP::Px(200.0))),
+                height: Some(CSize::Length(CLP::Px(200.0))),
+                background: Some(Background::Color(CssColor::String("#808080".into()))),
+                material,
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn render_lit(node: BoxNode, light: Option<LightDirection>) -> Vec<u8> {
+        let mut root = root_node(400.0, 400.0, "#000000", vec![node]);
+        root.assign_ids(0);
+        let layout = run_layout(&root, (400.0, 400.0), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((400, 400)).unwrap();
+        let mut frame = test_frame(400, 400);
+        if let Some(l) = light {
+            frame.light = l;
+        }
+        paint_tree(surface.canvas(), &root, &layout, &frame, &NoopDispatcher);
+        let info = skia_safe::ImageInfo::new(
+            (400, 400),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; 400 * 400 * 4];
+        surface.read_pixels(&info, &mut buf, 400 * 4, (0, 0));
+        buf
+    }
+
+    fn luma_at(buf: &[u8], x: usize, y: usize) -> f32 {
+        let i = (y * 400 + x) * 4;
+        0.299 * buf[i] as f32 + 0.587 * buf[i + 1] as f32 + 0.114 * buf[i + 2] as f32
+    }
+
+    #[test]
+    fn a_node_without_a_material_is_untouched() {
+        let plain = render_lit(material_tile(None), None);
+        let flat = render_lit(
+            material_tile(Some(Material::Tuned {
+                preset: MaterialPreset::Glossy,
+                intensity: 0.0,
+            })),
+            None,
+        );
+        assert_eq!(
+            plain, flat,
+            "intensity 0 must be byte-identical to declaring no material at all"
+        );
+    }
+
+    #[test]
+    fn glossy_is_brighter_on_the_lit_side_than_opposite_it() {
+        let buf = render_lit(
+            material_tile(Some(Material::Preset(MaterialPreset::Glossy))),
+            None,
+        );
+        let lit = luma_at(&buf, 140, 140);
+        let shaded = luma_at(&buf, 260, 260);
+        assert!(
+            lit > shaded + 20.0,
+            "the default light is upper-left, so the upper-left of the tile must be clearly \
+             brighter than the lower-right: lit={lit:.1}, shaded={shaded:.1}"
+        );
+    }
+
+    #[test]
+    fn turning_the_light_around_turns_the_gradient_around() {
+        let upper_left = render_lit(
+            material_tile(Some(Material::Preset(MaterialPreset::Glossy))),
+            None,
+        );
+        let lower_right = render_lit(
+            material_tile(Some(Material::Preset(MaterialPreset::Glossy))),
+            Some(LightDirection {
+                x: 0.35,
+                y: 0.8,
+                ..Default::default()
+            }),
+        );
+        assert!(
+            luma_at(&upper_left, 140, 140) > luma_at(&upper_left, 260, 260),
+            "sanity: the default light lights the upper-left"
+        );
+        assert!(
+            luma_at(&lower_right, 260, 260) > luma_at(&lower_right, 140, 140),
+            "a light declared from the lower-right must light the lower-right — this is what \
+             makes two materials in one scene agree about where the light is"
+        );
+    }
+
+    #[test]
+    fn matte_shades_without_a_highlight() {
+        let matte = render_lit(
+            material_tile(Some(Material::Preset(MaterialPreset::Matte))),
+            None,
+        );
+        let plain = render_lit(material_tile(None), None);
+        let lit_delta = luma_at(&matte, 140, 140) - luma_at(&plain, 140, 140);
+        let shade_delta = luma_at(&plain, 260, 260) - luma_at(&matte, 260, 260);
+        assert!(
+            lit_delta <= 1.0,
+            "matte returns no specular light, so its lit side must not brighten: +{lit_delta:.1}"
+        );
+        assert!(
+            shade_delta > 10.0,
+            "matte still takes light, so its far side must darken: -{shade_delta:.1}"
+        );
+    }
+
+    #[test]
+    fn the_scene_light_intensity_scales_every_material_at_once() {
+        let full = render_lit(
+            material_tile(Some(Material::Preset(MaterialPreset::Glossy))),
+            None,
+        );
+        let dimmed = render_lit(
+            material_tile(Some(Material::Preset(MaterialPreset::Glossy))),
+            Some(LightDirection {
+                intensity: 0.25,
+                ..Default::default()
+            }),
+        );
+        let plain = render_lit(material_tile(None), None);
+        let full_lift = luma_at(&full, 140, 140) - luma_at(&plain, 140, 140);
+        let dim_lift = luma_at(&dimmed, 140, 140) - luma_at(&plain, 140, 140);
+        assert!(
+            dim_lift > 0.0 && dim_lift < full_lift * 0.6,
+            "a quarter-intensity light must still lift, but far less: full=+{full_lift:.1}, \
+             dimmed=+{dim_lift:.1}"
+        );
+    }
+
+    #[test]
+    fn a_material_never_paints_outside_its_clip_path() {
+        let mut node = material_tile(Some(Material::Preset(MaterialPreset::Glossy)));
+        node.css.background = None;
+        node.css.clip_path = Some(ClipPath::Inset {
+            top: CLP::Px(0.0),
+            right: CLP::Px(100.0),
+            bottom: CLP::Px(0.0),
+            left: CLP::Px(0.0),
+            radius: None,
+        });
+        let buf = render_lit(node, None);
+        assert!(
+            luma_at(&buf, 120, 200) > 1.0,
+            "sanity: the material paints inside the clip"
+        );
+        assert_eq!(
+            luma_at(&buf, 260, 200),
+            0.0,
+            "the material follows the node's silhouette — clip-path included — and must not \
+             spill into the region the clip removed"
         );
     }
 
@@ -3247,6 +3644,7 @@ mod paint_order_tests {
         let layout = run_layout(root, (w as f32, h as f32), &ConversionContext::default());
         let mut surface = skia_safe::surfaces::raster_n32_premul((w as i32, h as i32)).unwrap();
         let frame = PaintFrame {
+            light: Default::default(),
             time,
             ..test_frame(w, h)
         };
