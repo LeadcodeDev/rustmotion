@@ -142,6 +142,7 @@ pub fn run_checks(loaded: &LoadedScenario, strict_anim: bool) -> ValidationRepor
     warnings.extend(warn_misplaced_animation(&loaded.raw));
     warnings.extend(check_legibility(&loaded.scenario));
     warnings.extend(check_off_grid_cuts(&loaded.scenario));
+    warnings.extend(transitions_with_nothing_to_come_from(&loaded.scenario));
     schema_errors.extend(check_node_references(&loaded.scenario));
     let (attr_errors, mut attr_warnings) =
         super::validate_attrs::check_component_attrs(&loaded.scenario);
@@ -252,6 +253,23 @@ pub fn warn_on_silent_defaults(loaded: &LoadedScenario) {
              placement with a beat grid."
         );
     }
+}
+
+pub fn transitions_with_nothing_to_come_from(scenario: &ResolvedScenario) -> Vec<String> {
+    scenario
+        .views
+        .iter()
+        .enumerate()
+        .filter(|(_, view)| view.scenes.first().is_some_and(|s| s.transition.is_some()))
+        .map(|(view_idx, _)| {
+            format!(
+                "the `transition` on view {view_idx}'s first scene has no effect — a \
+                 transition belongs to the scene being entered, and the first scene has \
+                 nothing to come from. Move it to the next scene, or use the view's own \
+                 `transition` to come in from the view before it."
+            )
+        })
+        .collect()
 }
 
 pub fn check_codec(codec: Option<&str>) -> Result<()> {
