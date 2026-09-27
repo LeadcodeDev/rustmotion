@@ -747,7 +747,15 @@ fn build_slide_view_tasks_v2(
     let starts = v2_scene_starts(scenes, &duration_frames, fps, SnapDuringPlacement::Apply);
 
     if author_overlaps {
-        v2_build_composited(tasks, view_idx, scenes, &duration_frames, &starts);
+        v2_build_composited(
+            tasks,
+            view_idx,
+            scenes,
+            &duration_frames,
+            &transition_frames,
+            &starts,
+            fps,
+        );
         return;
     }
 
@@ -894,17 +902,36 @@ fn v2_build_sequential(
     }
 }
 
+fn v2_transition_window(
+    scenes: &[Scene],
+    duration_frames: &[u32],
+    transition_frames: &[u32],
+    starts: &[u32],
+    incoming: usize,
+) -> Option<std::ops::Range<u32>> {
+    if incoming == 0 || transition_frames[incoming] == 0 || scenes[incoming].transition.is_none() {
+        return None;
+    }
+    let previous_end = starts[incoming - 1] + duration_frames[incoming - 1];
+    if starts[incoming] + transition_frames[incoming] < previous_end {
+        return None;
+    }
+    Some(starts[incoming]..starts[incoming] + transition_frames[incoming])
+}
+
 fn v2_build_composited(
     tasks: &mut Vec<FrameTask>,
     view_idx: usize,
     scenes: &[Scene],
     duration_frames: &[u32],
+    transition_frames: &[u32],
     starts: &[u32],
+    fps: u32,
 ) {
     for (i, scene) in scenes.iter().enumerate() {
         if i > 0 && scene.transition.is_some() {
             let previous_end = starts[i - 1] + duration_frames[i - 1];
-            if starts[i] < previous_end {
+            if starts[i] + transition_frames[i] < previous_end {
                 eprintln!(
                     "warning: scene {i} both overlaps scene {} on the absolute timeline and \
                      declares a `transition`. A transition composites two finished frame \
@@ -936,6 +963,45 @@ fn v2_build_composited(
                 scene_total_frames: *duration,
             })
             .collect();
+
+        let transitioning = (1..scenes.len()).find(|&incoming| {
+            v2_transition_window(scenes, duration_frames, transition_frames, starts, incoming)
+                .is_some_and(|window| window.contains(&frame))
+        });
+        if let Some(incoming) = transitioning {
+            if let Some(window) =
+                v2_transition_window(scenes, duration_frames, transition_frames, starts, incoming)
+            {
+                {
+                    let outgoing = incoming - 1;
+                    let transition = scenes[incoming]
+                        .transition
+                        .as_ref()
+                        .expect("v2_transition_window returns None without a transition");
+                    let advance = matches!(scenes[outgoing].tail, SceneTail::Continue);
+                    tasks.push(FrameTask::SlideTransition {
+                        global_frame: tasks.len() as u32,
+                        view_idx,
+                        scene_a_idx: outgoing,
+                        scene_b_idx: incoming,
+                        frame_in_transition: frame - window.start,
+                        scene_a_frame_offset: if advance {
+                            duration_frames[outgoing]
+                        } else {
+                            duration_frames[outgoing].saturating_sub(1)
+                        },
+                        scene_a_frame_advance: advance,
+                        scene_a_total_frames: duration_frames[outgoing],
+                        scene_b_total_frames: duration_frames[incoming],
+                        transition_type: transition.transition_type.clone(),
+                        options: transition.into(),
+                        transition_duration: transition_frames[incoming] as f64 / fps as f64,
+                        easing: transition.easing.clone(),
+                    });
+                    continue;
+                }
+            }
+        }
 
         match participants.len() {
             0 => {
@@ -1700,6 +1766,66 @@ mod timing_v2_tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn one_overlapping_pair_does_not_disable_the_other_scenes_transitions() {
+        let scenario = load(
+            r##"{
+            "video": {"width": 32, "height": 32, "fps": 30},
+            "timing": "v2",
+            "composition": [{"type": "slide", "scenes": [
+                {"at": 0, "duration": 2.0, "children": []},
+                {"at": 1.0, "duration": 2.0, "children": []},
+                {"duration": 2.0, "transition": {"type": "fade", "duration": 1.0}, "children": []}
+            ]}]
+        }"##,
+        );
+        let tasks = build_frame_tasks(&scenario);
+
+        let transition_frames: Vec<u32> = tasks
+            .iter()
+            .filter_map(|t| match t {
+                FrameTask::SlideTransition {
+                    scene_a_idx,
+                    scene_b_idx,
+                    frame_in_transition,
+                    ..
+                } => (*scene_a_idx == 1 && *scene_b_idx == 2).then_some(*frame_in_transition),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            transition_frames,
+            (0..30).collect::<Vec<u32>>(),
+            "scene 2 does not overlap anything and declares a 1.0s fade, so it must still get \
+             its 30 transition frames — one overlapping pair earlier in the view routed the \
+             whole thing through the composited path and dropped every transition silently"
+        );
+    }
+
+    #[test]
+    fn a_scene_that_overlaps_beyond_its_own_transition_still_loses_it() {
+        let scenario = load(
+            r##"{
+            "video": {"width": 32, "height": 32, "fps": 30},
+            "timing": "v2",
+            "composition": [{"type": "slide", "scenes": [
+                {"at": 0, "duration": 2.0, "children": []},
+                {"at": 0.5, "duration": 2.0,
+                 "transition": {"type": "fade", "duration": 0.2}, "children": []}
+            ]}]
+        }"##,
+        );
+        let tasks = build_frame_tasks(&scenario);
+        assert!(
+            !tasks
+                .iter()
+                .any(|t| matches!(t, FrameTask::SlideTransition { .. })),
+            "a 0.2s transition cannot describe a 1.5s overlap, so the overlap wins and the \
+             transition is dropped — loudly, which the warning covers"
+        );
     }
 
     #[test]
