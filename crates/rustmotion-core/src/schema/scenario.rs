@@ -878,6 +878,20 @@ pub struct Camera {
     /// focal plane.
     #[serde(default)]
     pub aperture: f32,
+    /// Tilt of the whole shot about the horizontal axis, in degrees, applied
+    /// to each direct child of the scene scaled by its `style.depth` — the
+    /// same rule parallax and `focus` already follow. Default 0.
+    #[serde(default)]
+    pub rotate_x: f32,
+    /// Tilt about the vertical axis, same convention. Default 0.
+    #[serde(default)]
+    pub rotate_y: f32,
+    /// Viewing distance for `rotate_x`/`rotate_y`, in pixels. **One vanishing
+    /// point for the whole shot** — which is the difference from copying the
+    /// same rotation onto every group, where each group gets its own. `0`
+    /// means no perspective, an orthographic tilt. Default 0.
+    #[serde(default)]
+    pub perspective: f32,
     /// Keyframe animations for camera properties.
     #[serde(default)]
     pub keyframes: Vec<CameraKeyframe>,
@@ -940,7 +954,17 @@ pub struct CameraOrigin {
 }
 
 const KNOWN_CAMERA_PROPERTIES: &[&str] = &[
-    "x", "y", "zoom", "rotation", "origin.x", "origin.y", "focus", "aperture",
+    "x",
+    "y",
+    "zoom",
+    "rotation",
+    "origin.x",
+    "origin.y",
+    "focus",
+    "aperture",
+    "rotate_x",
+    "rotate_y",
+    "perspective",
 ];
 
 fn validate_camera_property<E: serde::de::Error>(value: &str) -> Result<(), E> {
