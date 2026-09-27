@@ -246,6 +246,8 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/vhs-tear.md](rules/vhs-tear.md) - The `vhs` scene effect: bands slid sideways, noise, scanlines and a travelling tracking line — bounded by `at`/`duration` because it is a beat, not a filter
 - [rules/rich-text-pills.md](rules/rich-text-pills.md) - Pill spans in `rich_text`: padding that moves the following span, `box-decoration-break: clone` on a wrap, and rotation that turns the box without touching layout
 - [rules/geometry-safety.md](rules/geometry-safety.md) - Keep all content inside the viewport: `white-space`, `auto_scroll`, `overflow` semantics + violation kinds
+- [rules/border-style.md](rules/border-style.md) - `dashed`, `dotted` and `double` borders, their cadence formulas, and animating `border-radius` by keyframe
+- [rules/clip-path-morph.md](rules/clip-path-morph.md) - Animating a `clip-path` via `kind: "morph"` and the scalar `clip_path_progress`, what interpolates, and what a kind mismatch does
 - [rules/clip-path.md](rules/clip-path.md) - Non-rectangular masking: the six `clip-path` shapes, how their percentages resolve, and why `node-path` is not one of them yet
 - [rules/overlapping-scenes.md](rules/overlapping-scenes.md) - Make an element outlive a cut: overlapping `at` windows composite instead of replacing, who supplies the background, and why `snap` never creates an overlap
 - [rules/even-dimensions.md](rules/even-dimensions.md) - Use even width/height for H.264 encoding
