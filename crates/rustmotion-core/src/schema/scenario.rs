@@ -1174,8 +1174,9 @@ pub enum TransitionDirection {
     Down,
 }
 
-/// The centre a `zoom_blur` transition radiates its streaks from, in frame
-/// pixels. Absent = frame centre.
+/// The centre an `iris` mask grows from (or closes onto), or a `zoom_blur`
+/// transition radiates its streaks from, in frame pixels. Absent = frame
+/// centre.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ZoomBlurOrigin {
@@ -1185,6 +1186,39 @@ pub struct ZoomBlurOrigin {
     /// Vertical centre, in frame pixels.
     #[serde(default)]
     pub y: f32,
+}
+
+/// The silhouette an `iris` transition's mask takes as it grows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IrisShape {
+    /// A plain disc. `aspect` has no effect on this shape.
+    #[default]
+    Circle,
+    /// A stadium — a rounded rectangle whose width-to-height ratio is set by
+    /// `aspect`. `aspect: 1.0` degenerates to a circle.
+    Pill,
+}
+
+/// A coloured border traced along an `iris` mask's moving edge. Inside the
+/// ring is whichever scene the mask currently reveals, outside it is the one
+/// it is covering.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IrisRing {
+    /// Ring colour, any CSS colour string.
+    pub color: String,
+    /// Ring thickness, in px.
+    #[serde(default = "default_iris_ring_width")]
+    pub width: f32,
+}
+
+fn default_iris_ring_width() -> f32 {
+    12.0
+}
+
+fn default_iris_aspect() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1205,8 +1239,9 @@ pub struct Transition {
     /// `pixel_dissolve` only: which cells turn first.
     #[serde(default)]
     pub order: PixelDissolveOrder,
-    /// Which way a `chromatic_wipe` travels. Ignored by every other type —
-    /// the `wipe_*`/`slide` family encodes its direction in the type name.
+    /// Which way a `chromatic_wipe` or `whip` travels. Ignored by every
+    /// other type — the `wipe_*`/`slide` family encodes its direction in the
+    /// type name.
     #[serde(default)]
     pub direction: TransitionDirection,
     /// `chromatic_wipe` only: how far the red and cyan channels split at the
@@ -1214,16 +1249,45 @@ pub struct Transition {
     /// colour flash and leaves a plain fast slide; `2` doubles it.
     #[serde(default = "default_transition_aberration")]
     pub aberration: f32,
-    /// `zoom_blur` only: how far the radial streaks reach. `0` collapses the
-    /// streak pass entirely, leaving a plain zoom with no smear; higher
-    /// values pull the outer copies further from `origin`. Ignored by every
-    /// other transition type.
+    /// `zoom_blur` and `whip` only: how far the streak reaches — radially
+    /// from `origin` for `zoom_blur`, along `direction` for `whip`. `0`
+    /// collapses the streak pass entirely, leaving a plain zoom or a plain
+    /// slide with no smear. Ignored by every other transition type.
     #[serde(default = "default_transition_strength")]
     pub strength: f32,
-    /// `zoom_blur` only: the centre the streaks radiate from. Ignored by
-    /// every other transition type.
+    /// `zoom_blur` and `iris` only: for `zoom_blur`, the centre the streaks
+    /// radiate from; for `iris`, the mask's centre. Ignored by every other
+    /// transition type.
     #[serde(default)]
     pub origin: Option<ZoomBlurOrigin>,
+    /// `iris` only: the mask's silhouette. Ignored by every other type.
+    #[serde(default)]
+    pub shape: IrisShape,
+    /// `iris` `pill` only: width-to-height ratio of the stadium as it grows.
+    /// Ignored by `circle` and by every other transition type.
+    #[serde(default = "default_iris_aspect")]
+    pub aspect: f32,
+    /// `iris` only: a flat colour the mask fills with instead of revealing
+    /// the next scene directly. Once the colour covers the whole frame, the
+    /// next scene fades in under it. Absent reveals the next scene straight
+    /// away. Ignored by every other transition type.
+    #[serde(default)]
+    pub fill: Option<String>,
+    /// `iris` only, and only meaningful with `fill` set: seconds the solid
+    /// colour holds once it covers the whole frame, before the next scene
+    /// fades in. Has no effect without `fill`.
+    #[serde(default)]
+    pub hold: f32,
+    /// `iris` only: a coloured ring traced along the mask's moving edge.
+    /// Ignored by every other transition type.
+    #[serde(default)]
+    pub ring: Option<IrisRing>,
+    /// `iris` only: the mask closes onto `origin` instead of opening from
+    /// it — the outgoing scene shrinks to a point rather than the incoming
+    /// one (or `fill`) growing to cover the frame. Ignored by every other
+    /// transition type.
+    #[serde(default)]
+    pub reverse: bool,
     #[serde(default = "default_transition_duration")]
     pub duration: f64,
     #[serde(default = "default_transition_easing")]
@@ -1264,6 +1328,11 @@ pub enum TransitionType {
     ZoomOut,
     Flip,
     ClockWipe,
+    /// A mask that grows from `origin` to reveal the next scene — a plain
+    /// disc by default. `shape` and `aspect` change its silhouette, `fill`
+    /// paints it a flat colour first (held for `hold` seconds before the
+    /// next scene fades in under it), `ring` traces its moving edge, and
+    /// `reverse` closes the mask onto `origin` instead of opening from it.
     Iris,
     Slide,
     Dissolve,
@@ -1280,6 +1349,13 @@ pub enum TransitionType {
     /// collapses it to a plain zoom with no smear. Zero at both ends of the
     /// transition, so no fringe bleeds into the next scene.
     ZoomBlur,
+    /// A directional slide whose axis grows a motion-blur streak that peaks
+    /// at the midpoint: the outgoing frame shoots off along `direction`
+    /// while it fades, and the incoming frame arrives already streaked and
+    /// lands sharp. `strength` sets how far the streak reaches; `0`
+    /// collapses it to a plain `slide`. Zero at both ends of the
+    /// transition, so no streak bleeds into the next scene.
+    Whip,
     None,
 }
 

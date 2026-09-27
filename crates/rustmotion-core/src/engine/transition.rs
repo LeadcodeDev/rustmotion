@@ -1,11 +1,14 @@
 use crate::engine::animator::ease;
+use crate::engine::renderer::{color4f_from_hex, paint_from_hex};
 use crate::schema::{
-    EasingType, PanBackground, PixelDissolveOrder, Transition, TransitionCorner,
-    TransitionDirection, TransitionType, ZoomBlurOrigin,
+    EasingType, IrisRing, IrisShape, PanBackground, PixelDissolveOrder, Transition,
+    TransitionCorner, TransitionDirection, TransitionType, ZoomBlurOrigin,
 };
-use skia_safe::{surfaces, Color4f, ColorType, ImageInfo, Paint, PathBuilder, Rect};
+use skia_safe::{
+    surfaces, Color4f, ColorType, Image, ImageInfo, Paint, PaintStyle, PathBuilder, Rect,
+};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TransitionOptions {
     pub corner: TransitionCorner,
     pub cell: f32,
@@ -15,6 +18,13 @@ pub struct TransitionOptions {
     pub aberration: f32,
     pub strength: f32,
     pub origin: Option<ZoomBlurOrigin>,
+    pub shape: IrisShape,
+    pub aspect: f32,
+    pub fill: Option<String>,
+    pub hold: f32,
+    pub ring: Option<IrisRing>,
+    pub reverse: bool,
+    pub duration: f64,
 }
 
 impl Default for TransitionOptions {
@@ -28,6 +38,13 @@ impl Default for TransitionOptions {
             aberration: 1.0,
             strength: 1.0,
             origin: None,
+            shape: IrisShape::default(),
+            aspect: 1.0,
+            fill: None,
+            hold: 0.0,
+            ring: None,
+            reverse: false,
+            duration: 0.5,
         }
     }
 }
@@ -43,6 +60,13 @@ impl From<&Transition> for TransitionOptions {
             aberration: t.aberration,
             strength: t.strength,
             origin: t.origin,
+            shape: t.shape,
+            aspect: t.aspect,
+            fill: t.fill.clone(),
+            hold: t.hold,
+            ring: t.ring.clone(),
+            reverse: t.reverse,
+            duration: t.duration,
         }
     }
 }
@@ -66,7 +90,14 @@ pub fn apply_transition(
         aberration,
         strength,
         origin,
-    } = *opts;
+        shape,
+        aspect,
+        fill,
+        hold,
+        ring,
+        reverse,
+        duration,
+    } = opts.clone();
 
     match transition_type {
         TransitionType::Fade => blend_fade(frame_a, frame_b, progress),
@@ -86,7 +117,21 @@ pub fn apply_transition(
         }
         TransitionType::Flip => flip_transition(frame_a, frame_b, width, height, progress),
         TransitionType::ClockWipe => clock_wipe(frame_a, frame_b, width, height, progress),
-        TransitionType::Iris => iris_transition(frame_a, frame_b, width, height, progress),
+        TransitionType::Iris => iris_transition(
+            frame_a,
+            frame_b,
+            width,
+            height,
+            progress,
+            origin,
+            shape,
+            aspect,
+            fill.as_deref(),
+            hold,
+            duration,
+            ring.as_ref(),
+            reverse,
+        ),
         TransitionType::Slide => slide_transition(frame_a, frame_b, width, height, progress),
         TransitionType::Dissolve => dissolve_transition(frame_a, frame_b, width, height, progress),
         TransitionType::CornerReveal => {
@@ -102,6 +147,9 @@ pub fn apply_transition(
         TransitionType::ZoomBlur => {
             zoom_blur_transition(frame_a, frame_b, width, height, progress, strength, origin)
         }
+        TransitionType::Whip => whip_transition(
+            frame_a, frame_b, width, height, progress, strength, direction,
+        ),
         TransitionType::None => {
             if progress < 0.5 {
                 frame_a.to_vec()
@@ -493,45 +541,177 @@ fn clock_wipe(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, progress:
     surface_to_pixels(surface, width, height)
 }
 
+const IRIS_PILL_OVERSHOOT: f32 = 1.45;
+const IRIS_PILL_CORNER_FRACTION: f32 = 0.2;
+
+fn iris_max_radius(
+    origin: (f32, f32),
+    width: f32,
+    height: f32,
+    shape: IrisShape,
+    aspect: f32,
+) -> f32 {
+    let fx = origin.0.max(width - origin.0);
+    let fy = origin.1.max(height - origin.1);
+    match shape {
+        IrisShape::Circle => (fx * fx + fy * fy).sqrt(),
+        IrisShape::Pill => {
+            let sqrt_aspect = aspect.max(0.05).sqrt();
+            let base = (fx / sqrt_aspect).max(fy * sqrt_aspect);
+            base * IRIS_PILL_OVERSHOOT
+        }
+    }
+}
+
+fn iris_mask_path(
+    origin: (f32, f32),
+    shape: IrisShape,
+    aspect: f32,
+    radius: f32,
+) -> skia_safe::Path {
+    let radius = radius.max(0.0);
+    let mut builder = PathBuilder::new();
+    match shape {
+        IrisShape::Circle => {
+            builder.add_circle((origin.0, origin.1), radius, None);
+        }
+        IrisShape::Pill => {
+            let sqrt_aspect = aspect.max(0.05).sqrt();
+            let half_w = radius * sqrt_aspect;
+            let half_h = radius / sqrt_aspect;
+            let corner = half_w.min(half_h) * IRIS_PILL_CORNER_FRACTION;
+            let rect = Rect::from_ltrb(
+                origin.0 - half_w,
+                origin.1 - half_h,
+                origin.0 + half_w,
+                origin.1 + half_h,
+            );
+            let rrect = skia_safe::RRect::new_rect_xy(rect, corner, corner);
+            builder.add_rrect(rrect, None, None);
+        }
+    }
+    builder.detach()
+}
+
+fn solid_frame(width: u32, height: u32, hex: &str) -> Vec<u8> {
+    let color = color4f_from_hex(hex);
+    let (r, g, b, a) = (
+        (color.r * 255.0).round() as u8,
+        (color.g * 255.0).round() as u8,
+        (color.b * 255.0).round() as u8,
+        (color.a * 255.0).round() as u8,
+    );
+    (0..width * height).flat_map(|_| [r, g, b, a]).collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn iris_composite(
+    outer: &[u8],
+    inner: &[u8],
+    width: u32,
+    height: u32,
+    origin: (f32, f32),
+    shape: IrisShape,
+    aspect: f32,
+    radius: f32,
+    ring: Option<&IrisRing>,
+) -> Vec<u8> {
+    let mut surface = match create_skia_surface(width, height) {
+        Some(s) => s,
+        None => return outer.to_vec(),
+    };
+    let (Some(img_outer), Some(img_inner)): (Option<Image>, Option<Image>) = (
+        frame_to_image(outer, width, height),
+        frame_to_image(inner, width, height),
+    ) else {
+        return outer.to_vec();
+    };
+
+    let path = iris_mask_path(origin, shape, aspect, radius);
+
+    let canvas = surface.canvas();
+    canvas.draw_image(&img_outer, (0.0, 0.0), None);
+    canvas.save();
+    canvas.clip_path(&path, skia_safe::ClipOp::Intersect, true);
+    canvas.draw_image(&img_inner, (0.0, 0.0), None);
+    canvas.restore();
+
+    if let Some(ring) = ring {
+        if radius > 1.0 {
+            let mut paint = paint_from_hex(&ring.color);
+            paint.set_style(PaintStyle::Stroke);
+            paint.set_stroke_width(ring.width.max(0.0));
+            canvas.draw_path(&path, &paint);
+        }
+    }
+
+    surface_to_pixels(surface, width, height)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn iris_transition(
     frame_a: &[u8],
     frame_b: &[u8],
     width: u32,
     height: u32,
     progress: f32,
+    origin: Option<ZoomBlurOrigin>,
+    shape: IrisShape,
+    aspect: f32,
+    fill: Option<&str>,
+    hold: f32,
+    duration: f64,
+    ring: Option<&IrisRing>,
+    reverse: bool,
 ) -> Vec<u8> {
-    let mut surface = match create_skia_surface(width, height) {
-        Some(s) => s,
-        None => return blend_fade(frame_a, frame_b, progress),
+    let (w, h) = (width as f32, height as f32);
+    let origin = match origin {
+        Some(o) => (o.x, o.y),
+        None => (w / 2.0, h / 2.0),
     };
-    let img_a = match frame_to_image(frame_a, width, height) {
-        Some(i) => i,
-        None => return blend_fade(frame_a, frame_b, progress),
+    let max_radius = iris_max_radius(origin, w, h, shape, aspect);
+
+    let Some(fill_hex) = fill else {
+        let t = progress.clamp(0.0, 1.0);
+        let (outer, inner, radius) = if reverse {
+            (frame_b, frame_a, max_radius * (1.0 - t))
+        } else {
+            (frame_a, frame_b, max_radius * t)
+        };
+        return iris_composite(
+            outer, inner, width, height, origin, shape, aspect, radius, ring,
+        );
     };
-    let img_b = match frame_to_image(frame_b, width, height) {
-        Some(i) => i,
-        None => return blend_fade(frame_a, frame_b, progress),
+
+    let hold_fraction = if duration > 0.0 {
+        (hold as f64 / duration).clamp(0.0, 0.9) as f32
+    } else {
+        0.0
     };
+    let remaining = (1.0 - hold_fraction).max(0.0001);
+    let grow_span = remaining * 0.5;
+    let reveal_start = grow_span + hold_fraction;
+    let filled = solid_frame(width, height, fill_hex);
 
-    let canvas = surface.canvas();
-    let w = width as f32;
-    let h = height as f32;
-    let cx = w / 2.0;
-    let cy = h / 2.0;
-    let max_radius = (w * w + h * h).sqrt() / 2.0;
-    let radius = max_radius * progress;
+    if progress < grow_span {
+        let t = (progress / grow_span).clamp(0.0, 1.0);
+        let (outer, inner, radius): (&[u8], &[u8], f32) = if reverse {
+            (&filled, frame_a, max_radius * (1.0 - t))
+        } else {
+            (frame_a, &filled, max_radius * t)
+        };
+        return iris_composite(
+            outer, inner, width, height, origin, shape, aspect, radius, ring,
+        );
+    }
 
-    canvas.draw_image(&img_a, (0.0, 0.0), None);
+    if progress < reveal_start {
+        return filled;
+    }
 
-    let mut path = PathBuilder::new();
-    path.add_circle((cx, cy), radius, None);
-
-    canvas.save();
-    canvas.clip_path(&path.detach(), skia_safe::ClipOp::Intersect, true);
-    canvas.draw_image(&img_b, (0.0, 0.0), None);
-    canvas.restore();
-
-    surface_to_pixels(surface, width, height)
+    let reveal_span = (1.0 - reveal_start).max(0.0001);
+    let t = ((progress - reveal_start) / reveal_span).clamp(0.0, 1.0);
+    blend_fade(&filled, frame_b, t)
 }
 
 fn slide_transition(
@@ -564,6 +744,39 @@ fn slide_transition(
     surface_to_pixels(surface, width, height)
 }
 
+fn direction_vector(direction: TransitionDirection) -> (f32, f32) {
+    match direction {
+        TransitionDirection::Left => (-1.0, 0.0),
+        TransitionDirection::Right => (1.0, 0.0),
+        TransitionDirection::Up => (0.0, -1.0),
+        TransitionDirection::Down => (0.0, 1.0),
+    }
+}
+
+fn directional_slide(
+    frame_a: &[u8],
+    frame_b: &[u8],
+    width: u32,
+    height: u32,
+    progress: f32,
+    ux: f32,
+    uy: f32,
+) -> Option<Vec<u8>> {
+    let mut surface = create_skia_surface(width, height)?;
+    let (Some(img_a), Some(img_b)) = (
+        frame_to_image(frame_a, width, height),
+        frame_to_image(frame_b, width, height),
+    ) else {
+        return None;
+    };
+    let (w, h) = (width as f32, height as f32);
+    let canvas = surface.canvas();
+    let (dx, dy) = (ux * progress * w, uy * progress * h);
+    canvas.draw_image(&img_a, (dx, dy), None);
+    canvas.draw_image(&img_b, (dx - ux * w, dy - uy * h), None);
+    Some(surface_to_pixels(surface, width, height))
+}
+
 fn chromatic_wipe(
     frame_a: &[u8],
     frame_b: &[u8],
@@ -573,30 +786,11 @@ fn chromatic_wipe(
     direction: TransitionDirection,
     aberration: f32,
 ) -> Vec<u8> {
-    let (w, h) = (width as f32, height as f32);
-    let (ux, uy) = match direction {
-        TransitionDirection::Left => (-1.0, 0.0),
-        TransitionDirection::Right => (1.0, 0.0),
-        TransitionDirection::Up => (0.0, -1.0),
-        TransitionDirection::Down => (0.0, 1.0),
-    };
+    let w = width as f32;
+    let (ux, uy) = direction_vector(direction);
 
-    let slid = {
-        let mut surface = match create_skia_surface(width, height) {
-            Some(s) => s,
-            None => return blend_fade(frame_a, frame_b, progress),
-        };
-        let (Some(img_a), Some(img_b)) = (
-            frame_to_image(frame_a, width, height),
-            frame_to_image(frame_b, width, height),
-        ) else {
-            return blend_fade(frame_a, frame_b, progress);
-        };
-        let canvas = surface.canvas();
-        let (dx, dy) = (ux * progress * w, uy * progress * h);
-        canvas.draw_image(&img_a, (dx, dy), None);
-        canvas.draw_image(&img_b, (dx - ux * w, dy - uy * h), None);
-        surface_to_pixels(surface, width, height)
+    let Some(slid) = directional_slide(frame_a, frame_b, width, height, progress, ux, uy) else {
+        return blend_fade(frame_a, frame_b, progress);
     };
 
     let peak = 1.0 - (progress * 2.0 - 1.0).abs();
@@ -700,6 +894,80 @@ fn zoom_blur_transition(
     }
 
     surface_to_pixels(streak_surface, width, height)
+}
+
+const WHIP_STEPS: usize = 10;
+const WHIP_MAX_REACH: f32 = 0.5;
+
+fn whip_transition(
+    frame_a: &[u8],
+    frame_b: &[u8],
+    width: u32,
+    height: u32,
+    progress: f32,
+    strength: f32,
+    direction: TransitionDirection,
+) -> Vec<u8> {
+    let (ux, uy) = direction_vector(direction);
+    let Some(sharp) = directional_slide(frame_a, frame_b, width, height, progress, ux, uy) else {
+        return blend_fade(frame_a, frame_b, progress);
+    };
+
+    let peak = 1.0 - (progress * 2.0 - 1.0).abs();
+    let reach = strength.max(0.0) * peak;
+    if reach <= 0.0 {
+        return sharp;
+    }
+
+    let (Some(img_a), Some(img_b)) = (
+        frame_to_image(frame_a, width, height),
+        frame_to_image(frame_b, width, height),
+    ) else {
+        return sharp;
+    };
+    let Some(img_sharp) = frame_to_image(&sharp, width, height) else {
+        return sharp;
+    };
+    let mut surface = match create_skia_surface(width, height) {
+        Some(s) => s,
+        None => return sharp,
+    };
+
+    let (w, h) = (width as f32, height as f32);
+    let axis_len = if uy == 0.0 { w } else { h };
+    let (dx_a, dy_a) = (ux * progress * w, uy * progress * h);
+    let (dx_b, dy_b) = (dx_a - ux * w, dy_a - uy * h);
+    let reach_px = reach * axis_len * WHIP_MAX_REACH;
+
+    let alpha_a = (1.0 - progress).clamp(0.0, 1.0);
+    let alpha_b = progress.clamp(0.0, 1.0);
+
+    let canvas = surface.canvas();
+    canvas.draw_image(&img_sharp, (0.0, 0.0), None);
+
+    for i in (0..WHIP_STEPS).rev() {
+        let t = i as f32 / (WHIP_STEPS - 1) as f32;
+        let trail = reach_px * t;
+        let weight = (1.0 - t).powf(1.5);
+
+        let mut paint_a = Paint::default();
+        paint_a.set_alpha_f((alpha_a * weight).clamp(0.0, 1.0));
+        canvas.draw_image(
+            &img_a,
+            (dx_a - ux * trail, dy_a - uy * trail),
+            Some(&paint_a),
+        );
+
+        let mut paint_b = Paint::default();
+        paint_b.set_alpha_f((alpha_b * weight).clamp(0.0, 1.0));
+        canvas.draw_image(
+            &img_b,
+            (dx_b - ux * trail, dy_b - uy * trail),
+            Some(&paint_b),
+        );
+    }
+
+    surface_to_pixels(surface, width, height)
 }
 
 fn dissolve_transition(
