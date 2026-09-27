@@ -534,6 +534,7 @@ pub struct AnimatedProperties {
     pub perspective: f32,
     pub draw_progress: f32,
     pub motion_progress: f32,
+    pub clip_path_progress: f32,
     pub char_animation: Option<ResolvedCharAnimation>,
 }
 
@@ -565,6 +566,7 @@ impl Default for AnimatedProperties {
             perspective: -1.0,
             draw_progress: -1.0,
             motion_progress: -1.0,
+            clip_path_progress: -1.0,
             char_animation: None,
         }
     }
@@ -646,6 +648,9 @@ impl AnimatedProperties {
         }
         if other.motion_progress >= 0.0 {
             self.motion_progress = other.motion_progress;
+        }
+        if other.clip_path_progress >= 0.0 {
+            self.clip_path_progress = other.clip_path_progress;
         }
         if other.char_animation.is_some() {
             self.char_animation = other.char_animation.clone();
@@ -911,6 +916,7 @@ fn apply_property(props: &mut AnimatedProperties, property: &str, value: f64) {
         "perspective" => props.perspective = value as f32,
         "draw_progress" => props.draw_progress = value as f32,
         "motion_progress" => props.motion_progress = value as f32,
+        "clip_path_progress" => props.clip_path_progress = value as f32,
         _ => {}
     }
 }
@@ -1137,6 +1143,7 @@ fn get_property_value(props: &AnimatedProperties, property: &str) -> f64 {
         "perspective" => props.perspective as f64,
         "draw_progress" => props.draw_progress as f64,
         "motion_progress" => props.motion_progress as f64,
+        "clip_path_progress" => props.clip_path_progress as f64,
         _ => 0.0,
     }
 }

@@ -636,6 +636,7 @@ const KNOWN_MOTION_PROPERTIES: &[&str] = &[
     "draw_progress",
     "motion_progress",
     "color",
+    "clip_path_progress",
 ];
 
 fn validate_motion_property<E: serde::de::Error>(value: &str) -> Result<(), E> {
