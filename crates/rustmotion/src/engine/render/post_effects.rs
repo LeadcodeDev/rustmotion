@@ -1,4 +1,4 @@
-use rustmotion_core::schema::scenario::{BlurDirection, PostEffect};
+use rustmotion_core::schema::scenario::{BlurDirection, PostEffect, VhsTrackingLine};
 use rustmotion_core::schema::time::{TimeCtx, TimePoint};
 
 pub fn apply_post_effects(
@@ -38,6 +38,149 @@ pub fn apply_post_effects(
                 duration,
             } => {
                 apply_flash(buf, at, color, *intensity, *duration, time);
+            }
+            PostEffect::Vhs {
+                at,
+                duration,
+                bands,
+                offset,
+                noise,
+                scanlines,
+                tracking_line,
+                seed,
+            } => {
+                apply_vhs(
+                    buf,
+                    w,
+                    h,
+                    VhsParams {
+                        at,
+                        duration: *duration,
+                        bands: *bands,
+                        offset: *offset,
+                        noise: *noise,
+                        scanlines: *scanlines,
+                        tracking_line: tracking_line.as_ref(),
+                        seed: *seed,
+                    },
+                    time,
+                );
+            }
+        }
+    }
+}
+
+impl<'a> VhsParams<'a> {
+    pub fn with_tracking(mut self, line: Option<&'a VhsTrackingLine>) -> Self {
+        self.tracking_line = line;
+        self
+    }
+}
+
+pub struct VhsParams<'a> {
+    pub at: &'a TimePoint,
+    pub duration: f32,
+    pub bands: u32,
+    pub offset: f32,
+    pub noise: f32,
+    pub scanlines: f32,
+    pub tracking_line: Option<&'a VhsTrackingLine>,
+    pub seed: u64,
+}
+
+fn scramble(seed: u64) -> u64 {
+    let mut x = seed.wrapping_add(0x9E3779B97F4A7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB);
+    x ^ (x >> 31)
+}
+
+fn unit_from(seed: u64) -> f32 {
+    (scramble(seed) >> 40) as f32 / 16_777_216.0
+}
+
+pub fn apply_vhs(buf: &mut [u8], w: u32, h: u32, params: VhsParams, time: f64) {
+    if params.duration <= 0.0 || params.bands == 0 || w == 0 || h == 0 {
+        return;
+    }
+    let ctx = TimeCtx::default();
+    let Ok(start) = params.at.resolve_relative(&ctx) else {
+        return;
+    };
+    let elapsed = time - start;
+    if elapsed < 0.0 || elapsed >= params.duration as f64 {
+        return;
+    }
+
+    let row_bytes = w as usize * 4;
+    let band_height = (h as f32 / params.bands as f32).max(1.0);
+    let tear_step = (elapsed * 12.0).floor() as u64;
+
+    let source = buf.to_vec();
+    for y in 0..h {
+        let band = (y as f32 / band_height) as u64;
+        let band_seed = params.seed ^ scramble(band ^ scramble(tear_step));
+        let shift = ((unit_from(band_seed) * 2.0 - 1.0) * params.offset).round() as i64;
+        if shift == 0 {
+            continue;
+        }
+        let row = y as usize * row_bytes;
+        for x in 0..w as i64 {
+            let from = x - shift;
+            let target = row + x as usize * 4;
+            if from < 0 || from >= w as i64 {
+                buf[target..target + 4].copy_from_slice(&[0, 0, 0, 255]);
+            } else {
+                let src = row + from as usize * 4;
+                let pixel = [
+                    source[src],
+                    source[src + 1],
+                    source[src + 2],
+                    source[src + 3],
+                ];
+                buf[target..target + 4].copy_from_slice(&pixel);
+            }
+        }
+    }
+
+    if params.noise > 0.0 {
+        let strength = params.noise.clamp(0.0, 1.0);
+        for (index, px) in buf.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let n = unit_from(params.seed ^ scramble(index as u64 ^ tear_step)) * 2.0 - 1.0;
+            let delta = (n * strength * 90.0) as i32;
+            for channel in px.iter_mut().take(3) {
+                *channel = (*channel as i32 + delta).clamp(0, 255) as u8;
+            }
+        }
+    }
+
+    if params.scanlines > 0.0 {
+        let keep = 1.0 - params.scanlines.clamp(0.0, 1.0) * 0.6;
+        for y in (0..h).step_by(2) {
+            let row = y as usize * row_bytes;
+            for px in buf[row..row + row_bytes].as_chunks_mut::<4>().0 {
+                for channel in px.iter_mut().take(3) {
+                    *channel = (*channel as f32 * keep) as u8;
+                }
+            }
+        }
+    }
+
+    if let Some(line) = params.tracking_line {
+        let travelled = (elapsed as f32 * line.speed).fract();
+        let centre = travelled * h as f32;
+        let half = (line.thickness.max(1.0) / 2.0).ceil() as i64;
+        let (lr, lg, lb) = parse_hex_rgb(&line.color);
+        for delta in -half..=half {
+            let y = centre as i64 + delta;
+            if y < 0 || y >= h as i64 {
+                continue;
+            }
+            let row = y as usize * row_bytes;
+            for px in buf[row..row + row_bytes].as_chunks_mut::<4>().0 {
+                px[0] = blend(px[0], lr, 0.75);
+                px[1] = blend(px[1], lg, 0.75);
+                px[2] = blend(px[2], lb, 0.75);
             }
         }
     }
@@ -468,6 +611,126 @@ mod tests {
             assert_eq!(chunk[1], 0);
             assert_eq!(chunk[2], 0);
         }
+    }
+
+    fn vhs_frame(w: u32, h: u32) -> Vec<u8> {
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        for px in buf.as_chunks_mut::<4>().0 {
+            px.copy_from_slice(&[128, 128, 128, 255]);
+        }
+        buf
+    }
+
+    fn vhs(
+        duration: f32,
+        bands: u32,
+        offset: f32,
+        noise: f32,
+        scanlines: f32,
+        tracking: Option<&VhsTrackingLine>,
+    ) -> VhsParams<'_> {
+        static AT: TimePoint = TimePoint::Seconds(0.0);
+        VhsParams {
+            at: &AT,
+            duration,
+            bands,
+            offset,
+            noise,
+            scanlines,
+            tracking_line: None,
+            seed: 7,
+        }
+        .with_tracking(tracking)
+    }
+
+    #[test]
+    fn vhs_outside_its_window_changes_nothing() {
+        let (w, h) = (32u32, 32u32);
+        let before = vhs_frame(w, h);
+        for time in [-0.2, 0.6, 5.0] {
+            let mut buf = before.clone();
+            apply_vhs(&mut buf, w, h, vhs(0.5, 8, 20.0, 0.0, 0.0, None), time);
+            assert_eq!(
+                buf, before,
+                "a tear bounded by at/duration must leave every frame outside it untouched, \
+                 t={time}"
+            );
+        }
+    }
+
+    #[test]
+    fn vhs_displaces_bands_sideways_inside_its_window() {
+        let (w, h) = (64u32, 64u32);
+        let before = vhs_frame(w, h);
+        let mut buf = before.clone();
+        apply_vhs(&mut buf, w, h, vhs(0.5, 8, 24.0, 0.0, 0.0, None), 0.2);
+        assert_ne!(buf, before, "the frame must be torn inside the window");
+
+        let black_edges = buf
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|px| px[0] == 0 && px[1] == 0 && px[2] == 0)
+            .count();
+        assert!(
+            black_edges > 0,
+            "a band slid sideways leaves the frame edge empty — that gap is the tear"
+        );
+    }
+
+    #[test]
+    fn vhs_is_deterministic_for_one_seed_and_one_instant() {
+        let (w, h) = (48u32, 48u32);
+        let mut a = vhs_frame(w, h);
+        let mut b = vhs_frame(w, h);
+        apply_vhs(&mut a, w, h, vhs(0.5, 10, 30.0, 0.4, 0.3, None), 0.25);
+        apply_vhs(&mut b, w, h, vhs(0.5, 10, 30.0, 0.4, 0.3, None), 0.25);
+        assert_eq!(a, b, "two renders of the same frame must be byte-identical");
+    }
+
+    #[test]
+    fn vhs_scanlines_darken_every_other_row() {
+        let (w, h) = (16u32, 16u32);
+        let mut buf = vhs_frame(w, h);
+        apply_vhs(&mut buf, w, h, vhs(0.5, 1, 0.0, 0.0, 1.0, None), 0.1);
+        let row_mean = |y: u32| -> f32 {
+            let row = (y * w * 4) as usize;
+            buf[row..row + (w * 4) as usize]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|px| px[0] as f32)
+                .sum::<f32>()
+                / w as f32
+        };
+        assert!(
+            row_mean(0) < row_mean(1) - 20.0,
+            "even rows must be darkened and odd ones left alone: {} vs {}",
+            row_mean(0),
+            row_mean(1)
+        );
+    }
+
+    #[test]
+    fn vhs_tracking_line_paints_its_colour_somewhere() {
+        let (w, h) = (32u32, 32u32);
+        let line = VhsTrackingLine {
+            color: "#3DA5FF".into(),
+            speed: 1.0,
+            thickness: 3.0,
+        };
+        let mut buf = vhs_frame(w, h);
+        apply_vhs(&mut buf, w, h, vhs(1.0, 1, 0.0, 0.0, 0.0, Some(&line)), 0.5);
+        let blue_rows = buf
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|px| px[2] > px[0] + 40)
+            .count();
+        assert!(
+            blue_rows > 0,
+            "the tracking line must paint its own colour across a band of rows"
+        );
     }
 
     #[test]
