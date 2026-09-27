@@ -34,6 +34,8 @@ pub struct PlaneCamera {
     pub rotation: f32,
     pub origin_x: f32,
     pub origin_y: f32,
+    pub focus: f32,
+    pub aperture: f32,
 }
 
 fn apply_plane_camera(canvas: &Canvas, cam: &PlaneCamera, depth: f32, viewport: (f32, f32)) {
@@ -272,12 +274,23 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
     let aberration_shift = active_chromatic_aberration(&node.css, ctx.frame.time)
         .map(|(cfg, progress)| crate::engine::animator::chromatic_aberration_shift(cfg, progress));
     let aberration_filter = aberration_shift.and_then(chromatic_aberration_image_filter);
+    let defocus_sigma = match (tree_depth, ctx.frame.camera.as_ref()) {
+        (1, Some(cam)) => depth_of_field_sigma(cam, node.css.depth.unwrap_or(1.0)),
+        _ => 0.0,
+    };
+    let defocus_filter = depth_of_field_image_filter(defocus_sigma);
     let combined_filter = {
         use skia_safe::image_filters;
-        match (content_filter, aberration_filter) {
+        let node_filter = match (content_filter, aberration_filter) {
             (Some(cf), Some(af)) => image_filters::compose(af, cf),
             (Some(cf), None) => Some(cf),
             (None, Some(af)) => Some(af),
+            (None, None) => None,
+        };
+        match (node_filter, defocus_filter) {
+            (Some(nf), Some(df)) => image_filters::compose(df, nf),
+            (Some(nf), None) => Some(nf),
+            (None, Some(df)) => Some(df),
             (None, None) => None,
         }
     };
@@ -302,9 +315,11 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
             .map(|shadows| box_shadow_bleed(shadows, &length_ctx))
             .unwrap_or(0.0);
         let aberration_bleed_px = aberration_shift.map(|s| s.abs().ceil()).unwrap_or(0.0);
+        let defocus_bleed_px = (defocus_sigma * 3.0).ceil();
         let bleed = filter_bleed_px
             .max(shadow_bleed_px)
-            .max(aberration_bleed_px);
+            .max(aberration_bleed_px)
+            .max(defocus_bleed_px);
         let mut bounds = Rect::from_xywh(
             box_layout.x - bleed,
             box_layout.y - bleed,
@@ -551,6 +566,20 @@ fn chromatic_aberration_image_filter(shift: f32) -> Option<skia_safe::ImageFilte
         None,
     )?;
     image_filters::blend(BlendMode::Plus, Some(red), Some(cyan), None)
+}
+
+pub fn depth_of_field_sigma(camera: &PlaneCamera, depth: f32) -> f32 {
+    if camera.aperture <= 0.0 {
+        return 0.0;
+    }
+    (camera.aperture * (depth - camera.focus).abs()).max(0.0)
+}
+
+fn depth_of_field_image_filter(sigma: f32) -> Option<skia_safe::ImageFilter> {
+    if sigma <= 0.0 {
+        return None;
+    }
+    skia_safe::image_filters::blur((sigma, sigma), skia_safe::TileMode::Decal, None, None)
 }
 
 fn filter_bleed(list: &[crate::css::style::FilterFn], ctx: &LengthContext) -> f32 {
@@ -2939,6 +2968,160 @@ mod paint_order_tests {
             "clip-path clips the element itself, shadow included — unlike overflow:hidden, \
              which clips only the content and deliberately spares the node's own outset shadow"
         );
+    }
+
+    fn dof_camera(focus: f32, aperture: f32) -> PlaneCamera {
+        PlaneCamera {
+            pan_x: 0.0,
+            pan_y: 0.0,
+            zoom: 1.0,
+            rotation: 0.0,
+            origin_x: 200.0,
+            origin_y: 200.0,
+            focus,
+            aperture,
+        }
+    }
+
+    fn plane_at_depth(depth: Option<f32>) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(150.0)),
+                top: Some(CLP::Px(150.0)),
+                width: Some(CSize::Length(CLP::Px(100.0))),
+                height: Some(CSize::Length(CLP::Px(100.0))),
+                background: Some(Background::Color(CssColor::String("#ff0000".into()))),
+                depth,
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn render_with_camera(node: BoxNode, camera: Option<PlaneCamera>) -> Vec<u8> {
+        let mut root = root_node(400.0, 400.0, "#000000", vec![node]);
+        root.assign_ids(0);
+        let layout = run_layout(&root, (400.0, 400.0), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((400, 400)).unwrap();
+        let mut frame = test_frame(400, 400);
+        frame.camera = camera;
+        paint_tree(surface.canvas(), &root, &layout, &frame, &NoopDispatcher);
+        let info = skia_safe::ImageInfo::new(
+            (400, 400),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; 400 * 400 * 4];
+        surface.read_pixels(&info, &mut buf, 400 * 4, (0, 0));
+        buf
+    }
+
+    /// How many pixels along the plane's top edge are neither background nor
+    /// full red — the width of the gradient a blur leaves behind.
+    fn edge_softness(buf: &[u8]) -> usize {
+        (120..190)
+            .filter(|y| {
+                let i = (y * 400 + 200) * 4;
+                let (r, g) = (buf[i], buf[i + 1]);
+                r > 12 && r < 240 && g < 60
+            })
+            .count()
+    }
+
+    #[test]
+    fn an_aperture_of_zero_renders_exactly_as_no_camera_at_all() {
+        let sharp = render_with_camera(plane_at_depth(Some(2.0)), None);
+        let zero_aperture =
+            render_with_camera(plane_at_depth(Some(2.0)), Some(dof_camera(1.0, 0.0)));
+        assert_eq!(
+            sharp, zero_aperture,
+            "aperture 0 must be byte-identical to no depth of field: every scenario written \
+             before this one declares no aperture"
+        );
+    }
+
+    #[test]
+    fn a_plane_on_the_focus_distance_stays_sharp() {
+        let no_dof = render_with_camera(plane_at_depth(Some(2.0)), None);
+        let focused = render_with_camera(plane_at_depth(Some(2.0)), Some(dof_camera(2.0, 8.0)));
+        assert_eq!(
+            no_dof, focused,
+            "a plane sitting exactly on the focus distance is in focus whatever the aperture"
+        );
+    }
+
+    #[test]
+    fn a_plane_away_from_the_focus_distance_is_blurred() {
+        let sharp_softness = edge_softness(&render_with_camera(plane_at_depth(Some(3.0)), None));
+        let blurred_softness = edge_softness(&render_with_camera(
+            plane_at_depth(Some(3.0)),
+            Some(dof_camera(1.0, 6.0)),
+        ));
+        assert!(
+            blurred_softness > sharp_softness + 8,
+            "a plane two depth units off focus must show a measurably soft edge: \
+             sharp={sharp_softness}px, defocused={blurred_softness}px"
+        );
+    }
+
+    #[test]
+    fn the_further_from_focus_the_softer_the_edge() {
+        let near = edge_softness(&render_with_camera(
+            plane_at_depth(Some(2.0)),
+            Some(dof_camera(1.0, 6.0)),
+        ));
+        let far = edge_softness(&render_with_camera(
+            plane_at_depth(Some(4.0)),
+            Some(dof_camera(1.0, 6.0)),
+        ));
+        assert!(
+            far > near,
+            "softness must grow with distance from the focal plane: \
+             1 unit off={near}px, 3 units off={far}px"
+        );
+    }
+
+    #[test]
+    fn focus_is_symmetric_in_front_of_and_behind_the_focal_plane() {
+        let in_front = edge_softness(&render_with_camera(
+            plane_at_depth(Some(1.0)),
+            Some(dof_camera(3.0, 6.0)),
+        ));
+        let behind = edge_softness(&render_with_camera(
+            plane_at_depth(Some(5.0)),
+            Some(dof_camera(3.0, 6.0)),
+        ));
+        assert_eq!(
+            in_front, behind,
+            "two units in front and two units behind defocus by the same amount"
+        );
+    }
+
+    #[test]
+    fn a_node_with_no_declared_depth_sits_on_the_default_focal_plane() {
+        let no_dof = render_with_camera(plane_at_depth(None), None);
+        let with_dof = render_with_camera(plane_at_depth(None), Some(dof_camera(1.0, 10.0)));
+        assert_eq!(
+            no_dof, with_dof,
+            "depth defaults to 1.0 and focus defaults to 1.0, so a scenario that declares \
+             neither is focused on everything it has"
+        );
+    }
+
+    #[test]
+    fn depth_of_field_sigma_grows_linearly_with_the_aperture() {
+        let cam = dof_camera(1.0, 4.0);
+        assert_eq!(depth_of_field_sigma(&cam, 1.0), 0.0);
+        assert_eq!(depth_of_field_sigma(&cam, 2.0), 4.0);
+        assert_eq!(depth_of_field_sigma(&cam, 3.0), 8.0);
+        assert_eq!(depth_of_field_sigma(&dof_camera(1.0, 0.0), 9.0), 0.0);
     }
 
     fn card_with_shadow(overflow_hidden: bool) -> BoxNode {

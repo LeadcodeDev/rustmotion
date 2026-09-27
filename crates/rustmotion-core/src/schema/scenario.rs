@@ -852,6 +852,23 @@ pub struct Camera {
     /// default to 0 (top-left corner) — set both explicitly.
     #[serde(default)]
     pub origin: Option<CameraOrigin>,
+    /// Depth the camera is focused on, on the same scale as `style.depth`.
+    /// Default `1.0` — the plane an element sits on when it declares no
+    /// depth, so a scenario that never mentions focus is focused on
+    /// everything it has.
+    #[serde(default = "default_camera_focus")]
+    pub focus: f32,
+    /// How fast sharpness falls off away from `focus`, in blur pixels per
+    /// unit of depth difference. Default `0.0` — no depth of field at all,
+    /// which is what every scenario written before this rendered. `4.0` is
+    /// a visible but readable separation; past `20.0` an out-of-focus plane
+    /// reads as a colour wash.
+    ///
+    /// Animate `focus` through `keyframes` for a rack focus; animating
+    /// `aperture` instead opens and closes the effect without moving the
+    /// focal plane.
+    #[serde(default)]
+    pub aperture: f32,
     /// Keyframe animations for camera properties.
     #[serde(default)]
     pub keyframes: Vec<CameraKeyframe>,
@@ -867,7 +884,9 @@ pub struct CameraOrigin {
     pub y: f32,
 }
 
-const KNOWN_CAMERA_PROPERTIES: &[&str] = &["x", "y", "zoom", "rotation", "origin.x", "origin.y"];
+const KNOWN_CAMERA_PROPERTIES: &[&str] = &[
+    "x", "y", "zoom", "rotation", "origin.x", "origin.y", "focus", "aperture",
+];
 
 fn validate_camera_property<E: serde::de::Error>(value: &str) -> Result<(), E> {
     if KNOWN_CAMERA_PROPERTIES.contains(&value) {
@@ -923,6 +942,10 @@ pub struct CameraKeyframePoint {
     pub time: f64,
     /// Value at this time.
     pub value: f32,
+}
+
+fn default_camera_focus() -> f32 {
+    1.0
 }
 
 fn default_camera_zoom() -> f32 {
