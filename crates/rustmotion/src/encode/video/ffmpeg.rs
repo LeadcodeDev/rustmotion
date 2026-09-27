@@ -313,7 +313,7 @@ fn encode_with_ffmpeg_hw_impl(
     let fps = config.fps;
 
     for view in &scenario.views {
-        prefetch_icons(&view.scenes);
+        prefetch_icons(&view.scenes)?;
     }
     for failure in analyze_scenario_audio(scenario) {
         eprintln!("rustmotion: audio-reactive: {failure} — waveform/audio_spectrum will render flat for this track.");

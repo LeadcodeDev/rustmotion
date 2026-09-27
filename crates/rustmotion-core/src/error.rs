@@ -49,6 +49,17 @@ pub enum RustmotionError {
     #[error("Failed to parse icon SVG '{icon}': {reason}")]
     IconParse { icon: String, reason: String },
 
+    #[error(
+        "{count} icon(s) could not be loaded — checked the disk cache at {cache_dir} and the \
+         network, both failed:\n  - {details}\nA render must not silently omit an icon: fix \
+         the identifier(s), or connect once so they are downloaded and cached for offline use."
+    )]
+    IconsUnresolved {
+        count: usize,
+        cache_dir: String,
+        details: String,
+    },
+
     #[error("Failed to create Skia image from {target}")]
     SkiaImageCreation { target: String },
 

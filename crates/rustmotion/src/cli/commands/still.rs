@@ -43,6 +43,10 @@ pub fn cmd_still(
         engine::renderer::load_custom_fonts(&scenario.fonts);
     }
 
+    for view in &scenario.views {
+        engine::prefetch_icons(&view.scenes)?;
+    }
+
     let config = &scenario.video;
     let fps = config.fps;
 

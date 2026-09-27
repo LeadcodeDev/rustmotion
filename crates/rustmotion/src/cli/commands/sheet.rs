@@ -228,6 +228,10 @@ pub fn cmd_sheet(
         engine::renderer::load_custom_fonts(&scenario.fonts);
     }
 
+    for view in &scenario.views {
+        engine::prefetch_icons(&view.scenes)?;
+    }
+
     let start_time = std::time::Instant::now();
     let config = &scenario.video;
     let fps = config.fps;
