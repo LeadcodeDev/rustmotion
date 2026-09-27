@@ -50,6 +50,11 @@ rustmotion_core::impl_traits!(Line {
 
 impl Line {
     fn paint(&self, canvas: &Canvas, props: &AnimatedProperties) {
+        let drawing = props.draw_progress >= 0.0 && props.draw_progress < 1.0;
+        if drawing && props.draw_progress <= 0.0 {
+            return;
+        }
+
         let mut paint = paint_from_hex(&self.color);
         paint.set_style(PaintStyle::Stroke);
         paint.set_stroke_width(self.width);
@@ -64,7 +69,7 @@ impl Line {
             }
         }
 
-        if props.draw_progress >= 0.0 && props.draw_progress < 1.0 {
+        if drawing {
             let dx = self.x2 - self.x1;
             let dy = self.y2 - self.y1;
             let length = (dx * dx + dy * dy).sqrt();
@@ -88,5 +93,110 @@ impl Painter for Line {
         _ctx: &PaintCtx,
     ) {
         self.paint(canvas, props);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustmotion_core::engine::layout_pass::Insets;
+
+    const W: i32 = 100;
+    const H: i32 = 100;
+
+    fn test_layout() -> BoxLayout {
+        BoxLayout {
+            x: 0.0,
+            y: 0.0,
+            width: W as f32,
+            height: H as f32,
+            border: Insets::default(),
+            padding: Insets::default(),
+        }
+    }
+
+    fn test_ctx() -> PaintCtx {
+        PaintCtx {
+            time: 0.0,
+            scenario_time: 0.0,
+            scene_duration: 1.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 1920,
+            video_height: 1080,
+            stagger_offset: 0.0,
+        }
+    }
+
+    fn drawable_line() -> Line {
+        Line {
+            x1: 10.0,
+            y1: 50.0,
+            x2: 90.0,
+            y2: 50.0,
+            width: 12.0,
+            color: "#000000".to_string(),
+            dashed: None,
+            timing: Default::default(),
+            style: Default::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        }
+    }
+
+    fn lit_pixel_count(line: &Line, draw_progress: f32) -> usize {
+        let layout = test_layout();
+        let props = AnimatedProperties {
+            draw_progress,
+            ..Default::default()
+        };
+        let ctx = test_ctx();
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            line.paint_content(canvas, &layout, &props, &ctx);
+        }
+
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+
+        (0..(W * H) as usize)
+            .filter(|&i| buf[i * 4 + 3] > 10)
+            .count()
+    }
+
+    #[test]
+    fn draw_progress_zero_paints_nothing() {
+        let line = drawable_line();
+        let lit = lit_pixel_count(&line, 0.0);
+        assert_eq!(
+            lit, 0,
+            "at draw_progress=0 the line must not paint a zero-length dash as a dot, got {lit} lit pixels"
+        );
+    }
+
+    #[test]
+    fn draw_progress_partial_paints_a_partial_stroke() {
+        let line = drawable_line();
+        let lit = lit_pixel_count(&line, 0.5);
+        assert!(
+            lit > 0,
+            "at draw_progress=0.5 the line must paint a partial stroke, got {lit} lit pixels"
+        );
     }
 }
