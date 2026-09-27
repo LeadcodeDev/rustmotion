@@ -620,7 +620,7 @@ Each scene is an **implicit flex container** at video dimensions. All children p
 
 **IMPORTANT:** Every scene SHOULD include `"layout": {"align_items": "center", "justify_content": "center"}` for centered composition. Without this, content aligns to the top-left corner.
 
-**`layout` options:** `direction` (column/row), `gap`, `align_items` (start/center/end/stretch), `justify_content` (start/center/end/space_between/space_around/space_evenly), `padding`
+**`layout` options:** `direction` (column/row), `gap`, `align_items` (start/center/end/stretch), `justify_content` (start/center/end/space_between/space_around/space_evenly), `padding` (f32 only — unlike `style.padding`, `layout.padding` does not accept the `{top,right,bottom,left}` object form)
 
 #### Layout Strategy: Prefer Flex/Grid — Absolute is a last resort
 
@@ -1254,7 +1254,7 @@ Each dimension (`width`/`height` in `style`) can be a number or `"auto"`.
 | ------------------------ | ----------- | ---------- |
 | `display`                | enum        | `"flex"` — `"flex"` or `"grid"` |
 | `background`             | string      | `null`     |
-| `border-radius`          | f32         | `12.0`     |
+| `border-radius`          | f32         | `null` — sharp corners; `card`/`flex`/etc. are the same component as `div` and carry no special default either |
 | `border`                 | object      | `null` — `{ "color": "#E5E7EB", "width": 1 }` |
 | `box-shadow`             | array       | `null` — `[{ "color": "#00000040", "offset-x": 0, "offset-y": 4, "blur": 12 }]` (kebab-case keys, always an array — see [rules/component-field-placement.md](rules/component-field-placement.md)) |
 | `padding`                | f32 or obj  | `null`     |
@@ -1807,7 +1807,7 @@ The `timeline` field — a **root field**, sibling of `style`, not nested inside
 }
 ```
 
-**Animatable properties:** `opacity`, `translate_x`, `translate_y`, `scale_x`, `scale_y`, `scale` (both axes), `rotation`, `blur`, `color`, `rotate_x`, `rotate_y`, `perspective`
+**Animatable properties:** `opacity`, `translate_x`, `translate_y`, `scale.x`, `scale.y`, `scale` (both axes), `rotation`, `blur`, `color`, `rotate_x`, `rotate_y`, `perspective`
 
 **3D keyframe properties:**
 - `rotate_x` — Rotation around X axis in degrees (tilts forward/backward)
@@ -1920,7 +1920,7 @@ Orbit creates continuous circular or elliptical motion with pseudo-3D depth simu
 
 ```bash
 # Render a scenario file to MP4
-rustmotion render scenario.json -o output.mp4
+rustmotion render -f scenario.json -o output.mp4
 
 # Render from inline JSON
 rustmotion render --json '{ ... }' -o output.mp4
@@ -1936,23 +1936,25 @@ rustmotion validate -f scenario.json --lenient          # warnings only
 rustmotion schema
 
 # Show scenario info
-rustmotion info scenario.json
+rustmotion info -f scenario.json
 
 # Render a single frame (0-indexed) as PNG
-rustmotion render scenario.json -o frame.png --frame 0
+rustmotion render -f scenario.json -o frame.png --frame 0
 
 # Render with specific codec/format
-rustmotion render scenario.json -o output.webm --codec vp9 --format webm
+rustmotion render -f scenario.json -o output.webm --codec vp9 --format webm
 
 # Render as GIF
-rustmotion render scenario.json -o output.gif --format gif
+rustmotion render -f scenario.json -o output.gif --format gif
 
 # Render as PNG sequence
-rustmotion render scenario.json -o frames/ --format png-seq
+rustmotion render -f scenario.json -o frames/ --format png-seq
 
 # Machine-readable output
-rustmotion render scenario.json -o output.mp4 --output-format json
+rustmotion render -f scenario.json -o output.mp4 --output-format json
 ```
+
+`render` and `info` only accept the path via `-f`/`--file` — there is no positional form; passing a bare path errors with `unexpected argument`.
 
 ---
 
