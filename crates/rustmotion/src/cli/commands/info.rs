@@ -1,6 +1,7 @@
 use rustmotion::components::intrinsic::{GradientTextIntrinsic, TextIntrinsic};
 use rustmotion::components::{ChildComponent, Component};
 use rustmotion::core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
+use rustmotion::encode::build_frame_tasks;
 use rustmotion::engine::animator::spring_rest_time;
 use rustmotion::engine::render::deserialize_children;
 use rustmotion::error::Result;
@@ -8,15 +9,22 @@ use rustmotion::loader::load_input;
 use rustmotion::schema::{self, AnimationEffect, ResolvedScenario, SpringConfig};
 use std::path::PathBuf;
 
+fn rendered_duration_and_frames(scenario: &ResolvedScenario) -> (f64, u32) {
+    let fps = scenario.video.fps as f64;
+    let total_frames = build_frame_tasks(scenario).len() as u32;
+    let total_duration = if fps > 0.0 {
+        total_frames as f64 / fps
+    } else {
+        0.0
+    };
+    (total_duration, total_frames)
+}
+
 pub fn cmd_info(input: &PathBuf) -> Result<()> {
     let scenario = load_input(input)?;
     let fps = scenario.video.fps;
     let all_scenes: Vec<_> = scenario.all_scenes().collect();
-    let total_duration: f64 = all_scenes.iter().map(|s| s.duration).sum();
-    let total_frames: u32 = all_scenes
-        .iter()
-        .map(|s| (s.duration * fps as f64).round() as u32)
-        .sum();
+    let (total_duration, total_frames) = rendered_duration_and_frames(&scenario);
 
     let total_layers: usize = all_scenes.iter().map(|s| s.children.len()).sum();
 
@@ -695,5 +703,68 @@ mod spring_report_tests {
         let mut out = Vec::new();
         collect_springs_in_children(&[child], "test", &mut out);
         assert!(out.is_empty(), "unexpected spring reports: {out:?}");
+    }
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::*;
+
+    fn load(json: serde_json::Value) -> ResolvedScenario {
+        rustmotion::loader::load_scenario_from_source(None, Some(&json.to_string()))
+            .expect("scenario must load and validate structurally")
+    }
+
+    #[test]
+    fn a_v1_transition_shortens_the_rendered_total_the_way_the_encoder_sees_it() {
+        let json = serde_json::json!({
+            "video": { "width": 320, "height": 180, "fps": 30, "background": "#000000" },
+            "scenes": [
+                { "duration": 1.0, "children": [] },
+                {
+                    "duration": 1.0,
+                    "transition": { "type": "iris", "duration": 0.6 },
+                    "children": []
+                }
+            ]
+        });
+        let scenario = load(json);
+        let (duration, frames) = rendered_duration_and_frames(&scenario);
+        assert_eq!(
+            frames, 42,
+            "two 1.0s scenes with a 0.6s transition must render 42 frames, not \
+             60 = sum(scene.duration) * fps: got {frames}"
+        );
+        assert!(
+            (duration - 1.4).abs() < 1e-9,
+            "expected 1.4s to match the frame count, got {duration}"
+        );
+    }
+
+    #[test]
+    fn v2_at_placement_reports_the_overlapped_total_not_the_sum_of_durations() {
+        let json = serde_json::json!({
+            "version": "1.0",
+            "timing": "v2",
+            "video": { "width": 320, "height": 180, "fps": 30, "background": "#000000" },
+            "composition": [{
+                "type": "slide",
+                "scenes": [
+                    { "at": 0, "duration": 2.0, "children": [] },
+                    { "at": 1.0, "duration": 2.0, "children": [] }
+                ]
+            }]
+        });
+        let scenario = load(json);
+        let (duration, frames) = rendered_duration_and_frames(&scenario);
+        assert_eq!(
+            frames, 90,
+            "at:0/at:1.0 over 2.0s scenes must report the 90-frame overlapped total \
+             (at_last + duration_last), not 120 = sum(scene.duration) * fps: got {frames}"
+        );
+        assert!(
+            (duration - 3.0).abs() < 1e-9,
+            "expected 3.0s to match the frame count, got {duration}"
+        );
     }
 }

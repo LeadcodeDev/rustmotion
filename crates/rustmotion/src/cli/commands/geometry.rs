@@ -6,7 +6,7 @@ use rustmotion::components::box_builder::{
 use rustmotion::components::intrinsic::{
     CaptionIntrinsic, GradientTextIntrinsic, RichTextIntrinsic, TableIntrinsic, TextIntrinsic,
 };
-use rustmotion::components::{ChildComponent, Component};
+use rustmotion::components::{Arrow, ChildComponent, Component, Connector, Line};
 use rustmotion::core::css::style::{
     CssStyle, Position, TransformFn, TransformOrigin, WhiteSpace, MIN_LEGIBLE_FONT_RATIO,
     TEXT_AUTOFIT_MIN_FONT_PX,
@@ -160,7 +160,7 @@ fn walk(
             Some(l) => l,
             None => continue,
         };
-        let raw_bbox = bbox_of(layout);
+        let raw_bbox = component_bbox(&child.component, layout);
         let own_bound = if box_node.css.position == Some(Position::Absolute) {
             None
         } else {
@@ -226,6 +226,84 @@ fn bbox_of(layout: &BoxLayout) -> BBox {
         y: layout.y,
         w: layout.width,
         h: layout.height,
+    }
+}
+
+const ARROW_HEAD_BBOX_PADDING: f32 = 16.0;
+
+fn endpoint_extent(component: &Component) -> Option<(f32, f32, f32, f32, f32)> {
+    match component {
+        Component::Line(Line {
+            x1,
+            y1,
+            x2,
+            y2,
+            width,
+            ..
+        }) => Some((
+            x1.min(*x2),
+            y1.min(*y2),
+            x1.max(*x2),
+            y1.max(*y2),
+            width.max(0.0) / 2.0,
+        )),
+        Component::Arrow(Arrow {
+            x1,
+            y1,
+            x2,
+            y2,
+            cp,
+            cp1,
+            cp2,
+            width,
+            arrow_size,
+            ..
+        }) => {
+            let mut min_x = x1.min(*x2);
+            let mut max_x = x1.max(*x2);
+            let mut min_y = y1.min(*y2);
+            let mut max_y = y1.max(*y2);
+            for p in [cp.as_ref(), cp1.as_ref(), cp2.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                min_x = min_x.min(p.x);
+                max_x = max_x.max(p.x);
+                min_y = min_y.min(p.y);
+                max_y = max_y.max(p.y);
+            }
+            let pad = width.max(0.0) / 2.0 + ARROW_HEAD_BBOX_PADDING + arrow_size.max(0.0);
+            Some((min_x, min_y, max_x, max_y, pad))
+        }
+        Component::Connector(Connector {
+            from,
+            to,
+            width,
+            arrow_size,
+            ..
+        }) => {
+            let pad = width.max(0.0) / 2.0 + ARROW_HEAD_BBOX_PADDING + arrow_size.max(0.0);
+            Some((
+                from.x.min(to.x),
+                from.y.min(to.y),
+                from.x.max(to.x),
+                from.y.max(to.y),
+                pad,
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn component_bbox(component: &Component, layout: &BoxLayout) -> BBox {
+    match endpoint_extent(component) {
+        Some((min_x, min_y, max_x, max_y, pad)) => BBox {
+            x: layout.x + min_x - pad,
+            y: layout.y + min_y - pad,
+            w: (max_x - min_x) + pad * 2.0,
+            h: (max_y - min_y) + pad * 2.0,
+        },
+        None => bbox_of(layout),
     }
 }
 
@@ -935,7 +1013,7 @@ fn walk_anim(
                 Some(effects) => resolve_props_for_effects(&effects, local_time, scene_duration),
                 None => AnimatedProperties::default(),
             };
-            let raw_bbox = bbox_of(layout);
+            let raw_bbox = component_bbox(&child.component, layout);
             let mut transformed = apply_static_node_transform(&raw_bbox, &box_node.css, viewport_f);
             if let Some(overshoot) = props
                 .char_animation
@@ -3113,6 +3191,44 @@ mod tests {
                 .all(|v| v.kind != ViolationKind::UnwrappableTextOverflow),
             "text-autofit: true must resolve the nowrap overflow this exact fixture (minus the \
              flag) triggers: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn line_bbox_honours_x1_y1_not_just_the_node_position() {
+        let json = r##"{"video":{"width":1920,"height":1080,"fps":30,"background":"#000000"},
+ "scenes":[{"duration":1.0,"children":[
+  {"type":"line","position":"absolute","x":0,"y":0,"x1":960,"y1":100,"x2":960,"y2":1280,"color":"#FFFFFF","width":4}]}]}"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        let v = violations
+            .iter()
+            .find(|v| v.component == "line" && v.kind == ViolationKind::ViewportOverflow)
+            .unwrap_or_else(|| {
+                panic!("expected a ViewportOverflow for the line: {:?}", violations)
+            });
+        assert_eq!(v.axis, Axis::Y);
+        assert_eq!(
+            (v.bbox.x, v.bbox.y, v.bbox.w, v.bbox.h),
+            (958.0, 98.0, 4.0, 1184.0),
+            "bbox must be anchored at x1/y1 (960, 100), not at the node's own x/y (0, 0): {:?}",
+            v.bbox
+        );
+    }
+
+    #[test]
+    fn line_with_negative_x1_that_pokes_off_the_left_edge_is_caught() {
+        let json = r##"{"video":{"width":1920,"height":1080,"fps":30,"background":"#000000"},
+ "scenes":[{"duration":1.0,"children":[
+  {"type":"line","position":"absolute","x":0,"y":0,"x1":-500,"y1":100,"x2":0,"y2":100,"color":"#FFFFFF","width":4}]}]}"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.component == "line" && v.kind == ViolationKind::ViewportOverflow && v.axis == Axis::X),
+            "a line whose x1 pokes past x=0 must be reported even though its own box (x=0) does not: {:?}",
             violations
         );
     }
