@@ -1082,6 +1082,81 @@ pub enum PostEffect {
         #[serde(default = "default_flash_duration")]
         duration: f32,
     },
+    /// A tape-tear glitch: the frame breaks into horizontal bands slid
+    /// sideways, with optional noise, scanlines and a travelling tracking
+    /// line. Bounded by `at` and `duration` like [`PostEffect::Flash`],
+    /// because it reads as a beat rather than as a state — a reference reel
+    /// holds it for well under a second on a rewind.
+    Vhs {
+        /// When the tear starts, on the scene's own timeline.
+        at: TimePoint,
+        /// How long it lasts, in seconds. Default: 0.5.
+        #[serde(default = "default_vhs_duration")]
+        duration: f32,
+        /// Number of horizontal strips the frame breaks into. Default: 12.
+        #[serde(default = "default_vhs_bands")]
+        bands: u32,
+        /// Largest sideways shift a band can take, in pixels. Default: 40.
+        #[serde(default = "default_vhs_offset")]
+        offset: f32,
+        /// Strength of the added noise, 0..1. Default: 0.25.
+        #[serde(default = "default_vhs_noise")]
+        noise: f32,
+        /// Strength of the darkened scanlines, 0..1. Default: 0.2.
+        #[serde(default = "default_vhs_scanlines")]
+        scanlines: f32,
+        /// A thin coloured line travelling down the frame, as tape tracking
+        /// error looks. Absent means none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tracking_line: Option<VhsTrackingLine>,
+        /// Seed for the band layout and the noise. The same seed gives the
+        /// same tear every render.
+        #[serde(default = "default_vhs_seed")]
+        seed: u64,
+    },
+}
+
+/// The travelling line of a [`PostEffect::Vhs`] tear.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VhsTrackingLine {
+    /// Line colour as a hex string. Default: `"#3DA5FF"`.
+    #[serde(default = "default_vhs_tracking_color")]
+    pub color: String,
+    /// How many times it crosses the frame per second. Default: 1.5.
+    #[serde(default = "default_vhs_tracking_speed")]
+    pub speed: f32,
+    /// Line thickness in pixels. Default: 3.0.
+    #[serde(default = "default_vhs_tracking_thickness")]
+    pub thickness: f32,
+}
+
+fn default_vhs_duration() -> f32 {
+    0.5
+}
+fn default_vhs_bands() -> u32 {
+    12
+}
+fn default_vhs_offset() -> f32 {
+    40.0
+}
+fn default_vhs_noise() -> f32 {
+    0.25
+}
+fn default_vhs_scanlines() -> f32 {
+    0.2
+}
+fn default_vhs_seed() -> u64 {
+    1
+}
+fn default_vhs_tracking_color() -> String {
+    "#3DA5FF".to_string()
+}
+fn default_vhs_tracking_speed() -> f32 {
+    1.5
+}
+fn default_vhs_tracking_thickness() -> f32 {
+    3.0
 }
 
 fn default_grain_intensity() -> f32 {
