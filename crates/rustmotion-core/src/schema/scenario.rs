@@ -1320,6 +1320,35 @@ fn default_iris_aspect() -> f32 {
     1.0
 }
 
+/// The arbitrary silhouette a `mask` transition scales up from `origin`,
+/// authored in the shape's own local coordinates (whatever range its points
+/// or path data use — a 100x100 star, a 24x24 icon glyph, anything). The
+/// silhouette's own bounding-box centre is what tracks `origin`, not a fixed
+/// point like `(0, 0)`, so a lopsided glyph still grows from its visual
+/// middle. Reuses the same `kind` vocabulary as `style.clip-path`
+/// (`polygon`, `path`) rather than inventing a second grammar for the same
+/// idea.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum MaskShape {
+    /// A closed straight-edge outline, in local units.
+    Polygon { points: Vec<(f32, f32)> },
+    /// SVG path data, in local units.
+    Path { d: String },
+}
+
+fn default_mask_to_scale() -> f32 {
+    20.0
+}
+
+fn default_blob_lobes() -> u32 {
+    8
+}
+
+fn default_blob_wobble() -> f32 {
+    0.15
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Transition {
@@ -1331,8 +1360,10 @@ pub struct Transition {
     /// Cell edge in px for `pixel_dissolve`. Ignored by every other type.
     #[serde(default = "default_transition_cell")]
     pub cell: f32,
-    /// `pixel_dissolve` only: stable scatter selector. Two transitions with the
-    /// same seed dissolve in the same order.
+    /// `pixel_dissolve` and `blob` only: `pixel_dissolve`'s stable scatter
+    /// selector, or the stable lobe-wobble selector `blob` grows its
+    /// silhouette from. Two transitions with the same seed (and, for `blob`,
+    /// the same `lobes`/`wobble`) reproduce the same shape.
     #[serde(default = "default_transition_seed")]
     pub seed: u32,
     /// `pixel_dissolve` only: which cells turn first.
@@ -1354,9 +1385,11 @@ pub struct Transition {
     /// slide with no smear. Ignored by every other transition type.
     #[serde(default = "default_transition_strength")]
     pub strength: f32,
-    /// `zoom_blur` and `iris` only: for `zoom_blur`, the centre the streaks
-    /// radiate from; for `iris`, the mask's centre. Ignored by every other
-    /// transition type.
+    /// `zoom_blur`, `iris`, `mask` and `blob` only: for `zoom_blur`, the
+    /// centre the streaks radiate from; for the other three, the mask's
+    /// centre — in `mask`'s case, the point its silhouette's own
+    /// bounding-box centre grows from. Ignored by every other transition
+    /// type. Frame pixels, like `zoom_blur`'s, not a `0..1` fraction.
     #[serde(default)]
     pub origin: Option<ZoomBlurOrigin>,
     /// `iris` only: the mask's silhouette. Ignored by every other type.
@@ -1387,6 +1420,52 @@ pub struct Transition {
     /// transition type.
     #[serde(default)]
     pub reverse: bool,
+    /// `mask` only: the arbitrary silhouette it scales up from `origin` —
+    /// `polygon` or `path`, the same `kind` vocabulary as `style.clip-path`.
+    /// Required for `mask`; ignored by every other type (`blob` grows its
+    /// own procedural silhouette instead, from `lobes`/`wobble`/`seed`).
+    #[serde(default)]
+    pub silhouette: Option<MaskShape>,
+    /// `mask` only: `silhouette`'s scale factor at `progress: 0`, relative to
+    /// its own bounding-box size. `0` is a true point; small positive values
+    /// (the default) start it as a barely-visible speck rather than exactly
+    /// nothing, which is fine since `progress <= 0.0` always short-circuits
+    /// to the untouched outgoing frame regardless of this value. Ignored by
+    /// every other transition type.
+    #[serde(default)]
+    pub from_scale: f32,
+    /// `mask` only: `silhouette`'s scale factor at `progress: 1`. Large
+    /// enough to guarantee full-frame coverage is the author's
+    /// responsibility — unlike `iris`, an arbitrary silhouette's covering
+    /// radius cannot be solved for automatically. Ignored by every other
+    /// transition type.
+    #[serde(default = "default_mask_to_scale")]
+    pub to_scale: f32,
+    /// `blob` only: how many lobes its procedural organic silhouette grows.
+    /// Ignored by every other transition type.
+    #[serde(default = "default_blob_lobes")]
+    pub lobes: u32,
+    /// `blob` only: how far each lobe's radius wanders from a perfect circle,
+    /// as a fraction of it — `0` degenerates to a circle (a slow `iris` by
+    /// another name), values approaching `1` pinch some lobes almost to the
+    /// centre. Ignored by every other transition type.
+    #[serde(default = "default_blob_wobble")]
+    pub wobble: f32,
+    /// `wipe_*`, `mask` and `blob` only: width, in px, of the soft gradient
+    /// edge instead of a hard cut. `0` (the default) is a hard edge — the
+    /// wipe's clip-rect boundary, or the mask/blob's clip-path boundary, with
+    /// no blur pass at all. Ignored by every other transition type.
+    #[serde(default)]
+    pub feather: f32,
+    /// `wipe_*`, `mask` and `blob` only, and only visible when `feather` is
+    /// greater than `0`: a colour that tints the feathered edge itself,
+    /// peaking exactly on the boundary and fading to nothing at both sides of
+    /// the feather band — a coloured front that sweeps across ahead of the
+    /// incoming scene. Absent leaves the feather a plain alpha blend. Ignored
+    /// by every other transition type, and by these three when `feather` is
+    /// `0` (a hard edge has no band to tint).
+    #[serde(default)]
+    pub band_color: Option<String>,
     #[serde(default = "default_transition_duration")]
     pub duration: f64,
     #[serde(default = "default_transition_easing")]
@@ -1455,6 +1534,21 @@ pub enum TransitionType {
     /// collapses it to a plain `slide`. Zero at both ends of the
     /// transition, so no streak bleeds into the next scene.
     Whip,
+    /// `iris` generalised to any silhouette: `silhouette` (a `polygon` or a
+    /// `path`, the same grammar as `style.clip-path`) scales up about its own
+    /// bounding-box centre, from `from_scale` to `to_scale`, centred on
+    /// `origin`. `feather` and `band_color` soften and tint the moving edge.
+    /// Byte-identical to the outgoing frame at `progress: 0` and to the
+    /// incoming one at `progress: 1`, by construction rather than by tuning
+    /// `from_scale`/`to_scale` precisely.
+    Mask,
+    /// An organic metaball silhouette — `lobes` control points at a radius
+    /// wobbling by `wobble` around a circle, joined into a smooth closed
+    /// blob — growing from `origin` exactly like `mask`, but with a covering
+    /// radius solved for automatically the way `iris`'s is, instead of an
+    /// author-supplied `to_scale`. `seed` picks which wobble the lobes get.
+    /// `feather` and `band_color` behave as they do on `mask`.
+    Blob,
     None,
 }
 

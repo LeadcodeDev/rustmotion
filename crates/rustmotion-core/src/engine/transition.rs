@@ -1,11 +1,12 @@
 use crate::engine::animator::ease;
 use crate::engine::renderer::{color4f_from_hex, paint_from_hex};
 use crate::schema::{
-    EasingType, IrisRing, IrisShape, PanBackground, PixelDissolveOrder, Transition,
+    EasingType, IrisRing, IrisShape, MaskShape, PanBackground, PixelDissolveOrder, Transition,
     TransitionCorner, TransitionDirection, TransitionType, ZoomBlurOrigin,
 };
 use skia_safe::{
-    surfaces, Color4f, ColorType, Image, ImageInfo, Paint, PaintStyle, PathBuilder, Rect,
+    surfaces, BlurStyle, Color4f, ColorType, Image, ImageInfo, MaskFilter, Matrix, Paint,
+    PaintStyle, PathBuilder, Rect,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,6 +25,13 @@ pub struct TransitionOptions {
     pub hold: f32,
     pub ring: Option<IrisRing>,
     pub reverse: bool,
+    pub silhouette: Option<MaskShape>,
+    pub from_scale: f32,
+    pub to_scale: f32,
+    pub lobes: u32,
+    pub wobble: f32,
+    pub feather: f32,
+    pub band_color: Option<String>,
     pub duration: f64,
 }
 
@@ -44,6 +52,13 @@ impl Default for TransitionOptions {
             hold: 0.0,
             ring: None,
             reverse: false,
+            silhouette: None,
+            from_scale: 0.0,
+            to_scale: 20.0,
+            lobes: 8,
+            wobble: 0.15,
+            feather: 0.0,
+            band_color: None,
             duration: 0.5,
         }
     }
@@ -66,6 +81,13 @@ impl From<&Transition> for TransitionOptions {
             hold: t.hold,
             ring: t.ring.clone(),
             reverse: t.reverse,
+            silhouette: t.silhouette.clone(),
+            from_scale: t.from_scale,
+            to_scale: t.to_scale,
+            lobes: t.lobes,
+            wobble: t.wobble,
+            feather: t.feather,
+            band_color: t.band_color.clone(),
             duration: t.duration,
         }
     }
@@ -96,21 +118,58 @@ pub fn apply_transition(
         hold,
         ring,
         reverse,
+        silhouette,
+        from_scale,
+        to_scale,
+        lobes,
+        wobble,
+        feather,
+        band_color,
         duration,
     } = opts.clone();
 
     match transition_type {
         TransitionType::Fade => blend_fade(frame_a, frame_b, progress),
-        TransitionType::WipeLeft => {
-            wipe(frame_a, frame_b, width, height, progress, Direction::Left)
-        }
-        TransitionType::WipeRight => {
-            wipe(frame_a, frame_b, width, height, progress, Direction::Right)
-        }
-        TransitionType::WipeUp => wipe(frame_a, frame_b, width, height, progress, Direction::Up),
-        TransitionType::WipeDown => {
-            wipe(frame_a, frame_b, width, height, progress, Direction::Down)
-        }
+        TransitionType::WipeLeft => wipe(
+            frame_a,
+            frame_b,
+            width,
+            height,
+            progress,
+            Direction::Left,
+            feather,
+            band_color.as_deref(),
+        ),
+        TransitionType::WipeRight => wipe(
+            frame_a,
+            frame_b,
+            width,
+            height,
+            progress,
+            Direction::Right,
+            feather,
+            band_color.as_deref(),
+        ),
+        TransitionType::WipeUp => wipe(
+            frame_a,
+            frame_b,
+            width,
+            height,
+            progress,
+            Direction::Up,
+            feather,
+            band_color.as_deref(),
+        ),
+        TransitionType::WipeDown => wipe(
+            frame_a,
+            frame_b,
+            width,
+            height,
+            progress,
+            Direction::Down,
+            feather,
+            band_color.as_deref(),
+        ),
         TransitionType::ZoomIn => zoom_transition(frame_a, frame_b, width, height, progress, true),
         TransitionType::ZoomOut => {
             zoom_transition(frame_a, frame_b, width, height, progress, false)
@@ -149,6 +208,32 @@ pub fn apply_transition(
         }
         TransitionType::Whip => whip_transition(
             frame_a, frame_b, width, height, progress, strength, direction,
+        ),
+        TransitionType::Mask => mask_transition(
+            frame_a,
+            frame_b,
+            width,
+            height,
+            progress,
+            silhouette.as_ref(),
+            origin,
+            from_scale,
+            to_scale,
+            feather,
+            band_color.as_deref(),
+        ),
+        TransitionType::Blob => blob_transition(
+            frame_a,
+            frame_b,
+            width,
+            height,
+            progress,
+            origin,
+            lobes,
+            wobble,
+            seed,
+            feather,
+            band_color.as_deref(),
         ),
         TransitionType::None => {
             if progress < 0.5 {
@@ -323,6 +408,15 @@ enum Direction {
     Down,
 }
 
+fn wipe_reveal_rect(direction: &Direction, w: f32, h: f32, progress: f32) -> Rect {
+    match direction {
+        Direction::Left => Rect::from_xywh(0.0, 0.0, w * progress, h),
+        Direction::Right => Rect::from_xywh(w * (1.0 - progress), 0.0, w * progress, h),
+        Direction::Up => Rect::from_xywh(0.0, 0.0, w, h * progress),
+        Direction::Down => Rect::from_xywh(0.0, h * (1.0 - progress), w, h * progress),
+    }
+}
+
 fn wipe(
     frame_a: &[u8],
     frame_b: &[u8],
@@ -330,39 +424,55 @@ fn wipe(
     height: u32,
     progress: f32,
     direction: Direction,
+    feather: f32,
+    band_color: Option<&str>,
 ) -> Vec<u8> {
-    let mut surface = match create_skia_surface(width, height) {
-        Some(s) => s,
-        None => return blend_fade(frame_a, frame_b, progress),
-    };
-    let img_a = match frame_to_image(frame_a, width, height) {
-        Some(i) => i,
-        None => return blend_fade(frame_a, frame_b, progress),
-    };
-    let img_b = match frame_to_image(frame_b, width, height) {
-        Some(i) => i,
-        None => return blend_fade(frame_a, frame_b, progress),
-    };
+    if progress <= 0.0 {
+        return frame_a.to_vec();
+    }
+    if progress >= 1.0 {
+        return frame_b.to_vec();
+    }
 
-    let canvas = surface.canvas();
-    let w = width as f32;
-    let h = height as f32;
+    let (w, h) = (width as f32, height as f32);
+    let reveal = wipe_reveal_rect(&direction, w, h, progress);
 
-    canvas.draw_image(&img_a, (0.0, 0.0), None);
+    if feather <= 0.0 && band_color.is_none() {
+        let mut surface = match create_skia_surface(width, height) {
+            Some(s) => s,
+            None => return blend_fade(frame_a, frame_b, progress),
+        };
+        let img_a = match frame_to_image(frame_a, width, height) {
+            Some(i) => i,
+            None => return blend_fade(frame_a, frame_b, progress),
+        };
+        let img_b = match frame_to_image(frame_b, width, height) {
+            Some(i) => i,
+            None => return blend_fade(frame_a, frame_b, progress),
+        };
 
-    let clip_rect = match direction {
-        Direction::Left => Rect::from_xywh(0.0, 0.0, w * progress, h),
-        Direction::Right => Rect::from_xywh(w * (1.0 - progress), 0.0, w * progress, h),
-        Direction::Up => Rect::from_xywh(0.0, 0.0, w, h * progress),
-        Direction::Down => Rect::from_xywh(0.0, h * (1.0 - progress), w, h * progress),
-    };
+        let canvas = surface.canvas();
+        canvas.draw_image(&img_a, (0.0, 0.0), None);
+        canvas.save();
+        canvas.clip_rect(reveal, skia_safe::ClipOp::Intersect, true);
+        canvas.draw_image(&img_b, (0.0, 0.0), None);
+        canvas.restore();
 
-    canvas.save();
-    canvas.clip_rect(clip_rect, skia_safe::ClipOp::Intersect, true);
-    canvas.draw_image(&img_b, (0.0, 0.0), None);
-    canvas.restore();
+        return surface_to_pixels(surface, width, height);
+    }
 
-    surface_to_pixels(surface, width, height)
+    let mut builder = PathBuilder::new();
+    builder.add_rect(reveal, None, None);
+    let path = builder.detach();
+    composite_through_mask(
+        frame_a,
+        frame_b,
+        width,
+        height,
+        &path,
+        feather.max(0.0),
+        band_color,
+    )
 }
 
 fn create_skia_surface(width: u32, height: u32) -> Option<skia_safe::Surface> {
@@ -712,6 +822,261 @@ fn iris_transition(
     let reveal_span = (1.0 - reveal_start).max(0.0001);
     let t = ((progress - reveal_start) / reveal_span).clamp(0.0, 1.0);
     blend_fade(&filled, frame_b, t)
+}
+
+fn mask_shape_to_local_path(shape: &MaskShape) -> Option<skia_safe::Path> {
+    match shape {
+        MaskShape::Polygon { points } => {
+            if points.len() < 3 {
+                return None;
+            }
+            let mut builder = PathBuilder::new();
+            for (i, (x, y)) in points.iter().enumerate() {
+                if i == 0 {
+                    builder.move_to((*x, *y));
+                } else {
+                    builder.line_to((*x, *y));
+                }
+            }
+            builder.close();
+            Some(builder.detach())
+        }
+        MaskShape::Path { d } => skia_safe::Path::from_svg(d),
+    }
+}
+
+fn scaled_mask_path(local: &skia_safe::Path, scale: f32, origin: (f32, f32)) -> skia_safe::Path {
+    let bounds = *local.bounds();
+    let cx = (bounds.left + bounds.right) / 2.0;
+    let cy = (bounds.top + bounds.bottom) / 2.0;
+    let safe_scale = scale.max(0.0001);
+    let mut matrix = Matrix::default();
+    matrix.pre_translate((origin.0, origin.1));
+    matrix.pre_scale((safe_scale, safe_scale), None);
+    matrix.pre_translate((-cx, -cy));
+    local.with_transform(&matrix)
+}
+
+fn mask_alpha_buffer(
+    path: &skia_safe::Path,
+    width: u32,
+    height: u32,
+    feather: f32,
+) -> Option<Vec<u8>> {
+    let info = ImageInfo::new(
+        (width as i32, height as i32),
+        ColorType::Alpha8,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    let mut surface = surfaces::raster(&info, None, None)?;
+    let mut paint = Paint::default();
+    paint.set_anti_alias(true);
+    paint.set_style(PaintStyle::Fill);
+    paint.set_alpha(255);
+    let sigma = (feather.max(0.0) / 3.0).max(0.05);
+    if let Some(mask_filter) = MaskFilter::blur(BlurStyle::Normal, sigma, None) {
+        paint.set_mask_filter(mask_filter);
+    }
+    surface.canvas().draw_path(path, &paint);
+    let row_bytes = width as usize;
+    let mut buf = vec![0u8; row_bytes * height as usize];
+    surface.read_pixels(&info, &mut buf, row_bytes, (0, 0));
+    Some(buf)
+}
+
+fn hard_mask_composite(
+    outer: &[u8],
+    inner: &[u8],
+    width: u32,
+    height: u32,
+    path: &skia_safe::Path,
+) -> Vec<u8> {
+    let mut surface = match create_skia_surface(width, height) {
+        Some(s) => s,
+        None => return outer.to_vec(),
+    };
+    let (Some(img_outer), Some(img_inner)) = (
+        frame_to_image(outer, width, height),
+        frame_to_image(inner, width, height),
+    ) else {
+        return outer.to_vec();
+    };
+
+    let canvas = surface.canvas();
+    canvas.draw_image(&img_outer, (0.0, 0.0), None);
+    canvas.save();
+    canvas.clip_path(path, skia_safe::ClipOp::Intersect, true);
+    canvas.draw_image(&img_inner, (0.0, 0.0), None);
+    canvas.restore();
+
+    surface_to_pixels(surface, width, height)
+}
+
+fn composite_through_mask(
+    outer: &[u8],
+    inner: &[u8],
+    width: u32,
+    height: u32,
+    path: &skia_safe::Path,
+    feather: f32,
+    band_color: Option<&str>,
+) -> Vec<u8> {
+    if feather <= 0.0 {
+        return hard_mask_composite(outer, inner, width, height, path);
+    }
+    let Some(alpha) = mask_alpha_buffer(path, width, height, feather) else {
+        return hard_mask_composite(outer, inner, width, height, path);
+    };
+
+    let band = band_color.map(color4f_from_hex);
+    let pixel_count = (width * height) as usize;
+    let mut out = vec![0u8; pixel_count * 4];
+    for (i, &alpha_byte) in alpha.iter().enumerate().take(pixel_count) {
+        let a = alpha_byte as f32 / 255.0;
+        let base = i * 4;
+        let mut rgb = [0f32; 3];
+        for (c, slot) in rgb.iter_mut().enumerate() {
+            let o = outer[base + c] as f32;
+            let n = inner[base + c] as f32;
+            *slot = o * (1.0 - a) + n * a;
+        }
+        if let Some(band) = &band {
+            let weight = 4.0 * a * (1.0 - a);
+            let band_rgb = [band.r * 255.0, band.g * 255.0, band.b * 255.0];
+            for (slot, band_channel) in rgb.iter_mut().zip(band_rgb) {
+                *slot = *slot * (1.0 - weight) + band_channel * weight;
+            }
+        }
+        for (c, value) in rgb.into_iter().enumerate() {
+            out[base + c] = value.round().clamp(0.0, 255.0) as u8;
+        }
+        out[base + 3] = outer[base + 3].max(inner[base + 3]);
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mask_transition(
+    frame_a: &[u8],
+    frame_b: &[u8],
+    width: u32,
+    height: u32,
+    progress: f32,
+    silhouette: Option<&MaskShape>,
+    origin: Option<ZoomBlurOrigin>,
+    from_scale: f32,
+    to_scale: f32,
+    feather: f32,
+    band_color: Option<&str>,
+) -> Vec<u8> {
+    if progress <= 0.0 {
+        return frame_a.to_vec();
+    }
+    if progress >= 1.0 {
+        return frame_b.to_vec();
+    }
+    let Some(shape) = silhouette else {
+        eprintln!(
+            "rustmotion: transition type \"mask\" needs a `silhouette` (polygon or path); \
+             falling back to a plain fade"
+        );
+        return blend_fade(frame_a, frame_b, progress);
+    };
+    let Some(local) = mask_shape_to_local_path(shape) else {
+        eprintln!(
+            "rustmotion: transition \"mask\" `silhouette` did not resolve to a path (a \
+             `polygon` needs at least 3 points, a `path`'s `d` must be valid SVG path data); \
+             falling back to a plain fade"
+        );
+        return blend_fade(frame_a, frame_b, progress);
+    };
+
+    let (w, h) = (width as f32, height as f32);
+    let origin_px = match origin {
+        Some(o) => (o.x, o.y),
+        None => (w / 2.0, h / 2.0),
+    };
+    let scale = from_scale.max(0.0) + (to_scale.max(0.0) - from_scale.max(0.0)) * progress;
+    let path = scaled_mask_path(&local, scale, origin_px);
+    composite_through_mask(
+        frame_a,
+        frame_b,
+        width,
+        height,
+        &path,
+        feather.max(0.0),
+        band_color,
+    )
+}
+
+fn blob_local_path(lobes: u32, wobble: f32, seed: u32) -> skia_safe::Path {
+    let n = lobes.max(3);
+    let wobble = wobble.clamp(0.0, 0.95);
+    let points: Vec<(f32, f32)> = (0..n)
+        .map(|i| {
+            let t = i as f32 / n as f32;
+            let angle = t * std::f32::consts::TAU;
+            let noise = cell_hash01(i as i32, 0, seed) * 2.0 - 1.0;
+            let radius = 1.0 + wobble * noise;
+            (angle.cos() * radius, angle.sin() * radius)
+        })
+        .collect();
+
+    let midpoint = |a: (f32, f32), b: (f32, f32)| ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+    let n = n as usize;
+    let mut builder = PathBuilder::new();
+    builder.move_to(midpoint(points[n - 1], points[0]));
+    for i in 0..n {
+        let next = points[(i + 1) % n];
+        builder.quad_to(points[i], midpoint(points[i], next));
+    }
+    builder.close();
+    builder.detach()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn blob_transition(
+    frame_a: &[u8],
+    frame_b: &[u8],
+    width: u32,
+    height: u32,
+    progress: f32,
+    origin: Option<ZoomBlurOrigin>,
+    lobes: u32,
+    wobble: f32,
+    seed: u32,
+    feather: f32,
+    band_color: Option<&str>,
+) -> Vec<u8> {
+    if progress <= 0.0 {
+        return frame_a.to_vec();
+    }
+    if progress >= 1.0 {
+        return frame_b.to_vec();
+    }
+
+    let (w, h) = (width as f32, height as f32);
+    let origin_px = match origin {
+        Some(o) => (o.x, o.y),
+        None => (w / 2.0, h / 2.0),
+    };
+    let coverage_radius = iris_max_radius(origin_px, w, h, IrisShape::Circle, 1.0);
+    let wobble = wobble.clamp(0.0, 0.95);
+    let shrunk_lobe_safety = (1.0 - wobble).max(0.05);
+    let max_radius = coverage_radius / shrunk_lobe_safety;
+    let local = blob_local_path(lobes, wobble, seed);
+    let scale = max_radius * progress;
+    let path = scaled_mask_path(&local, scale, origin_px);
+    composite_through_mask(
+        frame_a,
+        frame_b,
+        width,
+        height,
+        &path,
+        feather.max(0.0),
+        band_color,
+    )
 }
 
 fn slide_transition(
