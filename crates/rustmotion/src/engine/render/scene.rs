@@ -108,6 +108,9 @@ static IDENTITY_CAMERA: Camera = Camera {
     keyframes: Vec::new(),
     focus: 1.0,
     aperture: 0.0,
+    rotate_x: 0.0,
+    rotate_y: 0.0,
+    perspective: 0.0,
 };
 
 fn effective_camera(scene: &Scene) -> Option<&Camera> {
@@ -138,6 +141,9 @@ fn resolve_plane_camera(
         origin_y,
         focus: interpolate_camera_property(camera, "focus", time),
         aperture: interpolate_camera_property(camera, "aperture", time),
+        rotate_x: interpolate_camera_property(camera, "rotate_x", time),
+        rotate_y: interpolate_camera_property(camera, "rotate_y", time),
+        perspective: interpolate_camera_property(camera, "perspective", time),
     }
 }
 
@@ -1366,6 +1372,9 @@ pub(super) fn interpolate_camera_property(camera: &Camera, property: &str, time:
                 "rotation" => camera.rotation,
                 "focus" => camera.focus,
                 "aperture" => camera.aperture,
+                "rotate_x" => camera.rotate_x,
+                "rotate_y" => camera.rotate_y,
+                "perspective" => camera.perspective,
                 "origin.x" => camera.origin.as_ref().map(|o| o.x).unwrap_or(0.0),
                 "origin.y" => camera.origin.as_ref().map(|o| o.y).unwrap_or(0.0),
                 _ => 0.0,

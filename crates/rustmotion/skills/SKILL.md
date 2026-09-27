@@ -238,6 +238,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/chromatic-aberration.md](rules/chromatic-aberration.md) - Per-element red/cyan fringe on arrival: `chromatic_aberration`'s `amount`, how its curve differs from `chromatic_wipe`'s, and the `amount`-not-`amplitude` trap
 - [rules/inflated-material.md](rules/inflated-material.md) - `material: "inflated"`: shading derived from the clipped silhouette, so each branch of a star gets its own relief — and why `bevel` must stay small relative to the shape
 - [rules/material-and-light.md](rules/material-and-light.md) - Lit surfaces: `style.material`'s three presets, the scene-wide `light` that makes them agree, and why the material follows the box and not a `shape`'s own geometry
+- [rules/camera-3d.md](rules/camera-3d.md) - Tilt a whole shot with `camera.rotate_x`/`rotate_y`/`perspective`: one shared vanishing point, and rotation scaled by each plane's `style.depth`
 - [rules/depth-of-field.md](rules/depth-of-field.md) - Defocus by plane: `camera.focus`/`aperture` on the `style.depth` scale, rack focus by keyframe, and why nothing moves without distinct depths
 - [rules/text-component-parity.md](rules/text-component-parity.md) - Where `text`, `rich_text` and `gradient_text` disagreed: colour alpha, literal whitespace and baseline, the CSS angle convention and explicit `stops`
 - [rules/iris-transition.md](rules/iris-transition.md) - `iris` beyond a centred circle: `origin`, `shape`, `fill`+`hold`, `ring` and `reverse`, and the pill coverage approximation

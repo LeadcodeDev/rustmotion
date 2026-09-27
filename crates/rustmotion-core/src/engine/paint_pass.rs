@@ -37,6 +37,9 @@ pub struct PlaneCamera {
     pub origin_y: f32,
     pub focus: f32,
     pub aperture: f32,
+    pub rotate_x: f32,
+    pub rotate_y: f32,
+    pub perspective: f32,
 }
 
 fn apply_plane_camera(canvas: &Canvas, cam: &PlaneCamera, depth: f32, viewport: (f32, f32)) {
@@ -45,12 +48,24 @@ fn apply_plane_camera(canvas: &Canvas, cam: &PlaneCamera, depth: f32, viewport: 
     let pan_x = cam.pan_x * depth;
     let pan_y = cam.pan_y * depth;
 
+    let tilt_x = cam.rotate_x * depth;
+    let tilt_y = cam.rotate_y * depth;
+
     canvas.translate(Point::new(cam.origin_x, cam.origin_y));
     if rotation.abs() > 0.001 {
         canvas.rotate(rotation, None);
     }
     if (zoom - 1.0).abs() > 0.001 {
         canvas.scale((zoom, zoom));
+    }
+    if tilt_x.abs() > 0.001 || tilt_y.abs() > 0.001 {
+        let mut shot = M44::new_identity();
+        if cam.perspective > 0.0 {
+            shot.pre_concat(&css_perspective_m44(cam.perspective));
+        }
+        shot.pre_concat(&M44::rotate(V3::new(1.0, 0.0, 0.0), tilt_x.to_radians()));
+        shot.pre_concat(&M44::rotate(V3::new(0.0, 1.0, 0.0), tilt_y.to_radians()));
+        canvas.concat_44(&shot);
     }
     canvas.translate(Point::new(-cam.origin_x - pan_x, -cam.origin_y - pan_y));
     canvas.clip_rect(
@@ -4000,6 +4015,83 @@ mod paint_order_tests {
         );
     }
 
+    fn shot_camera(rotate_y: f32, perspective: f32) -> PlaneCamera {
+        PlaneCamera {
+            pan_x: 0.0,
+            pan_y: 0.0,
+            zoom: 1.0,
+            rotation: 0.0,
+            origin_x: 200.0,
+            origin_y: 200.0,
+            focus: 1.0,
+            aperture: 0.0,
+            rotate_x: 0.0,
+            rotate_y,
+            perspective,
+        }
+    }
+
+    fn ink_x_extent(buf: &[u8]) -> (usize, usize) {
+        let mut lo = usize::MAX;
+        let mut hi = 0usize;
+        for y in 0..400 {
+            for x in 0..400 {
+                let i = (y * 400 + x) * 4;
+                if buf[i] > 150 && buf[i + 1] < 90 {
+                    lo = lo.min(x);
+                    hi = hi.max(x);
+                }
+            }
+        }
+        (lo, hi)
+    }
+
+    #[test]
+    fn a_camera_tilt_of_zero_renders_exactly_as_no_camera() {
+        let plain = render_with_camera(plane_at_depth(Some(2.0)), None);
+        let flat = render_with_camera(plane_at_depth(Some(2.0)), Some(shot_camera(0.0, 1400.0)));
+        assert_eq!(
+            plain, flat,
+            "a camera declaring perspective but no tilt must not move a pixel — every \
+             scenario written before this declares neither"
+        );
+    }
+
+    #[test]
+    fn a_camera_tilt_turns_the_whole_shot() {
+        let flat = render_with_camera(plane_at_depth(Some(1.0)), None);
+        let tilted = render_with_camera(plane_at_depth(Some(1.0)), Some(shot_camera(24.0, 1400.0)));
+        assert_ne!(flat, tilted, "a 24-degree tilt must change the frame");
+    }
+
+    #[test]
+    fn a_deeper_plane_swings_further_than_a_near_one() {
+        let near = render_with_camera(plane_at_depth(Some(0.5)), Some(shot_camera(24.0, 1400.0)));
+        let far = render_with_camera(plane_at_depth(Some(3.0)), Some(shot_camera(24.0, 1400.0)));
+        let resting = ink_x_extent(&render_with_camera(plane_at_depth(Some(1.0)), None));
+
+        let near_shift = (ink_x_extent(&near).0 as i64 - resting.0 as i64).abs();
+        let far_shift = (ink_x_extent(&far).0 as i64 - resting.0 as i64).abs();
+        assert!(
+            far_shift > near_shift,
+            "the tilt is scaled by style.depth, the same rule parallax and focus follow, so a \
+             plane at depth 3 must swing further than one at 0.5: near={near_shift}px, \
+             far={far_shift}px"
+        );
+    }
+
+    #[test]
+    fn perspective_zero_is_an_orthographic_tilt() {
+        let ortho = render_with_camera(plane_at_depth(Some(2.0)), Some(shot_camera(24.0, 0.0)));
+        let projected =
+            render_with_camera(plane_at_depth(Some(2.0)), Some(shot_camera(24.0, 900.0)));
+        assert_ne!(
+            ortho, projected,
+            "perspective 0 means no vanishing point at all, which is a different image from \
+             one projected at 900px"
+        );
+    }
+
     fn dof_camera(focus: f32, aperture: f32) -> PlaneCamera {
         PlaneCamera {
             pan_x: 0.0,
@@ -4010,6 +4102,9 @@ mod paint_order_tests {
             origin_y: 200.0,
             focus,
             aperture,
+            rotate_x: 0.0,
+            rotate_y: 0.0,
+            perspective: 0.0,
         }
     }
 
