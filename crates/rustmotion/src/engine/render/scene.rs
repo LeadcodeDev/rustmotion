@@ -70,6 +70,26 @@ fn scene_uses_depth(children: &[ChildComponent]) -> bool {
         .any(|c| c.component.as_styled().style_config().depth.is_some())
 }
 
+fn scene_light(scene: &Scene) -> rustmotion_core::engine::paint_pass::LightDirection {
+    use rustmotion_core::engine::paint_pass::LightDirection;
+    match scene.light.as_ref() {
+        Some(light) => LightDirection {
+            x: light.x,
+            y: light.y,
+            intensity: light.intensity,
+            color: light
+                .color
+                .as_deref()
+                .map(|hex| {
+                    let (r, g, b, a) = rustmotion_core::engine::renderer::parse_hex_color(hex);
+                    skia_safe::Color::from_argb(a, r, g, b)
+                })
+                .unwrap_or(skia_safe::Color::from_argb(255, 255, 255, 255)),
+        },
+        None => LightDirection::default(),
+    }
+}
+
 fn scene_shake_offset(scene: &Scene, time: f32) -> ShakeOffset {
     match &scene.shake {
         Some(shake) => {
@@ -570,6 +590,7 @@ fn render_with_new_pipeline_iter<'a, I>(
     let layout = run_layout(&built.root, viewport, &conversion);
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
+        light: scene_light(scene),
         time: ctx.time.seconds(),
         scenario_time: ctx.scenario_time,
         frame_index: ctx.frame_index,
@@ -841,6 +862,7 @@ pub fn render_scene_hits(
     );
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
+        light: scene_light(scene),
         time,
         scenario_time: time,
         frame_index: frame_in_scene,

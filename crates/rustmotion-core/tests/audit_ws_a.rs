@@ -12,6 +12,7 @@ use rustmotion_core::schema::SpringConfig;
 
 fn test_frame(w: u32, h: u32) -> PaintFrame {
     PaintFrame {
+        light: Default::default(),
         time: 0.0,
         scenario_time: 0.0,
         frame_index: 0,

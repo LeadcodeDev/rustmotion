@@ -47,6 +47,7 @@ fn render_caption_at(json: serde_json::Value, time: f64, y: f32) -> Vec<u8> {
     );
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
+        light: Default::default(),
         time,
         scenario_time: time,
         frame_index: (time * 30.0) as u32,

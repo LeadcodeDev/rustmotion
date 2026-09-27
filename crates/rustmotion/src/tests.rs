@@ -305,6 +305,7 @@ mod component_smoke {
             skia_safe::surfaces::raster_n32_premul((400, 300)).expect("raster surface");
         let canvas = surface.canvas();
         let frame = PaintFrame {
+            light: Default::default(),
             time: 0.5,
             scenario_time: 0.5,
             frame_index: 15,
@@ -366,6 +367,7 @@ mod component_smoke {
             skia_safe::surfaces::raster_n32_premul((400, 300)).expect("raster surface");
         let canvas = surface.canvas();
         let frame = PaintFrame {
+            light: Default::default(),
             time: 0.0,
             scenario_time: 0.0,
             frame_index: 0,
@@ -473,6 +475,7 @@ mod component_smoke {
         );
         let dispatcher = LegacyPaintDispatcher::for_scene(&built);
         let frame = PaintFrame {
+            light: Default::default(),
             time,
             scenario_time: time,
             frame_index: (time * 30.0) as u32,
@@ -1403,6 +1406,7 @@ mod svg_draw_on_tests {
         );
         let dispatcher = LegacyPaintDispatcher::for_scene(&built);
         let frame = PaintFrame {
+            light: Default::default(),
             time: progress,
             scenario_time: progress,
             frame_index: (progress * 30.0) as u32,
@@ -1683,6 +1687,7 @@ mod audio_tests {
             &built.root,
             &layout,
             &PaintFrame {
+                light: Default::default(),
                 time,
                 scenario_time: time,
                 frame_index: (time * fps as f64) as u32,
@@ -2281,6 +2286,7 @@ mod motion_blur_trail {
         );
         let dispatcher = LegacyPaintDispatcher::for_scene(&built);
         let frame = PaintFrame {
+            light: Default::default(),
             time,
             scenario_time: time,
             frame_index: (time * FPS as f64) as u32,

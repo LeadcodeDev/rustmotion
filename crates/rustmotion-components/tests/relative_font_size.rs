@@ -43,6 +43,7 @@ fn render(json: serde_json::Value) -> Vec<u8> {
     );
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
+        light: Default::default(),
         time: 0.5,
         scenario_time: 0.5,
         frame_index: 15,

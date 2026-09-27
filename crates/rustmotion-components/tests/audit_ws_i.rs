@@ -83,6 +83,7 @@ fn paint_card_with_child(card_json: serde_json::Value) -> PaintedScene {
     canvas.clear(skia_safe::Color::BLACK);
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
+        light: Default::default(),
         time: 0.0,
         scenario_time: 0.0,
         frame_index: 0,
