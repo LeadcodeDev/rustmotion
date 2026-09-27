@@ -26,6 +26,8 @@ For a product demo or an agent walkthrough — the arrow that moves to a control
 | Field | Role |
 |---|---|
 | `size` | Height of the arrow in px. The click ring scales with it. |
+| `glyph` | `arrow` (default), `hand`, or `grab` — which shape is drawn |
+| `click_glyph` | Glyph shown for the duration of a click, then back to `glyph` |
 | `tone` | `light` (white arrow, dark outline), `dark`, or `outline` (transparent fill, white outline) |
 | `color` / `outline_color` | Override `tone` |
 | `click_ring` | `subtle` / `standard` / `bold` / `none` |
@@ -53,3 +55,25 @@ Between two waypoints, the pointer doesn't set off again until the click animati
 `light` and `dark` are both filled arrows — a solid shape that sits on top of whatever's underneath. `outline` is a third tone: a transparent fill with a white outline, so the arrow reads as a mark rather than a shape competing for attention with the control it's pointing at. Reach for it over a busy screenshot or a mockup where a filled arrow would cover detail you want to keep visible.
 
 The click ring follows the same rule as `color`/`outline_color`: it defaults to whichever colour is actually visible for the tone in use — the fill for `light`/`dark`, the outline for `outline` — rather than a colour hard-coded independently of `tone`. `ring_color` still overrides it directly, same as on the filled tones.
+
+## `glyph` / `click_glyph`: a hand that closes on click
+
+The default `glyph` is the classic arrow. `hand` draws an open hand pointing with its index finger, fingertip at the hotspot — the same point `path`/`click_at` coordinates always referred to. `grab` draws the same hand with the finger retracted into the fist, as if it had just closed around that point.
+
+```json
+{
+  "type": "pointer",
+  "glyph": "hand",
+  "click_glyph": "grab",
+  "tone": "outline",
+  "path": [
+    { "time": 0.0, "x": 1500, "y": 900 },
+    { "time": 0.6, "x": 960, "y": 540 }
+  ],
+  "click_at": [0.7]
+}
+```
+
+`click_glyph` only applies **for the duration of the click** — the same window `click_progress` already computes from `path`'s arrival times or `click_at`. There is no second clock: a hand with no `click_glyph` set still dips on click (the existing scale animation), it just never swaps shape. `grab` with no `glyph: "hand"` is legal but unusual — nothing ever shows it, since the resting glyph never becomes it outside a click.
+
+Because the hotspot is defined per glyph rather than being the geometric centre of its bounding box, switching `glyph` (or swapping to `click_glyph` mid-click) never moves the point a waypoint is aimed at — only the drawn shape around that point changes.

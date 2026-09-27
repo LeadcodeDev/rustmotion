@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Font, FontStyle};
+use skia_safe::{Canvas, Font, FontStyle, Point, RRect, Rect, Typeface};
 
 use rustmotion_core::css::style::{
     FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
@@ -15,6 +15,26 @@ use rustmotion_core::engine::renderer::{
 };
 use rustmotion_core::schema::{FontStyleType, FontWeight, TextAlign, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
+
+/// Padding around a pill span's background box, in px on each side. `left`
+/// and `right` grow the token's advance width, so following spans shift
+/// over instead of overlapping the pill. `top` and `bottom` only grow the
+/// box — they never change the line's height.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+pub struct RichTextSpanPadding {
+    /// Padding above the glyph run, in px.
+    #[serde(default)]
+    pub top: f32,
+    /// Padding to the right of the glyph run, in px. Added to the line's advance.
+    #[serde(default)]
+    pub right: f32,
+    /// Padding below the glyph run, in px.
+    #[serde(default)]
+    pub bottom: f32,
+    /// Padding to the left of the glyph run, in px. Added to the line's advance.
+    #[serde(default)]
+    pub left: f32,
+}
 
 /// A single styled span within a rich_text component.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -32,6 +52,28 @@ pub struct RichTextSpan {
     pub font_style: Option<FontStyleType>,
     #[serde(default, rename = "letter-spacing")]
     pub letter_spacing: Option<f32>,
+    /// Background colour (hex) painted behind this span's glyph run, as a
+    /// pill. Absent means no box — the span paints glyphs only, and
+    /// `padding`/`border-radius`/`rotation` are then inert.
+    #[serde(default)]
+    pub background: Option<String>,
+    /// Padding around the pill box. Ignored when `background` is absent.
+    #[serde(default)]
+    pub padding: Option<RichTextSpanPadding>,
+    /// Corner radius of the pill box, in px. Ignored when `background` is absent.
+    #[serde(default, rename = "border-radius")]
+    pub border_radius: Option<f32>,
+    /// Rotation of the pill box and its glyphs together, in degrees, about
+    /// the box's own centre. Does not affect layout. Ignored when
+    /// `background` is absent.
+    #[serde(default)]
+    pub rotation: Option<f32>,
+}
+
+impl RichTextSpan {
+    fn pill_padding(&self) -> RichTextSpanPadding {
+        self.padding.unwrap_or_default()
+    }
 }
 
 /// Rich text component: renders multiple styled spans on the same line(s).
@@ -282,6 +324,23 @@ impl RichText {
             }
         }
 
+        for line in &mut lines {
+            let mut extra = 0.0f32;
+            let n = line.tokens.len();
+            for i in 0..n {
+                let span_idx = line.tokens[i].span_idx;
+                let is_pill = spans.get(span_idx).is_some_and(|s| s.background.is_some());
+                if is_pill && (i == 0 || line.tokens[i - 1].span_idx != span_idx) {
+                    extra += spans[span_idx].pill_padding().left;
+                }
+                line.tokens[i].x += extra;
+                if is_pill && (i + 1 == n || line.tokens[i + 1].span_idx != span_idx) {
+                    extra += spans[span_idx].pill_padding().right;
+                }
+            }
+            line.width += extra;
+        }
+
         let max_width = lines.iter().map(|l| l.width).fold(0.0f32, f32::max);
         let max_ascent = span_fonts
             .iter()
@@ -368,27 +427,112 @@ impl RichText {
             };
             let y = line_idx as f32 * layout.line_height + baseline_offset;
 
-            for tok in &line.tokens {
-                let sf = span_fonts[tok.span_idx]
-                    .as_ref()
-                    .expect("font presence matches compute_layout's tokenization");
-                let paint = paint_from_hex(&sf.color);
-                let emoji_font = emoji_tf
-                    .as_ref()
-                    .map(|tf| Font::from_typeface(tf.clone(), sf.font.size()));
+            let mut i = 0;
+            while i < line.tokens.len() {
+                let span_idx = line.tokens[i].span_idx;
+                let mut j = i + 1;
+                while j < line.tokens.len() && line.tokens[j].span_idx == span_idx {
+                    j += 1;
+                }
+                let run = &line.tokens[i..j];
 
-                draw_text_with_fallback(
-                    canvas,
-                    &tok.text,
-                    &sf.font,
-                    &emoji_font,
-                    sf.letter_spacing,
-                    line_x_offset + tok.x,
-                    y,
-                    &paint,
-                );
+                if self.spans[span_idx].background.is_some() {
+                    self.paint_pill_run(
+                        canvas,
+                        &self.spans[span_idx],
+                        run,
+                        &span_fonts,
+                        &emoji_tf,
+                        line_x_offset,
+                        y,
+                    );
+                } else {
+                    for tok in run {
+                        Self::paint_token(canvas, tok, &span_fonts, &emoji_tf, line_x_offset, y);
+                    }
+                }
+                i = j;
             }
         }
+    }
+
+    fn paint_token(
+        canvas: &Canvas,
+        tok: &RichTextToken,
+        span_fonts: &[Option<SpanFontInfo>],
+        emoji_tf: &Option<Typeface>,
+        line_x_offset: f32,
+        y: f32,
+    ) {
+        let sf = span_fonts[tok.span_idx]
+            .as_ref()
+            .expect("font presence matches compute_layout's tokenization");
+        let paint = paint_from_hex(&sf.color);
+        let emoji_font = emoji_tf
+            .as_ref()
+            .map(|tf| Font::from_typeface(tf.clone(), sf.font.size()));
+
+        draw_text_with_fallback(
+            canvas,
+            &tok.text,
+            &sf.font,
+            &emoji_font,
+            sf.letter_spacing,
+            line_x_offset + tok.x,
+            y,
+            &paint,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paint_pill_run(
+        &self,
+        canvas: &Canvas,
+        span: &RichTextSpan,
+        run: &[RichTextToken],
+        span_fonts: &[Option<SpanFontInfo>],
+        emoji_tf: &Option<Typeface>,
+        line_x_offset: f32,
+        y: f32,
+    ) {
+        let (Some(first), Some(last)) = (run.first(), run.last()) else {
+            return;
+        };
+        let sf = span_fonts[first.span_idx]
+            .as_ref()
+            .expect("font presence matches compute_layout's tokenization");
+        let (_, metrics) = sf.font.metrics();
+        let ascent = -metrics.ascent;
+        let descent = metrics.descent;
+        let padding = span.pill_padding();
+
+        let x0 = line_x_offset + first.x - padding.left;
+        let x1 = line_x_offset + last.x + last.width + padding.right;
+        let y0 = y - ascent - padding.top;
+        let y1 = y + descent + padding.bottom;
+        let rect = Rect::from_ltrb(x0, y0, x1, y1);
+        let radius = span.border_radius.unwrap_or(0.0).max(0.0);
+        let rrect = RRect::new_rect_xy(rect, radius, radius);
+        let center = Point::new((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        let rotation = span.rotation.unwrap_or(0.0);
+
+        canvas.save();
+        if rotation != 0.0 {
+            canvas.rotate(rotation, Some(center));
+        }
+
+        let background = span
+            .background
+            .as_deref()
+            .expect("paint_pill_run is only called for spans with a background");
+        let bg_paint = paint_from_hex(background);
+        canvas.draw_rrect(rrect, &bg_paint);
+
+        for tok in run {
+            Self::paint_token(canvas, tok, span_fonts, emoji_tf, line_x_offset, y);
+        }
+
+        canvas.restore();
     }
 }
 
@@ -418,6 +562,18 @@ mod tests {
             font_family: None,
             font_style: None,
             letter_spacing: None,
+            background: None,
+            padding: None,
+            border_radius: None,
+            rotation: None,
+        }
+    }
+
+    fn pill_span(text: &str, background: &str, padding: RichTextSpanPadding) -> RichTextSpan {
+        RichTextSpan {
+            background: Some(background.into()),
+            padding: Some(padding),
+            ..span(text)
         }
     }
 
@@ -689,6 +845,271 @@ mod tests {
             "rich_text's baseline must be computed as (line_height + ascent - descent) / 2, the \
              same formula text.rs uses — got top {rich_text_top}, expected {reference_top} \
              (formula gave baseline {expected_baseline})"
+        );
+    }
+
+    fn pixel_rgba(
+        surface: &mut skia_safe::Surface,
+        w: i32,
+        h: i32,
+        x: f32,
+        y: f32,
+    ) -> (u8, u8, u8, u8) {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (w * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        let ix = x.round() as i32;
+        let iy = y.round() as i32;
+        let idx = ((iy * w + ix) * 4) as usize;
+        (buf[idx], buf[idx + 1], buf[idx + 2], buf[idx + 3])
+    }
+
+    fn any_pixel_near_white(surface: &mut skia_safe::Surface, w: i32, h: i32) -> bool {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (w * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        buf.as_chunks::<4>()
+            .0
+            .iter()
+            .any(|p| p[0] > 200 && p[1] > 200 && p[2] > 200 && p[3] > 200)
+    }
+
+    #[test]
+    fn pill_padding_grows_the_line_advance_and_shifts_the_following_span() {
+        let s = style(40.0);
+        let padding = RichTextSpanPadding {
+            top: 4.0,
+            right: 16.0,
+            bottom: 6.0,
+            left: 16.0,
+        };
+
+        let plain = vec![span("tag"), span(" rest")];
+        let with_pill = vec![pill_span("tag", "#1F6FEB", padding), span(" rest")];
+
+        let plain_layout = RichText::compute_layout(&plain, &s, 1920.0, 1080.0, None, -1.0);
+        let pill_layout = RichText::compute_layout(&with_pill, &s, 1920.0, 1080.0, None, -1.0);
+
+        let plain_rest_x = plain_layout.lines[0].tokens[1].x;
+        let pill_rest_x = pill_layout.lines[0].tokens[1].x;
+        let expected_shift = padding.left + padding.right;
+
+        assert!(
+            (pill_rest_x - plain_rest_x - expected_shift).abs() < 0.5,
+            "a pill's horizontal padding must be added to the line's advance, moving the \
+             following span over by left+right padding: plain x={plain_rest_x}, pill \
+             x={pill_rest_x}, expected shift {expected_shift}"
+        );
+    }
+
+    #[test]
+    fn a_pill_that_wraps_gets_its_own_padding_per_line_fragment() {
+        let s = style(40.0);
+        let padding = RichTextSpanPadding {
+            top: 4.0,
+            right: 16.0,
+            bottom: 4.0,
+            left: 16.0,
+        };
+        const WRAP: f32 = 100.0;
+
+        let plain = vec![span("aaaa bbbb")];
+        let plain_layout = RichText::compute_layout(&plain, &s, 1920.0, 1080.0, Some(WRAP), -1.0);
+        assert_eq!(
+            plain_layout.lines.len(),
+            2,
+            "the reference text must wrap into two lines for this test to be meaningful"
+        );
+
+        let pill = vec![pill_span("aaaa bbbb", "#1F6FEB", padding)];
+        let pill_layout = RichText::compute_layout(&pill, &s, 1920.0, 1080.0, Some(WRAP), -1.0);
+        assert_eq!(
+            pill_layout.lines.len(),
+            2,
+            "padding must not change where the raw text wraps"
+        );
+
+        assert!(
+            (pill_layout.lines[0].tokens[0].x - padding.left).abs() < 0.5,
+            "the first line's fragment must get its own left padding, got x={}",
+            pill_layout.lines[0].tokens[0].x
+        );
+        assert!(
+            (pill_layout.lines[1].tokens[0].x - padding.left).abs() < 0.5,
+            "the second line's fragment must ALSO get its own left padding — \
+             box-decoration-break: clone — got x={}",
+            pill_layout.lines[1].tokens[0].x
+        );
+
+        let expected_extra = padding.left + padding.right;
+        assert!(
+            (pill_layout.lines[0].width - plain_layout.lines[0].width - expected_extra).abs() < 0.5,
+            "line 1's fragment must grow by its own left+right padding"
+        );
+        assert!(
+            (pill_layout.lines[1].width - plain_layout.lines[1].width - expected_extra).abs() < 0.5,
+            "line 2's fragment must ALSO grow by its own left+right padding"
+        );
+    }
+
+    #[test]
+    fn pill_background_paints_behind_the_glyphs_not_in_front() {
+        let padding = RichTextSpanPadding {
+            top: 4.0,
+            right: 16.0,
+            bottom: 4.0,
+            left: 16.0,
+        };
+        let s = CssStyle {
+            color: Some(rustmotion_core::css::style::Color::String("#FFFFFF".into())),
+            ..style(60.0)
+        };
+        let spans = vec![pill_span("Tag", "#000000", padding)];
+        let rt = RichText {
+            spans: spans.clone(),
+            max_width: None,
+            timing: Default::default(),
+            style: s.clone(),
+            timeline: Vec::new(),
+            stagger: None,
+        };
+
+        const W: i32 = 400;
+        const H: i32 = 200;
+        let ctx = test_ctx();
+        let props = AnimatedProperties::default();
+
+        let layout = RichText::compute_layout(
+            &spans,
+            &s,
+            ctx.video_width as f32,
+            ctx.video_height as f32,
+            Some(W as f32),
+            -1.0,
+        );
+        let baseline_offset = (layout.line_height + layout.max_ascent - layout.max_descent) / 2.0;
+        let token = &layout.lines[0].tokens[0];
+        let box_x0 = token.x - padding.left;
+        let box_y0 = baseline_offset - layout.max_ascent - padding.top;
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            canvas.clear(skia_safe::Color::from_argb(255, 0, 255, 0));
+            rt.paint(canvas, W as f32, &props, &ctx);
+        }
+
+        let inside_padding = pixel_rgba(&mut surface, W, H, box_x0 + 4.0, box_y0 + 4.0);
+        assert_eq!(
+            inside_padding,
+            (0, 0, 0, 255),
+            "just inside the pill's padding, clear of any glyph, must show the pill's own \
+             background colour, got {inside_padding:?}"
+        );
+
+        assert!(
+            any_pixel_near_white(&mut surface, W, H),
+            "the glyphs must still paint their own (white) colour on top of the pill's black \
+             background — a background painted in front of the text would leave no white pixel"
+        );
+    }
+
+    #[test]
+    fn pill_rotation_turns_the_box_and_text_without_touching_layout() {
+        let s = style(50.0);
+        let padding = RichTextSpanPadding {
+            top: 6.0,
+            right: 10.0,
+            bottom: 6.0,
+            left: 10.0,
+        };
+        let flat = vec![pill_span("Hi", "#1F6FEB", padding)];
+        let mut rotated_spans = flat.clone();
+        rotated_spans[0].rotation = Some(45.0);
+
+        let flat_layout = RichText::compute_layout(&flat, &s, 1920.0, 1080.0, None, -1.0);
+        let rotated_layout =
+            RichText::compute_layout(&rotated_spans, &s, 1920.0, 1080.0, None, -1.0);
+        assert_eq!(
+            flat_layout.lines[0].tokens[0].x, rotated_layout.lines[0].tokens[0].x,
+            "rotation must not move the token — it is a paint-only transform"
+        );
+        assert_eq!(
+            flat_layout.lines[0].width, rotated_layout.lines[0].width,
+            "rotation must not change the line's advance"
+        );
+
+        const W: i32 = 300;
+        const H: i32 = 200;
+        let ctx = test_ctx();
+        let props = AnimatedProperties::default();
+        let baseline_offset =
+            (flat_layout.line_height + flat_layout.max_ascent - flat_layout.max_descent) / 2.0;
+        let token = &flat_layout.lines[0].tokens[0];
+        let box_x1 = token.x + token.width + padding.right;
+        let box_y1 = baseline_offset + flat_layout.max_descent + padding.bottom;
+
+        let render_at = |rotation: Option<f32>| {
+            let mut spans = flat.clone();
+            spans[0].rotation = rotation;
+            let rt = RichText {
+                spans,
+                max_width: None,
+                timing: Default::default(),
+                style: s.clone(),
+                timeline: Vec::new(),
+                stagger: None,
+            };
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+            {
+                let canvas = surface.canvas();
+                canvas.clear(skia_safe::Color::from_argb(255, 0, 255, 0));
+                rt.paint(canvas, W as f32, &props, &ctx);
+            }
+            surface
+        };
+
+        let mut unrotated = render_at(None);
+        let corner_flat = pixel_rgba(&mut unrotated, W, H, box_x1 - 2.0, box_y1 - 2.0);
+        assert_eq!(
+            corner_flat,
+            (0x1F, 0x6F, 0xEB, 255),
+            "unrotated: the bottom-right corner of the pill box must be filled, got {corner_flat:?}"
+        );
+
+        let mut rotated = render_at(Some(45.0));
+        let corner_rotated = pixel_rgba(&mut rotated, W, H, box_x1 - 2.0, box_y1 - 2.0);
+        assert_ne!(
+            corner_rotated, corner_flat,
+            "rotating the pill 45° about its own centre must move its corner away from the \
+             unrotated position, got the same pixel {corner_rotated:?} at both"
         );
     }
 }
