@@ -516,6 +516,8 @@ pub struct AnimatedProperties {
     pub scale_y: f32,
     pub rotation: f32,
     pub blur: f32,
+    pub blur_x: f32,
+    pub blur_y: f32,
     pub visible_chars: i32,
     pub visible_chars_progress: f32,
     pub color: Option<String>,
@@ -548,6 +550,8 @@ impl Default for AnimatedProperties {
             scale_y: 1.0,
             rotation: 0.0,
             blur: 0.0,
+            blur_x: 0.0,
+            blur_y: 0.0,
             visible_chars: -1,
             visible_chars_progress: -1.0,
             color: None,
@@ -594,6 +598,12 @@ impl AnimatedProperties {
         }
         if other.blur > 0.001 {
             self.blur = other.blur;
+        }
+        if other.blur_x > 0.001 {
+            self.blur_x = other.blur_x;
+        }
+        if other.blur_y > 0.001 {
+            self.blur_y = other.blur_y;
         }
         if other.visible_chars >= 0 {
             self.visible_chars = other.visible_chars;
@@ -899,6 +909,8 @@ fn apply_property(props: &mut AnimatedProperties, property: &str, value: f64) {
         "scale.y" => props.scale_y = value as f32,
         "rotation" => props.rotation = value as f32,
         "blur" => props.blur = value as f32,
+        "blur_x" => props.blur_x = value as f32,
+        "blur_y" => props.blur_y = value as f32,
         "visible_chars" => props.visible_chars = value as i32,
         "visible_chars_progress" => props.visible_chars_progress = value as f32,
         "border_radius" => props.border_radius = value as f32,
@@ -1128,6 +1140,8 @@ fn get_property_value(props: &AnimatedProperties, property: &str) -> f64 {
         "scale.y" => props.scale_y as f64,
         "rotation" => props.rotation as f64,
         "blur" => props.blur as f64,
+        "blur_x" => props.blur_x as f64,
+        "blur_y" => props.blur_y as f64,
         "border_radius" => props.border_radius as f64,
         "font_size" => props.font_size as f64,
         "width" => props.width as f64,
