@@ -1350,6 +1350,16 @@ pub enum Material {
         /// `intensity`.
         #[serde(default = "default_material_intensity")]
         intensity: f32,
+        /// `inflated` only: how far inward from the silhouette the rounded
+        /// edge reaches, in pixels. Small values give a crisp bevel, large
+        /// ones a pillow. Default 18.
+        #[serde(default = "default_material_bevel")]
+        bevel: f32,
+        /// `inflated` only: how rounded the profile is across that bevel,
+        /// 0..1. Near 0 reads as a hard chamfer, near 1 as an inflated
+        /// cushion. Default 0.6.
+        #[serde(default = "default_material_softness")]
+        softness: f32,
     },
 }
 
@@ -1367,10 +1377,23 @@ pub enum MaterialPreset {
     /// Light with no specular return — shade only, no highlight and no
     /// edge. Sits a flat surface next to glossy ones without looking unlit.
     Matte,
+    /// A volume rather than a varnished plane: the shading is derived from
+    /// the **silhouette itself**, so a five-branch star gets light on each
+    /// branch instead of one band across its bounding box. Tuned by `bevel`
+    /// and `softness`, which the other three presets ignore.
+    Inflated,
 }
 
 fn default_material_intensity() -> f32 {
     1.0
+}
+
+fn default_material_bevel() -> f32 {
+    18.0
+}
+
+fn default_material_softness() -> f32 {
+    0.6
 }
 
 impl Material {
@@ -1385,6 +1408,20 @@ impl Material {
         match self {
             Material::Preset(_) => 1.0,
             Material::Tuned { intensity, .. } => *intensity,
+        }
+    }
+
+    pub fn bevel(&self) -> f32 {
+        match self {
+            Material::Preset(_) => default_material_bevel(),
+            Material::Tuned { bevel, .. } => *bevel,
+        }
+    }
+
+    pub fn softness(&self) -> f32 {
+        match self {
+            Material::Preset(_) => default_material_softness(),
+            Material::Tuned { softness, .. } => *softness,
         }
     }
 }
