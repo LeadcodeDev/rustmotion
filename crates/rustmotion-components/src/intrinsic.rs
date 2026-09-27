@@ -1013,6 +1013,7 @@ mod tests {
         let gt = GradientText {
             content: "the quick brown fox jumps over the lazy dog".into(),
             colors: vec!["#3B82F6".into(), "#8B5CF6".into()],
+            stops: None,
             angle: 90.0,
             animate_angle: false,
             speed: 0.5,
@@ -1047,6 +1048,7 @@ mod tests {
         let gt = GradientText {
             content: "the quick brown fox jumps over the lazy dog".into(),
             colors: vec!["#3B82F6".into(), "#8B5CF6".into()],
+            stops: None,
             angle: 90.0,
             animate_angle: false,
             speed: 0.5,
@@ -1586,6 +1588,7 @@ mod tests {
         let gt = GradientText {
             content: "Gradient".into(),
             colors: vec!["#3B82F6".into(), "#8B5CF6".into()],
+            stops: None,
             angle: 90.0,
             animate_angle: false,
             speed: 0.5,

@@ -29,11 +29,23 @@ fn default_speed() -> f32 {
     0.5
 }
 
+/// An explicit color stop on a `gradient_text` ramp.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GradientTextStop {
+    /// Hex color at this stop, e.g. `"#7C3AED"`.
+    pub color: String,
+    /// Position along the gradient line, from `0.0` (first stop) to `1.0` (last).
+    pub position: f32,
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct GradientText {
     pub content: String,
     #[serde(default = "default_colors")]
     pub colors: Vec<String>,
+    /// Explicit stop positions along the ramp. When omitted, `colors` are spaced evenly.
+    #[serde(default)]
+    pub stops: Option<Vec<GradientTextStop>>,
     #[serde(default = "default_angle")]
     pub angle: f32,
     #[serde(default)]
@@ -87,7 +99,8 @@ impl GradientText {
         time: f64,
         ctx: &PaintCtx,
     ) {
-        if self.content.is_empty() || self.colors.is_empty() {
+        let has_stops = self.stops.as_ref().is_some_and(|s| !s.is_empty());
+        if self.content.is_empty() || (self.colors.is_empty() && !has_stops) {
             return;
         }
 
@@ -166,31 +179,44 @@ impl GradientText {
         };
 
         let angle_rad = angle * std::f32::consts::PI / 180.0;
+        let (dir_x, dir_y) = (angle_rad.sin(), -angle_rad.cos());
         let cx = block_x + text_w / 2.0;
         let cy = text_h / 2.0;
-        let half_diag = (text_w.powi(2) + text_h.powi(2)).sqrt() / 2.0;
-        let start = Point::new(
-            cx - angle_rad.cos() * half_diag,
-            cy - angle_rad.sin() * half_diag,
-        );
-        let end = Point::new(
-            cx + angle_rad.cos() * half_diag,
-            cy + angle_rad.sin() * half_diag,
-        );
+        let half_len = ((text_w * angle_rad.sin()).abs() + (text_h * angle_rad.cos()).abs()) / 2.0;
+        let start = Point::new(cx - dir_x * half_len, cy - dir_y * half_len);
+        let end = Point::new(cx + dir_x * half_len, cy + dir_y * half_len);
 
-        let skia_colors: Vec<skia_safe::Color> = self
-            .colors
-            .iter()
-            .map(|hex| {
-                let (r, g, b, a) = parse_hex_color(hex);
-                skia_safe::Color::from_argb(a, r, g, b)
-            })
-            .collect();
+        let (skia_colors, positions_vec): (Vec<skia_safe::Color>, Option<Vec<f32>>) =
+            if let Some(explicit_stops) = self.stops.as_ref().filter(|s| !s.is_empty()) {
+                let colors = explicit_stops
+                    .iter()
+                    .map(|stop| {
+                        let (r, g, b, a) = parse_hex_color(&stop.color);
+                        skia_safe::Color::from_argb(a, r, g, b)
+                    })
+                    .collect();
+                let positions = explicit_stops.iter().map(|stop| stop.position).collect();
+                (colors, Some(positions))
+            } else {
+                let colors = self
+                    .colors
+                    .iter()
+                    .map(|hex| {
+                        let (r, g, b, a) = parse_hex_color(hex);
+                        skia_safe::Color::from_argb(a, r, g, b)
+                    })
+                    .collect();
+                (colors, None)
+            };
 
-        let positions: Option<&[f32]> = None;
         let colors4f: Vec<Color4f> = skia_colors.iter().map(|c| Color4f::from(*c)).collect();
-        let stops = Colors::new(&colors4f, positions, skia_safe::TileMode::Clamp, None);
-        let grad = Gradient::new(stops, gradient::Interpolation::default());
+        let gradient_stops = Colors::new(
+            &colors4f,
+            positions_vec.as_deref(),
+            skia_safe::TileMode::Clamp,
+            None,
+        );
+        let grad = Gradient::new(gradient_stops, gradient::Interpolation::default());
         let shader = gradient::shaders::linear_gradient((start, end), &grad, None);
 
         let fill_paint = match shader {
@@ -201,7 +227,14 @@ impl GradientText {
                 p
             }
             None => {
-                let mut p = paint_from_hex(&self.colors[0]);
+                let fallback_hex = self
+                    .stops
+                    .as_ref()
+                    .and_then(|s| s.first())
+                    .map(|stop| stop.color.as_str())
+                    .or_else(|| self.colors.first().map(String::as_str))
+                    .unwrap_or("#FFFFFF");
+                let mut p = paint_from_hex(fallback_hex);
                 p.set_anti_alias(true);
                 p
             }
@@ -257,6 +290,7 @@ mod tests {
         GradientText {
             content: content.into(),
             colors: default_colors(),
+            stops: None,
             angle: default_angle(),
             animate_angle: false,
             speed: default_speed(),
@@ -330,6 +364,90 @@ mod tests {
             }
         }
         span
+    }
+
+    fn ink_y_span(grid: &[u8], surface_width: i32, height: i32) -> Option<(i32, i32)> {
+        let mut span: Option<(i32, i32)> = None;
+        for y in 0..height {
+            for x in 0..surface_width {
+                if grid[(y * surface_width + x) as usize] > 0 {
+                    span = Some(match span {
+                        None => (y, y),
+                        Some((lo, hi)) => (lo.min(y), hi.max(y)),
+                    });
+                }
+            }
+        }
+        span
+    }
+
+    fn render_unpremul(gt: &GradientText, w: i32, h: i32) -> (Vec<u8>, Vec<u8>) {
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w, h)).expect("raster surface");
+        gt.paint(surface.canvas(), w as f32, None, 0.0, &test_ctx());
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        assert!(snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (w * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        ));
+        let alpha: Vec<u8> = (0..(w * h) as usize).map(|i| buf[i * 4 + 3]).collect();
+        (buf, alpha)
+    }
+
+    fn best_pixel_in_column(buf: &[u8], alpha: &[u8], w: i32, h: i32, x: i32) -> (u8, u8, u8) {
+        let (mut best_y, mut best_a) = (0i32, 0u8);
+        for y in 0..h {
+            let a = alpha[(y * w + x) as usize];
+            if a > best_a {
+                best_a = a;
+                best_y = y;
+            }
+        }
+        let i = ((best_y * w + x) * 4) as usize;
+        (buf[i], buf[i + 1], buf[i + 2])
+    }
+
+    fn best_pixel_in_row(
+        buf: &[u8],
+        alpha: &[u8],
+        w: i32,
+        y: i32,
+        x0: i32,
+        x1: i32,
+    ) -> (u8, u8, u8) {
+        let (mut best_x, mut best_a) = (x0, 0u8);
+        for x in x0..x1 {
+            let a = alpha[(y * w + x) as usize];
+            if a > best_a {
+                best_a = a;
+                best_x = x;
+            }
+        }
+        let i = ((y * w + best_x) * 4) as usize;
+        (buf[i], buf[i + 1], buf[i + 2])
+    }
+
+    fn nearest_inked_column(alpha: &[u8], w: i32, h: i32, target: i32) -> i32 {
+        for radius in 0..w {
+            for cand in [target - radius, target + radius] {
+                if cand < 0 || cand >= w {
+                    continue;
+                }
+                if (0..h).any(|y| alpha[(y * w + cand) as usize] > 0) {
+                    return cand;
+                }
+            }
+        }
+        target
     }
 
     #[test]
@@ -497,6 +615,7 @@ mod tests {
         let gt = GradientText {
             content: "HELLO".into(),
             colors: default_colors(),
+            stops: None,
             angle: default_angle(),
             animate_angle: false,
             speed: default_speed(),
@@ -628,6 +747,130 @@ mod tests {
         assert_eq!(
             frame_a, frame_b,
             "fixed content in a fixed box must render byte-identically regardless of ctx.time"
+        );
+    }
+
+    fn two_color_gradient(angle: f32) -> GradientText {
+        GradientText {
+            content: "IIIIIIIIIIIIIIII".into(),
+            colors: vec!["#FF0000".into(), "#0000FF".into()],
+            stops: None,
+            angle,
+            animate_angle: false,
+            speed: default_speed(),
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::Px(120.0)),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        }
+    }
+
+    #[test]
+    fn default_angle_ramps_left_to_right_across_the_glyphs() {
+        let gt = two_color_gradient(default_angle());
+
+        const W: i32 = 1200;
+        const H: i32 = 300;
+        let (buf, alpha) = render_unpremul(&gt, W, H);
+        let (lo, hi) = ink_x_span(&alpha, W, H).expect("must paint some ink");
+
+        let left = best_pixel_in_column(&buf, &alpha, W, H, (lo + 2).min(hi));
+        let right = best_pixel_in_column(&buf, &alpha, W, H, (hi - 2).max(lo));
+
+        assert!(
+            left.0 as i32 - left.2 as i32 > 60,
+            "with the default angle (CSS 90deg = to right), the left glyph edge should read \
+             close to the first color (red), got {left:?}"
+        );
+        assert!(
+            right.2 as i32 - right.0 as i32 > 60,
+            "with the default angle (CSS 90deg = to right), the right glyph edge should read \
+             close to the last color (blue), got {right:?}"
+        );
+    }
+
+    #[test]
+    fn gradient_line_length_is_the_box_projection_not_the_diagonal() {
+        let gt = two_color_gradient(0.0);
+
+        const W: i32 = 1200;
+        const H: i32 = 300;
+        let (buf, alpha) = render_unpremul(&gt, W, H);
+        let (top, bottom) = ink_y_span(&alpha, W, H).expect("must paint some ink");
+        let (lo_x, hi_x) = ink_x_span(&alpha, W, H).expect("must paint some ink");
+
+        let top_row = (top + 3).min(bottom);
+        let bottom_row = (bottom - 3).max(top);
+        let top_px = best_pixel_in_row(&buf, &alpha, W, top_row, lo_x, hi_x + 1);
+        let bottom_px = best_pixel_in_row(&buf, &alpha, W, bottom_row, lo_x, hi_x + 1);
+
+        assert!(
+            bottom_px.0 as i32 - bottom_px.2 as i32 > 60,
+            "angle: 0 (CSS 'to top') must put the first color at the bottom edge of the glyph \
+             box, got {bottom_px:?}"
+        );
+        assert!(
+            top_px.2 as i32 - top_px.0 as i32 > 60,
+            "angle: 0 (CSS 'to top') must reach the last color at the top edge — a gradient \
+             line as long as the box diagonal would leave the glyphs sampling only the \
+             unsaturated middle of the ramp, got {top_px:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_stops_override_even_color_spacing() {
+        fn three_color_gradient(stops: Option<Vec<GradientTextStop>>) -> GradientText {
+            GradientText {
+                content: "IIIIIIIIIIIIIIII".into(),
+                colors: vec!["#FF0000".into(), "#00FF00".into(), "#0000FF".into()],
+                stops,
+                angle: 90.0,
+                animate_angle: false,
+                speed: default_speed(),
+                timing: Default::default(),
+                style: CssStyle {
+                    font_size: Some(Length::Px(120.0)),
+                    ..Default::default()
+                },
+                timeline: Vec::new(),
+                stagger: None,
+            }
+        }
+
+        const W: i32 = 1200;
+        const H: i32 = 300;
+
+        let even = three_color_gradient(None);
+        let (buf_even, alpha_even) = render_unpremul(&even, W, H);
+        let (lo, hi) = ink_x_span(&alpha_even, W, H).expect("must paint some ink");
+        let mid_x = nearest_inked_column(&alpha_even, W, H, (lo + hi) / 2);
+        let mid_even = best_pixel_in_column(&buf_even, &alpha_even, W, H, mid_x);
+
+        let skewed = three_color_gradient(Some(vec![
+            GradientTextStop {
+                color: "#FF0000".into(),
+                position: 0.0,
+            },
+            GradientTextStop {
+                color: "#00FF00".into(),
+                position: 0.9,
+            },
+            GradientTextStop {
+                color: "#0000FF".into(),
+                position: 1.0,
+            },
+        ]));
+        let (buf_skewed, alpha_skewed) = render_unpremul(&skewed, W, H);
+        let mid_skewed = best_pixel_in_column(&buf_skewed, &alpha_skewed, W, H, mid_x);
+
+        assert!(
+            mid_even.1 as i32 > mid_skewed.1 as i32 + 40,
+            "moving the middle stop from its even-spacing position (0.5) to 0.9 must move the \
+             ramp: the text's midpoint should read far less green than the even-spacing case \
+             (even={mid_even:?}, skewed={mid_skewed:?})"
         );
     }
 }

@@ -523,8 +523,7 @@ impl Text {
 
         let font = Font::from_typeface(typeface, font_size);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
-        let mut paint = paint_from_hex(color);
-        paint.set_alpha_f(1.0);
+        let paint = paint_from_hex(color);
 
         let wrap_width = if nowrap { None } else { box_width };
 
@@ -1042,6 +1041,33 @@ mod tests {
         assert!(
             has_ink_in(&grid, W, 0, W, 0, 70),
             "font-size: 20vh (40px against a 200px-tall test viewport) must paint visible ink"
+        );
+    }
+
+    #[test]
+    fn a_translucent_color_alpha_channel_survives_to_the_painted_pixels() {
+        let mut text = make_text("A", Some(CssWhiteSpace::Nowrap));
+        text.style.font_size = Some(Length::Px(120.0));
+        text.style.color = Some(rustmotion_core::css::style::Color::String(
+            "#FFFFFF12".into(),
+        ));
+
+        const W: i32 = 300;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        let canvas = surface.canvas();
+        let ctx = test_ctx();
+        let props = AnimatedProperties::default();
+        text.paint(canvas, W as f32, None, 0.0, &props, &ctx)
+            .expect("paint succeeds");
+        let grid = alpha_grid(&mut surface, W, H);
+
+        let max_alpha = grid.iter().copied().max().unwrap_or(0);
+        assert!(max_alpha > 0, "the glyph must paint some ink");
+        assert!(
+            max_alpha <= 40,
+            "style.color's alpha channel (0x12 = 18/255, about 7%) must survive to the painted \
+             pixels instead of being forced fully opaque; got max alpha {max_alpha}"
         );
     }
 
