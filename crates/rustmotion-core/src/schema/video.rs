@@ -107,6 +107,10 @@ pub enum AnimationEffect {
     /// red/cyan fringes that converge back to zero separation by the end.
     /// See [`ChromaticAberrationConfig`]'s doc comment.
     ChromaticAberration(ChromaticAberrationConfig),
+    /// Cuts the node's own rendered pixels into a deterministic Voronoi
+    /// partition and flies the pieces apart (or together). See
+    /// [`ShatterConfig`]'s doc comment.
+    Shatter(ShatterConfig),
 }
 
 impl AnimationEffect {
@@ -128,6 +132,7 @@ impl AnimationEffect {
             MotionPath(c) => c.delay += by,
             Shimmer(c) => c.delay += by,
             ChromaticAberration(c) => c.delay += by,
+            Shatter(c) => c.delay += by,
             Glow(_) | Wiggle(_) | Orbit(_) | MotionBlur(_) | Trail(_) => {}
         }
     }
@@ -954,6 +959,143 @@ where
              mini-language shape's type: \"path\" accepts), e.g. \"M0,0 C50,-100 150,-100 200,0\""
         ))),
     }
+}
+
+/// Configuration for the `shatter` animation effect: the node's own rendered
+/// subtree — background, border, content and children, exactly as it would
+/// have painted — is rasterised once, cut into `pieces` convex cells by a
+/// deterministic Voronoi partition seeded by `seed`, and each cell is flown
+/// away from `origin`, spun and faded independently.
+///
+/// `seed` and the sampled instant fully determine every shard's cell,
+/// direction, spin and depth — two renders of the same file at the same time
+/// are byte-identical.
+///
+/// `mode` decides which end of the timeline is the intact node and which is
+/// the fully dispersed one, and what happens once `delay + duration` has
+/// elapsed:
+/// - `"out"` (default): assembled at `delay`, fully dispersed at
+///   `delay + duration`. Outside `[delay, delay + duration)` the effect
+///   contributes nothing at all — the node renders byte-identically to one
+///   with no `shatter` effect in its `animation` list, the same hard
+///   short-circuit `chromatic_aberration` and `zoom_blur` use rather than a
+///   fade that only gets close to zero.
+/// - `"in"` is the mirror: dispersed at `delay`, assembled at
+///   `delay + duration`, and — like `"out"` — outside its window the node
+///   renders as if the effect were absent.
+/// - `"hold"` plays the same dispersal as `"out"` but freezes at the fully
+///   dispersed state once `delay + duration` is reached instead of
+///   short-circuiting back to the plain node — it legitimately never
+///   converges.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ShatterConfig {
+    /// Delay before the shards start moving (seconds).
+    #[serde(default)]
+    pub delay: f64,
+    /// How long the dispersal (or, in `"in"` mode, the assembly) takes
+    /// (seconds).
+    #[serde(default = "default_shatter_duration")]
+    pub duration: f64,
+    /// Which end of the timeline is intact and what happens after
+    /// `delay + duration`. See the type-level doc comment.
+    #[serde(default)]
+    pub mode: ShatterMode,
+    /// Number of Voronoi shards (default 24, clamped 1..=64).
+    #[serde(default = "default_shatter_pieces")]
+    pub pieces: u32,
+    /// Seed for the deterministic Voronoi partition and every shard's
+    /// direction/spin/depth jitter.
+    #[serde(default)]
+    pub seed: u32,
+    /// Point shards fly away from (or, in `"in"` mode, converge toward), as
+    /// a fraction of the node's own box (`{ "x": 0.5, "y": 0.5 }` is the
+    /// centre, the default).
+    #[serde(default)]
+    pub origin: ShatterOrigin,
+    /// Radial travel multiplier at full dispersal, relative to the node's
+    /// own diagonal (default 1.0). `0` pins shards in place — only spin,
+    /// depth and fade remain visible.
+    #[serde(default = "default_shatter_spread")]
+    pub spread: f32,
+    /// Maximum rotation in degrees a shard reaches at full dispersal
+    /// (default 90); each shard's own sign and magnitude are jittered from
+    /// `seed`.
+    #[serde(default = "default_shatter_spin")]
+    pub spin: f32,
+    /// Per-shard scale modulation at full dispersal, the same "0.0 = none"
+    /// semantics as `OrbitConfig::depth` (default 0.4): each shard's own
+    /// signed depth is jittered from `seed`, so some shards appear to come
+    /// toward the camera (scale > 1) while others recede (scale < 1).
+    #[serde(default = "default_shatter_depth")]
+    pub depth: f32,
+    /// Fade each shard's opacity to zero as it reaches full dispersal
+    /// (default true). With `mode: "in"` this is a mirror: shards start
+    /// transparent and reach full opacity as they assemble.
+    #[serde(default = "default_true")]
+    pub fade: bool,
+}
+
+fn default_shatter_duration() -> f64 {
+    0.6
+}
+fn default_shatter_pieces() -> u32 {
+    24
+}
+fn default_shatter_spread() -> f32 {
+    1.0
+}
+fn default_shatter_spin() -> f32 {
+    90.0
+}
+fn default_shatter_depth() -> f32 {
+    0.4
+}
+fn default_true() -> bool {
+    true
+}
+
+/// Which end of `shatter`'s timeline is the intact node. See
+/// [`ShatterConfig`]'s doc comment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ShatterMode {
+    /// Assembled at `delay`, dispersed at `delay + duration`, then
+    /// short-circuits back to the plain node.
+    #[default]
+    Out,
+    /// Dispersed at `delay`, assembled at `delay + duration`, then
+    /// short-circuits back to the plain node (the same "no effect" state
+    /// its own end converges to).
+    In,
+    /// Same dispersal as `"out"`, but freezes at full dispersal instead of
+    /// returning to the plain node.
+    Hold,
+}
+
+/// Fractional point within `shatter`'s own box — `{ "x": 0.0, "y": 0.0 }` is
+/// the top-left corner, `{ "x": 1.0, "y": 1.0 }` the bottom-right. See
+/// [`ShatterConfig::origin`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ShatterOrigin {
+    #[serde(default = "default_shatter_origin_component")]
+    pub x: f32,
+    #[serde(default = "default_shatter_origin_component")]
+    pub y: f32,
+}
+
+impl Default for ShatterOrigin {
+    fn default() -> Self {
+        Self {
+            x: default_shatter_origin_component(),
+            y: default_shatter_origin_component(),
+        }
+    }
+}
+
+fn default_shatter_origin_component() -> f32 {
+    0.5
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

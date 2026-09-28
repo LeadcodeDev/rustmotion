@@ -666,6 +666,8 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
 
         AnimationEffect::ChromaticAberration(c) => Some((c.delay, c.duration)),
 
+        AnimationEffect::Shatter(c) => Some((c.delay, c.duration)),
+
         AnimationEffect::Glow(_)
         | AnimationEffect::Wiggle(_)
         | AnimationEffect::Orbit(_)

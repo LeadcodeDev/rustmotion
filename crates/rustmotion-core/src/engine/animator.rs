@@ -309,6 +309,96 @@ mod chromatic_aberration_shift_tests {
     }
 }
 
+pub fn shatter_progress(cfg: &crate::schema::ShatterConfig, time: f64) -> Option<f32> {
+    use crate::schema::ShatterMode;
+
+    if cfg.duration <= 0.0 {
+        return None;
+    }
+    let elapsed = time - cfg.delay;
+    if elapsed < 0.0 {
+        return None;
+    }
+    match cfg.mode {
+        ShatterMode::Hold => Some((elapsed / cfg.duration).min(1.0) as f32),
+        ShatterMode::Out => {
+            if elapsed >= cfg.duration {
+                None
+            } else {
+                Some((elapsed / cfg.duration) as f32)
+            }
+        }
+        ShatterMode::In => {
+            if elapsed >= cfg.duration {
+                None
+            } else {
+                Some((1.0 - elapsed / cfg.duration) as f32)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod shatter_progress_tests {
+    use super::*;
+    use crate::schema::{ShatterConfig, ShatterMode};
+
+    fn cfg(mode: ShatterMode) -> ShatterConfig {
+        ShatterConfig {
+            delay: 1.0,
+            duration: 0.5,
+            mode,
+            pieces: 12,
+            seed: 3,
+            origin: Default::default(),
+            spread: 1.0,
+            spin: 90.0,
+            depth: 0.4,
+            fade: true,
+        }
+    }
+
+    #[test]
+    fn out_is_none_before_delay_and_at_or_after_the_end() {
+        let c = cfg(ShatterMode::Out);
+        assert_eq!(shatter_progress(&c, 0.0), None);
+        assert_eq!(shatter_progress(&c, 0.999), None);
+        assert_eq!(shatter_progress(&c, 1.5), None);
+        assert_eq!(shatter_progress(&c, 10.0), None);
+    }
+
+    #[test]
+    fn out_climbs_from_zero_to_just_under_one_across_the_window() {
+        let c = cfg(ShatterMode::Out);
+        assert_eq!(shatter_progress(&c, 1.0), Some(0.0));
+        let mid = shatter_progress(&c, 1.25).unwrap();
+        assert!(mid > 0.0 && mid < 1.0, "got {mid}");
+    }
+
+    #[test]
+    fn in_is_the_mirror_of_out() {
+        let c = cfg(ShatterMode::In);
+        assert_eq!(shatter_progress(&c, 0.0), None);
+        assert_eq!(shatter_progress(&c, 1.5), None);
+        assert_eq!(shatter_progress(&c, 1.0), Some(1.0));
+        let mid = shatter_progress(&c, 1.25).unwrap();
+        assert!(mid > 0.0 && mid < 1.0, "got {mid}");
+    }
+
+    #[test]
+    fn hold_freezes_at_one_past_the_window_instead_of_going_back_to_none() {
+        let c = cfg(ShatterMode::Hold);
+        assert_eq!(shatter_progress(&c, 0.0), None);
+        assert_eq!(shatter_progress(&c, 1.0), Some(0.0));
+        assert_eq!(shatter_progress(&c, 1.5), Some(1.0));
+        assert_eq!(
+            shatter_progress(&c, 100.0),
+            Some(1.0),
+            "hold must never converge back to None, unlike out/in"
+        );
+    }
+}
+
 fn cubic_bezier_ease(t: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
     let t_curve = find_bezier_t_for_x(t, x1, x2);
     bezier_component(t_curve, y1, y2)
