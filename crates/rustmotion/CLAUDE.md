@@ -84,7 +84,7 @@ La vue **`world`** est le seul mécanisme qui produit une continuité réelle en
 - `stat` — carte KPI composite (valeur + label + tendance + sparkline)
 - `heatmap` — grille colorée type GitHub contributions
 - `treemap` — rectangles proportionnels (slice-and-dice)
-- `dot_map` — carte mondiale en dot-pattern avec points de données, pulse, lat/lng
+- `dot_map` — carte mondiale en dot-pattern avec points de données, pulse, lat/lng. `projection: "orthographic"` en fait un globe, avec occultation de l'hémisphère caché et arcs en grand cercle — voir [rules/dot-map-orthographic.md](.claude/skills/rustmotion/rules/dot-map-orthographic.md).
 - `progress` — barre linéaire ou circulaire
 - `counter` — compteur animé (standalone uniquement, pas dans les cards)
 - `number_wheel` — digits that scroll like a mechanical odometer and land on the figure. Not to be confused with `counter`, which interpolates a value and rewrites the number (its glyphs jump). Le réglage se fait par `digits`, `duration` et `easing` sur le composant.
