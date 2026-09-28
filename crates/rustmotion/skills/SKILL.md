@@ -245,6 +245,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/text-component-parity.md](rules/text-component-parity.md) - Where `text`, `rich_text` and `gradient_text` disagreed: colour alpha, literal whitespace and baseline, the CSS angle convention and explicit `stops`
 - [rules/mask-transition.md](rules/mask-transition.md) - `mask` and `blob`: reveal through any silhouette, and an organic wobbling edge whose covering radius solves itself
 - [rules/feathered-wipes.md](rules/feathered-wipes.md) - `feather` and `band_color`, shared by every `wipe_*` plus `mask` and `blob`
+- [rules/animatable-spacing-and-trim.md](rules/animatable-spacing-and-trim.md) - `letter_spacing` and `draw_start` as keyframe properties: why animating spacing overflows its box, and how `draw_start` differs from the `shape` field of the same name
 - [rules/shape-draw-start-and-path-morph.md](rules/shape-draw-start-and-path-morph.md) - `shape.draw_start` and `shape.path_morph` — and why they are component fields, not `style.animation` keyframe properties
 - [rules/iris-transition.md](rules/iris-transition.md) - `iris` beyond a centred circle: `origin`, `shape`, `fill`+`hold`, `ring` and `reverse`, and the pill coverage approximation
 - [rules/whip-transition.md](rules/whip-transition.md) - The whip cut: a directional slide that streaks **both** frames along its axis, unlike `zoom_blur` which streaks only the outgoing one

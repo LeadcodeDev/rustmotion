@@ -51,7 +51,14 @@ rustmotion_core::impl_traits!(Line {
 impl Line {
     fn paint(&self, canvas: &Canvas, props: &AnimatedProperties) {
         let drawing = props.draw_progress >= 0.0 && props.draw_progress < 1.0;
-        if drawing && props.draw_progress <= 0.0 {
+        let trim_start = props.draw_start.clamp(0.0, 1.0);
+        let trimming = props.draw_start > 0.0;
+        let trim_end = if drawing {
+            props.draw_progress.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        if trim_end <= trim_start && (drawing || trimming) {
             return;
         }
 
@@ -69,15 +76,17 @@ impl Line {
             }
         }
 
-        if drawing {
-            let dx = self.x2 - self.x1;
-            let dy = self.y2 - self.y1;
-            let length = (dx * dx + dy * dy).sqrt();
-            let draw_len = length * props.draw_progress.clamp(0.0, 1.0);
-            let intervals = [draw_len, length - draw_len + 0.01];
-            if let Some(dash) = skia_safe::PathEffect::dash(&intervals, 0.0) {
-                paint.set_path_effect(dash);
-            }
+        if drawing || trimming {
+            let mut builder = skia_safe::PathBuilder::new();
+            builder.move_to((self.x1, self.y1));
+            builder.line_to((self.x2, self.y2));
+            let trimmed = rustmotion_core::engine::renderer::trim_path_between(
+                &builder.detach(),
+                trim_start,
+                trim_end,
+            );
+            canvas.draw_path(&trimmed, &paint);
+            return;
         }
 
         canvas.draw_line((self.x1, self.y1), (self.x2, self.y2), &paint);
@@ -197,6 +206,86 @@ mod tests {
         assert!(
             lit > 0,
             "at draw_progress=0.5 the line must paint a partial stroke, got {lit} lit pixels"
+        );
+    }
+}
+#[cfg(test)]
+mod draw_start_tests {
+    use super::*;
+
+    fn line_at(draw_start: f32, draw_progress: f32) -> Vec<u8> {
+        let line = Line {
+            x1: 10.0,
+            y1: 50.0,
+            x2: 90.0,
+            y2: 50.0,
+            color: "#FFFFFF".into(),
+            width: 8.0,
+            dashed: None,
+            timing: Default::default(),
+            style: Default::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        let mut surface = skia_safe::surfaces::raster_n32_premul((100, 100)).unwrap();
+        let props = AnimatedProperties {
+            draw_start,
+            draw_progress,
+            ..Default::default()
+        };
+        line.paint(surface.canvas(), &props);
+
+        let info = skia_safe::ImageInfo::new(
+            (100, 100),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; 100 * 100 * 4];
+        surface.read_pixels(&info, &mut buf, 100 * 4, (0, 0));
+        buf
+    }
+
+    fn lit_in_columns(buf: &[u8], x0: usize, x1: usize) -> usize {
+        (0..100)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .filter(|&(x, y)| buf[(y * 100 + x) * 4 + 3] > 40)
+            .count()
+    }
+
+    #[test]
+    fn draw_start_leaves_the_first_half_empty() {
+        let buf = line_at(0.5, -1.0);
+        assert_eq!(
+            lit_in_columns(&buf, 0, 44),
+            0,
+            "draw_start 0.5 must erase the first half of the stroke. The probe stops at 44 \
+             rather than 50 because the round cap extends half the 8px stroke back past the \
+             cut, which is the cap doing its job and not the trim failing"
+        );
+        assert!(
+            lit_in_columns(&buf, 52, 100) > 100,
+            "and leave the second half painted"
+        );
+    }
+
+    #[test]
+    fn draw_start_and_draw_progress_bound_a_window() {
+        let buf = line_at(0.3, 0.7);
+        assert_eq!(lit_in_columns(&buf, 0, 30), 0, "before the window: empty");
+        assert_eq!(lit_in_columns(&buf, 78, 100), 0, "after the window: empty");
+        assert!(
+            lit_in_columns(&buf, 40, 60) > 80,
+            "inside the window: painted"
+        );
+    }
+
+    #[test]
+    fn no_draw_start_renders_exactly_as_before() {
+        assert_eq!(
+            line_at(-1.0, -1.0),
+            line_at(0.0, -1.0),
+            "draw_start absent and draw_start 0 must both paint the whole line, byte for byte"
         );
     }
 }
