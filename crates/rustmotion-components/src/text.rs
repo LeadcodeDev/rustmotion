@@ -190,6 +190,9 @@ impl Text {
         );
         let (mut font_size, mut letter_spacing, mut line_height_val) =
             self.style.typography_px_ctx(&base_ctx, 48.0);
+        if props.letter_spacing.is_finite() {
+            letter_spacing = props.letter_spacing;
+        }
         let color = props
             .color
             .as_deref()
@@ -2076,6 +2079,86 @@ mod tests {
             render_plain(&morphed, 2.0),
             render_plain(&cut, 2.0),
             "once the morph window has passed, the frame must match a plain cut to the final label"
+        );
+    }
+
+    fn painted_width(letter_spacing: f32) -> usize {
+        let mut text = make_text("IIIII", None);
+        text.style.font_size = Some(Length::Px(40.0));
+        let mut surface = skia_safe::surfaces::raster_n32_premul((600, 120)).unwrap();
+        let props = AnimatedProperties {
+            letter_spacing,
+            ..Default::default()
+        };
+        let _ = text.paint(surface.canvas(), 600.0, None, 0.0, &props, &test_ctx());
+
+        let info = skia_safe::ImageInfo::new(
+            (600, 120),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; 600 * 120 * 4];
+        surface.read_pixels(&info, &mut buf, 600 * 4, (0, 0));
+
+        let mut lo = usize::MAX;
+        let mut hi = 0usize;
+        for y in 0..120 {
+            for x in 0..600 {
+                if buf[(y * 600 + x) * 4 + 3] > 60 {
+                    lo = lo.min(x);
+                    hi = hi.max(x);
+                }
+            }
+        }
+        if lo == usize::MAX {
+            0
+        } else {
+            hi - lo
+        }
+    }
+
+    #[test]
+    fn an_animated_letter_spacing_widens_the_painted_run() {
+        let tight = painted_width(0.0);
+        let loose = painted_width(16.0);
+        assert!(tight > 0, "sanity: the tight run paints something");
+        assert!(
+            loose > tight + 40,
+            "a keyframed letter_spacing must move the glyphs apart: tight={tight}px, \
+             loose={loose}px over five glyphs at 16px extra each"
+        );
+    }
+
+    #[test]
+    fn an_absent_letter_spacing_leaves_the_declared_one_alone() {
+        let declared = {
+            let mut text = make_text("IIIII", None);
+            text.style.font_size = Some(Length::Px(40.0));
+            text.style.letter_spacing = Some(Length::Px(16.0));
+            let mut surface = skia_safe::surfaces::raster_n32_premul((600, 120)).unwrap();
+            let _ = text.paint(
+                surface.canvas(),
+                600.0,
+                None,
+                0.0,
+                &AnimatedProperties::default(),
+                &test_ctx(),
+            );
+            let info = skia_safe::ImageInfo::new(
+                (600, 120),
+                skia_safe::ColorType::RGBA8888,
+                skia_safe::AlphaType::Unpremul,
+                None,
+            );
+            let mut buf = vec![0u8; 600 * 120 * 4];
+            surface.read_pixels(&info, &mut buf, 600 * 4, (0, 0));
+            buf
+        };
+        assert!(
+            declared.iter().any(|b| *b > 60),
+            "with no animated value, style.letter-spacing must still be honoured — the \
+             animated field defaults to NaN precisely so absent means absent"
         );
     }
 }

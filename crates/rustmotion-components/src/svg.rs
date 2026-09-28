@@ -375,10 +375,12 @@ fn paint_draw_on(
     svg_size: usvg::Size,
     layout: &BoxLayout,
     progress: f32,
+    start_progress: f32,
     draw_stroke_width: f32,
     draw_overlap: f32,
 ) {
     let progress = progress.clamp(0.0, 1.0);
+    let start_progress = start_progress.clamp(0.0, 1.0);
 
     let mut segments: Vec<DrawSegment> = Vec::new();
     collect_paths(group, draw_stroke_width, &mut segments);
@@ -424,19 +426,21 @@ fn paint_draw_on(
         let start_frac = cumulative * (1.0 - overlap);
         cumulative += base_frac;
 
-        let local_t = if window_size > 0.0 {
-            ((progress - start_frac) / window_size).clamp(0.0, 1.0)
-        } else if progress >= start_frac {
-            1.0
-        } else {
-            0.0
+        let local_of = |global: f32| {
+            if window_size > 0.0 {
+                ((global - start_frac) / window_size).clamp(0.0, 1.0)
+            } else if global >= start_frac {
+                1.0
+            } else {
+                0.0
+            }
         };
+        let local_t = local_of(progress);
+        let local_start = local_of(start_progress);
 
-        if local_t <= 0.0 {
+        if local_t <= local_start {
             continue;
         }
-
-        let draw_len = length * local_t;
 
         let mut paint = Paint::default();
         paint.set_color(segment.color);
@@ -446,15 +450,16 @@ fn paint_draw_on(
         paint.set_stroke_join(segment.join);
         paint.set_anti_alias(true);
 
-        if local_t < 1.0 && draw_len > 0.0 {
-            let remaining = length - draw_len;
-            let intervals = [draw_len, remaining + 0.01];
-            if let Some(dash) = skia_safe::PathEffect::dash(&intervals, 0.0) {
-                paint.set_path_effect(dash);
-            }
+        if local_t < 1.0 || local_start > 0.0 {
+            let trimmed = rustmotion_core::engine::renderer::trim_path_between(
+                &segment.path,
+                local_start,
+                local_t,
+            );
+            canvas.draw_path(&trimmed, &paint);
+        } else {
+            canvas.draw_path(&segment.path, &paint);
         }
-
-        canvas.draw_path(&segment.path, &paint);
     }
 
     canvas.restore();
@@ -468,7 +473,9 @@ impl Painter for Svg {
         props: &AnimatedProperties,
         _ctx: &PaintCtx,
     ) {
-        let draw_active = self.draw || (props.draw_progress >= 0.0 && props.draw_progress < 1.0);
+        let draw_active = self.draw
+            || (props.draw_progress >= 0.0 && props.draw_progress < 1.0)
+            || props.draw_start > 0.0;
 
         if draw_active {
             let progress = if props.draw_progress >= 0.0 {
@@ -522,6 +529,7 @@ impl Painter for Svg {
                     svg_size,
                     layout,
                     progress,
+                    props.draw_start.max(0.0),
                     self.draw_stroke_width,
                     self.draw_overlap,
                 );
