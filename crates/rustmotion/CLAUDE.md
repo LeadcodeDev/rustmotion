@@ -69,7 +69,7 @@ La vue **`world`** est le seul mécanisme qui produit une continuité réelle en
 
 > `grid_dots` marks the intersections and reads as a texture; `grid_lines` is a grid of ruled **lines** and reads as a structure — the one to put behind a chart or a code panel. Config: `cell`, `weight`, `color`, plus `major_every`/`major_weight` for the graph-paper effect.
 
-## Composants disponibles (53)
+## Composants disponibles (61)
 
 ### Basiques
 `text`, `shape`, `image`, `icon`, `svg`, `video`, `gif`, `caption`, `rich_text`, `gradient_text`
@@ -117,7 +117,12 @@ La vue **`world`** est le seul mécanisme qui produit une continuité réelle en
 > Pour faire suivre une trajectoire à un composant, utilise l'effet d'animation `motion_path` (données de chemin SVG, orientation optionnelle selon la tangente) plutôt que d'empiler des `translate`. Voir [rules/motion-path.md](.claude/skills/rustmotion/rules/motion-path.md).
 
 ### Média
-`mockup`, `lottie`, `cursor`, `particle`, `qr_code`
+`mockup`, `lottie`, `cursor`, `emitter`, `particle`, `qr_code`
+
+> `emitter` — champ de particules radial avec naissance, trajet, mort et
+> renaissance, en forme close (donc cherchable par `still`). Remplace `particle`,
+> déprécié, dont les cinq presets figés n'ont aucun cycle de vie. Voir
+> [rules/emitter-lifecycle.md](.claude/skills/rustmotion/rules/emitter-lifecycle.md).
 
 ### Audio
 - `waveform` — visualisation d'onde audio réactive au volume de la piste

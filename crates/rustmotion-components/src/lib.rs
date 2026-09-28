@@ -19,6 +19,7 @@ pub mod counter;
 pub mod cursor;
 pub mod divider;
 pub mod dot_map;
+pub mod emitter;
 pub mod gauge;
 pub mod gif;
 pub mod gradient_text;
@@ -80,6 +81,7 @@ pub use counter::Counter;
 pub use cursor::Cursor;
 pub use divider::Divider;
 pub use dot_map::DotMap;
+pub use emitter::Emitter;
 pub use gauge::Gauge;
 pub use gif::Gif;
 pub use gradient_text::GradientText;
@@ -295,7 +297,10 @@ impl ChildComponent {
     }
 
     pub fn is_decorative(&self) -> bool {
-        matches!(self.component, Component::Particle(_))
+        matches!(
+            self.component,
+            Component::Particle(_) | Component::Emitter(_)
+        )
     }
 
     pub fn absolute_position(&self) -> Option<(f32, f32)> {
@@ -334,6 +339,7 @@ pub enum Component {
     Countdown(Countdown),
     Divider(Divider),
     DotMap(DotMap),
+    Emitter(Emitter),
     Gauge(Gauge),
     GradientText(GradientText),
     Heatmap(Heatmap),
@@ -402,6 +408,7 @@ impl Component {
             Component::Countdown(c) => Some(c),
             Component::Divider(c) => Some(c),
             Component::DotMap(c) => Some(c),
+            Component::Emitter(c) => Some(c),
             Component::Gauge(c) => Some(c),
             Component::GradientText(c) => Some(c),
             Component::Heatmap(c) => Some(c),
@@ -459,6 +466,7 @@ impl Component {
             Component::Countdown(c) => Some(c),
             Component::Divider(c) => Some(c),
             Component::DotMap(c) => Some(c),
+            Component::Emitter(c) => Some(c),
             Component::Gauge(c) => Some(c),
             Component::GradientText(c) => Some(c),
             Component::Heatmap(c) => Some(c),
@@ -518,6 +526,7 @@ impl Component {
             Component::Countdown(c) => c,
             Component::Divider(c) => c,
             Component::DotMap(c) => c,
+            Component::Emitter(c) => c,
             Component::Gauge(c) => c,
             Component::GradientText(c) => c,
             Component::Heatmap(c) => c,
@@ -557,6 +566,7 @@ impl Component {
             Component::Waveform(c) => Some(c),
             Component::Container(c) => Some(c),
             Component::Divider(c) => Some(c),
+            Component::Emitter(c) => Some(c),
             Component::Shape(c) => Some(c),
             Component::Image(c) => Some(c),
             Component::Icon(c) => Some(c),
@@ -642,6 +652,7 @@ impl Component {
             | Component::Comparison(_)
             | Component::Countdown(_)
             | Component::DotMap(_)
+            | Component::Emitter(_)
             | Component::Gauge(_)
             | Component::Heatmap(_)
             | Component::Line(_)

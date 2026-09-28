@@ -2141,7 +2141,7 @@ Transparency is supported with `--transparent` for PNG sequences, WebM (VP9), an
 - **JSON Schema:** schemars (auto-generated from Rust types)
 - **Parallelism:** rayon (multi-threaded frame rendering)
 
-rustmotion ships 60 components, each implementing the `Painter` trait, through a CSS-inspired **box_tree → layout_pass → paint_pass** pipeline:
+rustmotion ships 61 components, each implementing the `Painter` trait, through a CSS-inspired **box_tree → layout_pass → paint_pass** pipeline:
 
 1. **box_tree** — builds a tree of `BoxNode { css: CssStyle, children, intrinsic }` from the resolved JSON components
 2. **layout_pass** — runs [taffy](https://github.com/DioxusLabs/taffy) to compute each node's `BoxLayout { x, y, width, height }`; leaves that carry an `IntrinsicMeasure` (text, images, codeblocks, ...) are measured through a `measure_fn`

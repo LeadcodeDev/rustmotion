@@ -24,6 +24,7 @@ mod component_smoke {
         ),
         ("countdown", r#"{"type":"countdown","seconds":60}"#),
         ("divider", r#"{"type":"divider"}"#),
+        ("emitter", r#"{"type":"emitter"}"#),
         ("gauge", r#"{"type":"gauge","value":50}"#),
         (
             "gradient_text",

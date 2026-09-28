@@ -238,6 +238,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/chromatic-aberration.md](rules/chromatic-aberration.md) - Per-element red/cyan fringe on arrival: `chromatic_aberration`'s `amount`, how its curve differs from `chromatic_wipe`'s, and the `amount`-not-`amplitude` trap
 - [rules/inflated-material.md](rules/inflated-material.md) - `material: "inflated"`: shading derived from the clipped silhouette, so each branch of a star gets its own relief — and why `bevel` must stay small relative to the shape
 - [rules/material-and-light.md](rules/material-and-light.md) - Lit surfaces: `style.material`'s three presets, the scene-wide `light` that makes them agree, and why the material follows the box and not a `shape`'s own geometry
+- [rules/emitter-lifecycle.md](rules/emitter-lifecycle.md) - `emitter`: a particle field whose lifecycle is closed-form, so `still --time` and a full render agree — and why there is no particle-count field
 - [rules/layout-surface.md](rules/layout-surface.md) - Project a flat grid onto a cylinder or sphere with one shared vanishing point — and why children still paint in declaration order
 - [rules/dot-map-orthographic.md](rules/dot-map-orthographic.md) - `dot_map` as a globe: orthographic projection, far-hemisphere culling, great-circle arcs and limb shading
 - [rules/camera-3d.md](rules/camera-3d.md) - Tilt a whole shot with `camera.rotate_x`/`rotate_y`/`perspective`: one shared vanishing point, and rotation scaled by each plane's `style.depth`
