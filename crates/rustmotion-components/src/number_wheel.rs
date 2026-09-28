@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ClipOp, Font, FontStyle, Rect};
 
 use rustmotion_core::css::style::{
-    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
+    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign,
 };
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::{ease, AnimatedProperties};
@@ -127,6 +127,35 @@ impl NumberWheel {
         travel * p
     }
 
+    pub(crate) fn advance(
+        cells: &[Cell],
+        digit_w: f32,
+        font: &Font,
+        emoji: &Option<Font>,
+        letter_spacing: f32,
+    ) -> f32 {
+        cells
+            .iter()
+            .map(|cell| match cell {
+                Cell::Digit(_) => digit_w,
+                Cell::Fixed(c) => {
+                    measure_text_with_fallback(&c.to_string(), font, emoji, letter_spacing)
+                }
+            })
+            .sum()
+    }
+
+    pub(crate) fn align_offset(align: CssTextAlign, box_width: f32, advance: f32) -> f32 {
+        if !box_width.is_finite() || box_width <= 0.0 {
+            return 0.0;
+        }
+        match align {
+            CssTextAlign::Center => (box_width - advance) / 2.0,
+            CssTextAlign::Right | CssTextAlign::End => box_width - advance,
+            _ => 0.0,
+        }
+    }
+
     fn digit_advance(font: &Font, emoji: &Option<Font>, letter_spacing: f32) -> f32 {
         (0..10)
             .map(|d| measure_text_with_fallback(&d.to_string(), font, emoji, letter_spacing))
@@ -202,8 +231,13 @@ impl Painter for NumberWheel {
 
         let digit_w = Self::digit_advance(&font, &emoji_font, letter_spacing);
         let cells = Self::cells(&self.value);
+        let advance = Self::advance(&cells, digit_w, &font, &emoji_font, letter_spacing);
 
-        let mut x = 0.0f32;
+        let mut x = Self::align_offset(
+            self.style.text_align.unwrap_or(CssTextAlign::Left),
+            layout.width,
+            advance,
+        );
         let mut column = 0usize;
         for cell in &cells {
             match cell {
@@ -265,6 +299,133 @@ mod tests {
 
     fn wheel(json: serde_json::Value) -> NumberWheel {
         serde_json::from_value(json).expect("number_wheel fixture")
+    }
+
+    fn test_ctx() -> PaintCtx {
+        PaintCtx {
+            time: 5.0,
+            scenario_time: 5.0,
+            scene_duration: 6.0,
+            frame_index: 150,
+            fps: 30,
+            video_width: 1920,
+            video_height: 1080,
+            stagger_offset: 0.0,
+        }
+    }
+
+    fn box_layout(width: f32) -> BoxLayout {
+        BoxLayout {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height: 200.0,
+            border: Default::default(),
+            padding: Default::default(),
+        }
+    }
+
+    fn ink_x_span(w: &NumberWheel, box_width: f32, surface_width: i32) -> (i32, i32) {
+        let height = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((surface_width, height))
+            .expect("raster surface");
+        w.paint_content(
+            surface.canvas(),
+            &box_layout(box_width),
+            &AnimatedProperties::default(),
+            &test_ctx(),
+        );
+        let image = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (surface_width, height),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (surface_width * height * 4) as usize];
+        image.read_pixels(
+            &info,
+            &mut buf,
+            (surface_width * 4) as usize,
+            (0, 0),
+            skia_safe::image::CachingHint::Allow,
+        );
+        let mut lo = i32::MAX;
+        let mut hi = i32::MIN;
+        for y in 0..height {
+            for x in 0..surface_width {
+                if buf[((y * surface_width + x) * 4 + 3) as usize] > 0 {
+                    lo = lo.min(x);
+                    hi = hi.max(x);
+                }
+            }
+        }
+        assert!(lo <= hi, "the wheel painted nothing at all");
+        (lo, hi)
+    }
+
+    fn landed_wheel(align: Option<CssTextAlign>) -> NumberWheel {
+        let mut w = wheel(serde_json::json!({
+            "value": "27",
+            "duration": 1.0,
+            "stagger_per_column": 0.0,
+            "style": { "font-size": 120 }
+        }));
+        w.style.text_align = align;
+        w
+    }
+
+    #[test]
+    fn text_align_center_centres_the_reels_in_the_box() {
+        const BOX_W: f32 = 1000.0;
+        let (lo, hi) = ink_x_span(&landed_wheel(Some(CssTextAlign::Center)), BOX_W, 1100);
+        let centre = (lo + hi) as f32 / 2.0;
+        assert!(
+            (centre - BOX_W / 2.0).abs() <= 6.0,
+            "a centred number_wheel must sit on the box centre {}, painted [{lo}, {hi}] \
+             with centre {centre}",
+            BOX_W / 2.0
+        );
+        assert!(
+            lo > 100,
+            "a centred number_wheel must leave a left margin, first ink at {lo}"
+        );
+    }
+
+    #[test]
+    fn text_align_right_ends_the_reels_on_the_box_edge() {
+        const BOX_W: f32 = 1000.0;
+        let (lo, hi) = ink_x_span(&landed_wheel(Some(CssTextAlign::Right)), BOX_W, 1100);
+        assert!(
+            (BOX_W - hi as f32) <= 8.0,
+            "a right-aligned number_wheel must end on the box edge {BOX_W}, last ink at {hi}"
+        );
+        assert!(
+            lo > 700,
+            "a right-aligned number_wheel starts far from the left edge, first ink at {lo}"
+        );
+    }
+
+    #[test]
+    fn no_text_align_still_starts_at_the_box_left_edge() {
+        let (lo, _) = ink_x_span(&landed_wheel(None), 1000.0, 1100);
+        assert!(
+            lo < 12,
+            "without text_align the wheel keeps starting at the box's left edge, first ink at {lo}"
+        );
+    }
+
+    #[test]
+    fn a_box_with_no_usable_width_falls_back_to_the_left_edge() {
+        for width in [0.0_f32, -5.0, f32::INFINITY, f32::NAN] {
+            let advance = 240.0;
+            assert_eq!(
+                NumberWheel::align_offset(CssTextAlign::Center, width, advance),
+                0.0,
+                "a box width of {width} cannot centre anything — paint from the left \
+                 rather than off-screen"
+            );
+        }
     }
 
     #[test]
