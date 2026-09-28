@@ -167,6 +167,16 @@ pub struct CssStyle {
     /// governs its whole subtree). Not inherited via cascade.
     pub depth: Option<f32>,
 
+    /// Projects this container's direct children onto a cylinder or sphere
+    /// instead of the flat plane taffy laid them out on (issue #387). Layout
+    /// itself is untouched — columns and rows are still computed flat — this
+    /// only bends where each child is *painted*, around one vanishing point
+    /// shared by the whole container, which is what makes it different from
+    /// giving every child its own `transform`/`perspective`: those never
+    /// agree on a horizon, so a tilted grid of them stays a flat trapezoid.
+    /// See `rules/layout-surface.md`.
+    pub layout_surface: Option<LayoutSurface>,
+
     pub overflow: Option<Overflow>,
     pub overflow_x: Option<Overflow>,
     pub overflow_y: Option<Overflow>,
@@ -285,6 +295,8 @@ struct CssStyleWire {
     perspective_origin: Option<TransformOrigin>,
 
     depth: Option<f32>,
+
+    layout_surface: Option<LayoutSurface>,
 
     overflow: Option<Overflow>,
     overflow_x: Option<Overflow>,
@@ -1245,6 +1257,147 @@ pub enum TransformFn {
     Matrix3d {
         values: [f32; 16],
     },
+}
+
+/// `style.layout-surface` (issue #387): the shape a container's direct
+/// children are projected onto at paint time, plus the one perspective and
+/// turntable rotation shared by all of them. `radius`/`arc-x`/`arc-y` are
+/// pixels/degrees, not `Length`s — this bends a fixed layout, it does not
+/// participate in it.
+///
+/// `Cylinder` only curves around its `arc-x` (a horizontal wrap, like a
+/// scroll); a child's vertical position is left exactly where taffy put it.
+/// `Sphere` curves around both `arc-x` and `arc-y`, which is what a dome
+/// needs. Neither closes into a full globe — `arc-x`/`arc-y` describe a
+/// patch, typically well under 360°; wrapping dot data onto an actual closed
+/// globe is `dot_map`'s `projection: "orthographic"` instead (a different
+/// problem: culling a far hemisphere, not bending a flat grid).
+///
+/// **Depth ordering.** Children are painted in the same declaration/`z-index`
+/// order as a flat container — a cell that curves behind another one does
+/// not sort behind it. For an `arc-x`/`arc-y` patch well under 180° (the
+/// intended use: a dome of cards, not a fully enclosing sphere) every child
+/// still faces the camera, so this is not visible; a wide enough arc or
+/// enough `rotate-y` to turn cells past the limb can make a far cell paint
+/// over a near one. Tracked generally by #93, not solved here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum LayoutSurface {
+    Cylinder {
+        /// Cylinder radius in pixels.
+        radius: f32,
+        /// Total angular sweep across the container's width, in degrees.
+        #[serde(default)]
+        arc_x: f32,
+        /// Shared vanishing-point distance in pixels, `None` = orthographic
+        /// (curved, but no foreshortening).
+        #[serde(default)]
+        perspective: Option<f32>,
+        #[serde(default)]
+        rotate_x: Option<SurfaceAngle>,
+        #[serde(default)]
+        rotate_y: Option<SurfaceAngle>,
+    },
+    Sphere {
+        /// Sphere radius in pixels.
+        radius: f32,
+        /// Total angular sweep across the container's width, in degrees.
+        #[serde(default)]
+        arc_x: f32,
+        /// Total angular sweep across the container's height, in degrees.
+        #[serde(default)]
+        arc_y: f32,
+        /// Shared vanishing-point distance in pixels, `None` = orthographic
+        /// (curved, but no foreshortening).
+        #[serde(default)]
+        perspective: Option<f32>,
+        #[serde(default)]
+        rotate_x: Option<SurfaceAngle>,
+        #[serde(default)]
+        rotate_y: Option<SurfaceAngle>,
+    },
+}
+
+impl LayoutSurface {
+    pub fn radius(&self) -> f32 {
+        match self {
+            LayoutSurface::Cylinder { radius, .. } | LayoutSurface::Sphere { radius, .. } => {
+                *radius
+            }
+        }
+    }
+
+    pub fn arc_x(&self) -> f32 {
+        match self {
+            LayoutSurface::Cylinder { arc_x, .. } | LayoutSurface::Sphere { arc_x, .. } => *arc_x,
+        }
+    }
+
+    pub fn arc_y(&self) -> f32 {
+        match self {
+            LayoutSurface::Cylinder { .. } => 0.0,
+            LayoutSurface::Sphere { arc_y, .. } => *arc_y,
+        }
+    }
+
+    pub fn perspective(&self) -> Option<f32> {
+        match self {
+            LayoutSurface::Cylinder { perspective, .. }
+            | LayoutSurface::Sphere { perspective, .. } => *perspective,
+        }
+    }
+
+    pub fn rotate_x(&self) -> Option<&SurfaceAngle> {
+        match self {
+            LayoutSurface::Cylinder { rotate_x, .. } | LayoutSurface::Sphere { rotate_x, .. } => {
+                rotate_x.as_ref()
+            }
+        }
+    }
+
+    pub fn rotate_y(&self) -> Option<&SurfaceAngle> {
+        match self {
+            LayoutSurface::Cylinder { rotate_y, .. } | LayoutSurface::Sphere { rotate_y, .. } => {
+                rotate_y.as_ref()
+            }
+        }
+    }
+
+    pub fn is_sphere(&self) -> bool {
+        matches!(self, LayoutSurface::Sphere { .. })
+    }
+}
+
+/// A `layout-surface` `rotate-x`/`rotate-y` value: either a constant tilt in
+/// degrees, or a linear turntable sweep from `from` to `to` starting at
+/// scene time 0, over `duration` seconds (defaults to the scene's own
+/// duration, so "the dome turns slowly" needs no explicit timing).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum SurfaceAngle {
+    Fixed(f32),
+    Animated {
+        from: f32,
+        to: f32,
+        #[serde(default)]
+        duration: Option<f32>,
+    },
+}
+
+impl SurfaceAngle {
+    pub fn value_at(&self, time: f64, scene_duration: f64) -> f32 {
+        match self {
+            SurfaceAngle::Fixed(v) => *v,
+            SurfaceAngle::Animated { from, to, duration } => {
+                let dur = duration
+                    .map(|d| d as f64)
+                    .unwrap_or(scene_duration)
+                    .max(0.0001);
+                let p = (time / dur).clamp(0.0, 1.0) as f32;
+                from + (to - from) * p
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]

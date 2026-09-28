@@ -8,7 +8,8 @@ use skia_safe::{
 
 use crate::css::style::{
     Background, BackgroundLayer, BorderEdges, BorderRadius, BorderStyle, BoxShadow, ClipPath,
-    Color, CssStyle, Edges, Material, MaterialPreset, Overflow, TransformFn, TransformOrigin,
+    Color, CssStyle, Edges, LayoutSurface, Material, MaterialPreset, Overflow, TransformFn,
+    TransformOrigin,
 };
 use crate::css::units::{
     parse_origin_component, Length, LengthContext, LengthPercentage, ParsedLength,
@@ -75,6 +76,127 @@ fn apply_plane_camera(canvas: &Canvas, cam: &PlaneCamera, depth: f32, viewport: 
         ClipOp::Intersect,
         true,
     );
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SurfaceKind {
+    Cylinder,
+    Sphere,
+}
+
+struct LayoutSurfaceFrame {
+    kind: SurfaceKind,
+    radius: f32,
+    arc_x_deg: f32,
+    arc_y_deg: f32,
+    pivot: (f32, f32),
+    half_w: f32,
+    half_h: f32,
+    perspective: Option<f32>,
+    rotate_x_deg: f32,
+    rotate_y_deg: f32,
+}
+
+impl LayoutSurfaceFrame {
+    fn new(surface: &LayoutSurface, container: &BoxLayout, frame: &PaintFrame) -> Self {
+        let (cx, cy, cw, ch) = container.content_box();
+        let rotate_x_deg = surface
+            .rotate_x()
+            .map(|a| a.value_at(frame.time, frame.scene_duration))
+            .unwrap_or(0.0);
+        let rotate_y_deg = surface
+            .rotate_y()
+            .map(|a| a.value_at(frame.time, frame.scene_duration))
+            .unwrap_or(0.0);
+        Self {
+            kind: if surface.is_sphere() {
+                SurfaceKind::Sphere
+            } else {
+                SurfaceKind::Cylinder
+            },
+            radius: surface.radius(),
+            arc_x_deg: surface.arc_x(),
+            arc_y_deg: surface.arc_y(),
+            pivot: (cx + cw / 2.0, cy + ch / 2.0),
+            half_w: (cw / 2.0).max(0.001),
+            half_h: (ch / 2.0).max(0.001),
+            perspective: surface.perspective(),
+            rotate_x_deg,
+            rotate_y_deg,
+        }
+    }
+
+    fn child_delta(&self, nu: f32, nv: f32) -> (f32, f32, f32) {
+        layout_surface_child_delta(
+            self.kind,
+            self.radius,
+            self.arc_x_deg,
+            self.arc_y_deg,
+            nu,
+            nv,
+            self.half_w,
+            self.half_h,
+        )
+    }
+
+    fn apply(&self, canvas: &Canvas, child: &BoxLayout) {
+        let nu = ((child.cx() - self.pivot.0) / self.half_w).clamp(-1.0, 1.0);
+        let nv = ((child.cy() - self.pivot.1) / self.half_h).clamp(-1.0, 1.0);
+        let (dx, dy, dz) = self.child_delta(nu, nv);
+
+        let mut m = M44::new_identity();
+        m.pre_concat(&M44::translate(self.pivot.0, self.pivot.1, 0.0));
+        if let Some(d) = self.perspective {
+            m.pre_concat(&css_perspective_m44(d.max(1.0)));
+        }
+        if self.rotate_y_deg.abs() > 0.001 {
+            m.pre_concat(&M44::rotate(
+                V3::new(0.0, 1.0, 0.0),
+                self.rotate_y_deg.to_radians(),
+            ));
+        }
+        if self.rotate_x_deg.abs() > 0.001 {
+            m.pre_concat(&M44::rotate(
+                V3::new(1.0, 0.0, 0.0),
+                self.rotate_x_deg.to_radians(),
+            ));
+        }
+        m.pre_concat(&M44::translate(dx, dy, dz));
+        m.pre_concat(&M44::translate(-self.pivot.0, -self.pivot.1, 0.0));
+        canvas.concat_44(&m);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn layout_surface_child_delta(
+    kind: SurfaceKind,
+    radius: f32,
+    arc_x_deg: f32,
+    arc_y_deg: f32,
+    nu: f32,
+    nv: f32,
+    half_w: f32,
+    half_h: f32,
+) -> (f32, f32, f32) {
+    let nu = nu.clamp(-1.0, 1.0);
+    let nv = nv.clamp(-1.0, 1.0);
+    let theta_x = nu * arc_x_deg.to_radians() / 2.0;
+    let flat_x = nu * half_w;
+    match kind {
+        SurfaceKind::Sphere => {
+            let theta_y = nv * arc_y_deg.to_radians() / 2.0;
+            let flat_y = nv * half_h;
+            let target_x = radius * theta_x.sin() * theta_y.cos();
+            let target_y = radius * theta_y.sin();
+            let target_z = radius * (theta_x.cos() * theta_y.cos() - 1.0);
+            (target_x - flat_x, target_y - flat_y, target_z)
+        }
+        SurfaceKind::Cylinder => {
+            let target_x = radius * theta_x.sin();
+            let target_z = radius * (theta_x.cos() - 1.0);
+            (target_x - flat_x, 0.0, target_z)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -439,8 +561,24 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
 
     let mut indices: Vec<usize> = (0..node.children.len()).collect();
     indices.sort_by_key(|&i| node.children[i].css.z_index.unwrap_or(0));
-    for &i in &indices {
-        paint_node(canvas, &node.children[i], ctx, tree_depth + 1);
+    match node.css.layout_surface.as_ref() {
+        Some(surface) => {
+            let surface_frame = LayoutSurfaceFrame::new(surface, box_layout, ctx.frame);
+            for &i in &indices {
+                let child = &node.children[i];
+                canvas.save();
+                if let Some(child_layout) = ctx.layout.get(child.id) {
+                    surface_frame.apply(canvas, child_layout);
+                }
+                paint_node(canvas, child, ctx, tree_depth + 1);
+                canvas.restore();
+            }
+        }
+        None => {
+            for &i in &indices {
+                paint_node(canvas, &node.children[i], ctx, tree_depth + 1);
+            }
+        }
     }
 
     if opened_overflow_clip {
@@ -5108,5 +5246,329 @@ mod animated_transform_tests {
         let (tx0, ty0, ..) = animated_transform(&orbit(0.0), &l, (1920.0, 1080.0));
         let (tx1, ty1, ..) = animated_transform(&orbit(90.0), &l, (1920.0, 1080.0));
         assert!((tx0 - tx1).abs() > 1.0 || (ty0 - ty1).abs() > 1.0);
+    }
+}
+
+#[cfg(test)]
+mod layout_surface_tests {
+    use super::*;
+
+    use crate::css::style::{
+        Background, Color as CssColor, CssStyle, Display, FlexDirection, GridTrack, LayoutSurface,
+        Size as CSize, SurfaceAngle,
+    };
+    use crate::css::taffy_bridge::ConversionContext;
+    use crate::css::units::LengthPercentage as CLP;
+    use crate::engine::box_tree::{BoxKind, BoxNode};
+    use crate::engine::layout_pass::run_layout;
+
+    fn test_frame(w: u32, h: u32) -> PaintFrame {
+        PaintFrame {
+            light: Default::default(),
+            time: 0.0,
+            scenario_time: 0.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: w,
+            video_height: h,
+            scene_duration: 1.0,
+            camera: None,
+        }
+    }
+
+    fn render_pixels(root: &mut BoxNode, w: u32, h: u32, time: f64) -> Vec<u8> {
+        root.assign_ids(0);
+        let layout = run_layout(root, (w as f32, h as f32), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w as i32, h as i32)).unwrap();
+        let mut frame = test_frame(w, h);
+        frame.time = time;
+        paint_tree(surface.canvas(), root, &layout, &frame, &NoopDispatcher);
+        let info = skia_safe::ImageInfo::new(
+            (w as i32, h as i32),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        surface.read_pixels(&info, &mut buf, (w * 4) as usize, (0, 0));
+        buf
+    }
+
+    fn colored_cell(color: &str) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                background: Some(Background::Color(CssColor::String(color.to_string()))),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn three_column_grid(w: f32, h: f32, layout_surface: Option<LayoutSurface>) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                display: Some(Display::Grid),
+                width: Some(CSize::Length(CLP::Px(w))),
+                height: Some(CSize::Length(CLP::Px(h))),
+                grid_template_columns: Some(vec![
+                    GridTrack::Fr(1.0),
+                    GridTrack::Fr(1.0),
+                    GridTrack::Fr(1.0),
+                ]),
+                layout_surface,
+                ..Default::default()
+            },
+            children: vec![
+                colored_cell("#ff0000"),
+                colored_cell("#00ff00"),
+                colored_cell("#0000ff"),
+            ],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn root_with(child: BoxNode, w: f32, h: f32) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                display: Some(Display::Flex),
+                flex_direction: Some(FlexDirection::Column),
+                width: Some(CSize::Length(CLP::Px(w))),
+                height: Some(CSize::Length(CLP::Px(h))),
+                background: Some(Background::Color(CssColor::String("#000000".into()))),
+                ..Default::default()
+            },
+            children: vec![child],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn channel_extent(
+        buf: &[u8],
+        w: u32,
+        h: u32,
+        is_match: impl Fn(u8, u8, u8) -> bool,
+    ) -> Option<(usize, usize)> {
+        let mut lo = usize::MAX;
+        let mut hi = 0usize;
+        let mut found = false;
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                if is_match(buf[i], buf[i + 1], buf[i + 2]) {
+                    lo = lo.min(x as usize);
+                    hi = hi.max(x as usize);
+                    found = true;
+                }
+            }
+        }
+        found.then_some((lo, hi))
+    }
+
+    fn is_red(r: u8, g: u8, b: u8) -> bool {
+        r > 150 && g < 80 && b < 80
+    }
+    fn is_green(r: u8, g: u8, b: u8) -> bool {
+        g > 150 && r < 80 && b < 80
+    }
+    fn is_blue(r: u8, g: u8, b: u8) -> bool {
+        b > 150 && r < 80 && g < 80
+    }
+
+    fn sphere(radius: f32, arc_x: f32, arc_y: f32, perspective: Option<f32>) -> LayoutSurface {
+        LayoutSurface::Sphere {
+            radius,
+            arc_x,
+            arc_y,
+            perspective,
+            rotate_x: None,
+            rotate_y: None,
+        }
+    }
+
+    #[test]
+    fn no_layout_surface_leaves_a_flat_grid_byte_identical() {
+        let mut a = root_with(three_column_grid(900.0, 300.0, None), 900.0, 300.0);
+        let mut b = root_with(three_column_grid(900.0, 300.0, None), 900.0, 300.0);
+        let out_a = render_pixels(&mut a, 900, 300, 0.0);
+        let out_b = render_pixels(&mut b, 900, 300, 0.0);
+        assert_eq!(
+            out_a, out_b,
+            "a container with no layout-surface must render the exact same bytes on every run \
+             (no feature-flag leakage into the default path)"
+        );
+
+        let widths: Vec<usize> = [is_red, is_green, is_blue]
+            .iter()
+            .map(|f| {
+                let (lo, hi) = channel_extent(&out_a, 900, 300, *f).expect("cell must be visible");
+                hi - lo + 1
+            })
+            .collect();
+        assert_eq!(
+            widths[0], widths[1],
+            "flat grid: every column must be exactly as wide as the others"
+        );
+        assert_eq!(
+            widths[1], widths[2],
+            "flat grid: every column must be exactly as wide as the others"
+        );
+    }
+
+    #[test]
+    fn a_sphere_surface_makes_the_side_columns_narrower_than_the_centre_one() {
+        let mut flat = root_with(three_column_grid(900.0, 300.0, None), 900.0, 300.0);
+        let mut curved = root_with(
+            three_column_grid(900.0, 300.0, Some(sphere(700.0, 140.0, 0.0, Some(1400.0)))),
+            900.0,
+            300.0,
+        );
+        let flat_out = render_pixels(&mut flat, 900, 300, 0.0);
+        let curved_out = render_pixels(&mut curved, 900, 300, 0.0);
+
+        assert_ne!(
+            flat_out, curved_out,
+            "declaring a layout-surface on the container must change the rendered frame"
+        );
+
+        let (red_lo, red_hi) =
+            channel_extent(&curved_out, 900, 300, is_red).expect("left column must be visible");
+        let (green_lo, green_hi) =
+            channel_extent(&curved_out, 900, 300, is_green).expect("centre column must be visible");
+        let red_w = red_hi - red_lo + 1;
+        let green_w = green_hi - green_lo + 1;
+
+        assert!(
+            red_w < green_w,
+            "a column near the arc's edge must foreshorten more than the centre column: \
+             edge={red_w}px, centre={green_w}px"
+        );
+    }
+
+    #[test]
+    fn layout_surface_child_delta_is_zero_at_the_centre_of_the_arc() {
+        let (dx, dy, dz) = layout_surface_child_delta(
+            SurfaceKind::Sphere,
+            1000.0,
+            120.0,
+            60.0,
+            0.0,
+            0.0,
+            400.0,
+            200.0,
+        );
+        assert_eq!((dx, dy, dz), (0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn sphere_delta_recedes_in_z_away_from_the_centre() {
+        let centre = layout_surface_child_delta(
+            SurfaceKind::Sphere,
+            1000.0,
+            140.0,
+            0.0,
+            0.0,
+            0.0,
+            400.0,
+            200.0,
+        );
+        let mid = layout_surface_child_delta(
+            SurfaceKind::Sphere,
+            1000.0,
+            140.0,
+            0.0,
+            0.5,
+            0.0,
+            400.0,
+            200.0,
+        );
+        let edge = layout_surface_child_delta(
+            SurfaceKind::Sphere,
+            1000.0,
+            140.0,
+            0.0,
+            1.0,
+            0.0,
+            400.0,
+            200.0,
+        );
+        assert_eq!(
+            centre.2, 0.0,
+            "the centre of the arc sits at the reference depth"
+        );
+        assert!(
+            mid.2 < 0.0 && edge.2 < mid.2,
+            "depth must recede monotonically away from the centre: mid={:?} edge={:?}",
+            mid.2,
+            edge.2
+        );
+    }
+
+    #[test]
+    fn adjacent_cell_gaps_shrink_towards_the_edge_of_the_arc() {
+        let half_w = 450.0;
+        let x_at = |nu: f32| {
+            let (dx, _, _) = layout_surface_child_delta(
+                SurfaceKind::Sphere,
+                700.0,
+                150.0,
+                0.0,
+                nu,
+                0.0,
+                half_w,
+                1.0,
+            );
+            nu * half_w + dx
+        };
+        let centre_gap = (x_at(0.1) - x_at(-0.1)).abs();
+        let edge_gap = (x_at(1.0) - x_at(0.8)).abs();
+        assert!(
+            edge_gap < centre_gap,
+            "a projected grid's cells must not all be the same width — a step near the limb \
+             must map to a smaller screen gap than the same step at the centre: \
+             centre_gap={centre_gap:.2}px, edge_gap={edge_gap:.2}px"
+        );
+    }
+
+    #[test]
+    fn cylinder_ignores_the_vertical_axis() {
+        let (_, dy, _) = layout_surface_child_delta(
+            SurfaceKind::Cylinder,
+            1000.0,
+            140.0,
+            999.0,
+            0.3,
+            0.7,
+            400.0,
+            200.0,
+        );
+        assert_eq!(
+            dy, 0.0,
+            "a cylinder only wraps its arc-x — a child's vertical position must be untouched"
+        );
+    }
+
+    #[test]
+    fn rotate_y_animates_linearly_from_scene_start_to_the_scene_duration() {
+        let angle = SurfaceAngle::Animated {
+            from: -20.0,
+            to: 40.0,
+            duration: None,
+        };
+        assert_eq!(angle.value_at(0.0, 2.0), -20.0);
+        assert_eq!(angle.value_at(2.0, 2.0), 40.0);
+        assert!((angle.value_at(1.0, 2.0) - 10.0).abs() < 0.001);
     }
 }
