@@ -23,6 +23,7 @@ If you're asked for an effect from the Hyperframes catalogue (or an effect descr
 | Page Slide | `transition: { "type": "slide" }` |
 | Chromatic Aberration Wipe | `transition: { "type": "chromatic_wipe" }` |
 | Card Explosion / Glass Break | `style.animation: [{ "name": "shatter" }]` — see [shatter.md](shatter.md) |
+| Sparkle / Pop Burst | `style.animation: [{ "name": "burst" }]` — see [burst.md](burst.md) |
 
 ## Two naming traps
 
