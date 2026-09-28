@@ -414,6 +414,10 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         }
     }
 
+    if let Some((cfg, progress)) = active_burst(&node.css, ctx.frame.time) {
+        paint_burst(canvas, box_layout, cfg, progress);
+    }
+
     canvas.restore();
 }
 
@@ -893,6 +897,83 @@ fn paint_shattered_node(
         paint.set_alpha(alpha);
         canvas.draw_image(&image, (box_layout.x, box_layout.y), Some(&paint));
         canvas.restore();
+    }
+}
+
+const MAX_BURST_COUNT: u32 = 64;
+
+fn active_burst(css: &CssStyle, time: f64) -> Option<(&crate::schema::BurstConfig, f32)> {
+    let cfg = css.animation.iter().find_map(|e| match e {
+        crate::schema::AnimationEffect::Burst(c) => Some(c),
+        _ => None,
+    })?;
+    crate::engine::animator::burst_progress(cfg, time).map(|progress| (cfg, progress))
+}
+
+fn burst_track_start(half_width: f32, half_height: f32, dir: (f32, f32)) -> f32 {
+    let to_vertical = if dir.0.abs() < 1e-6 {
+        f32::INFINITY
+    } else {
+        half_width / dir.0.abs()
+    };
+    let to_horizontal = if dir.1.abs() < 1e-6 {
+        f32::INFINITY
+    } else {
+        half_height / dir.1.abs()
+    };
+    let reach = to_vertical.min(to_horizontal);
+    if reach.is_finite() {
+        reach
+    } else {
+        half_width.max(half_height)
+    }
+}
+
+fn paint_burst(
+    canvas: &Canvas,
+    box_layout: &BoxLayout,
+    cfg: &crate::schema::BurstConfig,
+    progress: f32,
+) {
+    let count = cfg.count.clamp(1, MAX_BURST_COUNT);
+    let length = cfg.length.max(0.0);
+    let width = cfg.width.max(0.0);
+    if length <= 0.0 || width <= 0.0 {
+        return;
+    }
+    let jitter = cfg.jitter.clamp(0.0, 1.0);
+    let centre = (
+        box_layout.x + box_layout.width * 0.5,
+        box_layout.y + box_layout.height * 0.5,
+    );
+    let half_width = box_layout.width * 0.5;
+    let half_height = box_layout.height * 0.5;
+    let spacing = std::f32::consts::TAU / count as f32;
+
+    let mut paint = Paint::default();
+    paint.set_anti_alias(true);
+    paint.set_style(PaintStyle::Stroke);
+    paint.set_stroke_width(width);
+    paint.set_stroke_cap(skia_safe::PaintCap::Round);
+    paint.set_color(parse_color_string(&cfg.color).unwrap_or_else(|| unresolved_color(&cfg.color)));
+
+    for i in 0..count {
+        let angle = i as f32 * spacing + (shatter_hash(cfg.seed, i, 11) - 0.5) * jitter * spacing;
+        let dir = (angle.cos(), angle.sin());
+        let stroke_length = length * (1.0 + (shatter_hash(cfg.seed, i, 12) - 0.5) * jitter);
+        let phase = shatter_hash(cfg.seed, i, 13) * jitter * 0.5;
+        let (tail, head) = crate::engine::animator::burst_stroke_span(progress, phase);
+        if (head - tail) * stroke_length < 0.5 {
+            continue;
+        }
+        let base = burst_track_start(half_width, half_height, dir) + cfg.gap.max(0.0);
+        let near = base + tail * stroke_length;
+        let far = base + head * stroke_length;
+        canvas.draw_line(
+            (centre.0 + dir.0 * near, centre.1 + dir.1 * near),
+            (centre.0 + dir.0 * far, centre.1 + dir.1 * far),
+            &paint,
+        );
     }
 }
 
@@ -3881,8 +3962,8 @@ mod paint_order_tests {
     use crate::engine::box_tree::{BoxKind, BoxNode};
     use crate::engine::layout_pass::run_layout;
     use crate::schema::{
-        AnimationEffect, ChromaticAberrationConfig, EasingType, ShatterConfig, ShatterMode,
-        ShatterOrigin,
+        AnimationEffect, BurstConfig, ChromaticAberrationConfig, EasingType, ShatterConfig,
+        ShatterMode, ShatterOrigin,
     };
 
     fn test_frame(w: u32, h: u32) -> PaintFrame {
@@ -5169,6 +5250,128 @@ mod paint_order_tests {
             }
         }
         false
+    }
+
+    fn burst_cfg() -> BurstConfig {
+        BurstConfig {
+            delay: 0.2,
+            duration: 0.6,
+            count: 4,
+            length: 60.0,
+            gap: 14.0,
+            width: 6.0,
+            color: "#ff0000".to_string(),
+            seed: 5,
+            jitter: 0.0,
+        }
+    }
+
+    fn burst_node(cfg: BurstConfig) -> BoxNode {
+        white_square(vec![AnimationEffect::Burst(cfg)])
+    }
+
+    #[test]
+    fn burst_is_pixel_identical_to_no_effect_before_delay_and_at_or_after_the_end() {
+        let mut plain = root_node(400.0, 400.0, "#000000", vec![white_square(vec![])]);
+        let baseline = render_pixels_at(&mut plain, 400, 400, 5.0);
+
+        let cfg = burst_cfg();
+        let mut before = root_node(400.0, 400.0, "#000000", vec![burst_node(cfg.clone())]);
+        assert_eq!(
+            baseline,
+            render_pixels_at(&mut before, 400, 400, 0.0),
+            "before delay a burst must contribute nothing at all — pixel-identical to a node \
+             with no burst in its animation list"
+        );
+
+        let mut at_end = root_node(400.0, 400.0, "#000000", vec![burst_node(cfg.clone())]);
+        assert_eq!(
+            baseline,
+            render_pixels_at(&mut at_end, 400, 400, 0.8),
+            "at delay + duration the window is already closed — no stroke may survive the last \
+             frame and bleed into the next scene"
+        );
+
+        let mut after = root_node(400.0, 400.0, "#000000", vec![burst_node(cfg)]);
+        assert_eq!(
+            baseline,
+            render_pixels_at(&mut after, 400, 400, 5.0),
+            "long after the window the node is plain again"
+        );
+    }
+
+    #[test]
+    fn burst_paints_ink_outside_the_nodes_own_box_at_full_extension() {
+        let mut plain = root_node(400.0, 400.0, "#000000", vec![white_square(vec![])]);
+        let baseline = render_pixels_at(&mut plain, 400, 400, 5.0);
+        assert!(
+            !any_ink_in_band(&baseline, 400, 226, 155, 290, 166),
+            "the band to the right of the square must be empty without a burst"
+        );
+
+        let mut bursting = root_node(400.0, 400.0, "#000000", vec![burst_node(burst_cfg())]);
+        let mid = render_pixels_at(&mut bursting, 400, 400, 0.5);
+        assert!(
+            any_ink_in_band(&mid, 400, 226, 155, 290, 166),
+            "at the halfway point the head is at the far end of its track — a stroke must be \
+             painted well outside the node's own box"
+        );
+    }
+
+    #[test]
+    fn burst_leaves_the_node_itself_untouched() {
+        let mut plain = root_node(400.0, 400.0, "#000000", vec![white_square(vec![])]);
+        let baseline = render_pixels_at(&mut plain, 400, 400, 5.0);
+        let mut bursting = root_node(400.0, 400.0, "#000000", vec![burst_node(burst_cfg())]);
+        let mid = render_pixels_at(&mut bursting, 400, 400, 0.5);
+
+        for y in 100..220 {
+            for x in 100..220 {
+                let i = ((y * 400 + x) * 4) as usize;
+                assert_eq!(
+                    (baseline[i], baseline[i + 1], baseline[i + 2]),
+                    (mid[i], mid[i + 1], mid[i + 2]),
+                    "gap keeps every stroke off the box — pixel ({x}, {y}) inside the node \
+                     changed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn burst_strokes_sit_on_the_rays_count_asks_for_and_nowhere_else() {
+        let mut bursting = root_node(400.0, 400.0, "#000000", vec![burst_node(burst_cfg())]);
+        let mid = render_pixels_at(&mut bursting, 400, 400, 0.5);
+
+        assert!(
+            any_ink_in_band(&mid, 400, 240, 156, 260, 165),
+            "count: 4 with no jitter puts a stroke straight to the right of the centre"
+        );
+        assert!(
+            any_ink_in_band(&mid, 400, 156, 240, 165, 260),
+            "count: 4 with no jitter puts a stroke straight below the centre"
+        );
+        assert!(
+            !any_ink_in_band(&mid, 400, 230, 230, 272, 272),
+            "count: 4 leaves the diagonals empty — the ring is not a halo"
+        );
+    }
+
+    #[test]
+    fn burst_two_renders_of_the_same_instant_are_byte_identical() {
+        let cfg = BurstConfig {
+            jitter: 0.9,
+            count: 24,
+            ..burst_cfg()
+        };
+        let mut first = root_node(400.0, 400.0, "#000000", vec![burst_node(cfg.clone())]);
+        let mut second = root_node(400.0, 400.0, "#000000", vec![burst_node(cfg)]);
+        assert_eq!(
+            render_pixels_at(&mut first, 400, 400, 0.45),
+            render_pixels_at(&mut second, 400, 400, 0.45),
+            "every stroke's angle, length and phase comes from (seed, index) alone — the same \
+             instant must render byte-identically for the parallel renderer"
+        );
     }
 
     #[test]

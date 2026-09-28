@@ -338,6 +338,25 @@ pub fn shatter_progress(cfg: &crate::schema::ShatterConfig, time: f64) -> Option
     }
 }
 
+pub fn burst_progress(cfg: &crate::schema::BurstConfig, time: f64) -> Option<f32> {
+    if cfg.duration <= 0.0 {
+        return None;
+    }
+    let elapsed = time - cfg.delay;
+    if elapsed < 0.0 || elapsed >= cfg.duration {
+        return None;
+    }
+    Some((elapsed / cfg.duration) as f32)
+}
+
+pub fn burst_stroke_span(progress: f32, phase: f32) -> (f32, f32) {
+    let phase = phase.clamp(0.0, 0.9);
+    let local = ((progress - phase) / (1.0 - phase)).clamp(0.0, 1.0);
+    let head = ease_out_cubic((local * 2.0).min(1.0) as f64) as f32;
+    let tail = ease_in_cubic((local * 2.0 - 1.0).clamp(0.0, 1.0) as f64) as f32;
+    (tail, head)
+}
+
 #[cfg(test)]
 mod shatter_progress_tests {
     use super::*;
@@ -3245,5 +3264,94 @@ mod repeat_cycle_tests {
             "must stay frozen: {}",
             at(5.0)
         );
+    }
+}
+
+#[cfg(test)]
+mod burst_progress_tests {
+    use super::*;
+    use crate::schema::BurstConfig;
+
+    fn cfg() -> BurstConfig {
+        BurstConfig {
+            delay: 1.0,
+            duration: 0.5,
+            count: 8,
+            length: 40.0,
+            gap: 12.0,
+            width: 4.0,
+            color: "#FFB020".to_string(),
+            seed: 3,
+            jitter: 0.2,
+        }
+    }
+
+    #[test]
+    fn nothing_before_the_delay_and_nothing_at_or_after_the_end() {
+        let c = cfg();
+        assert_eq!(burst_progress(&c, c.delay - 0.01), None);
+        assert_eq!(burst_progress(&c, c.delay + c.duration), None);
+        assert_eq!(burst_progress(&c, 9.0), None);
+        assert!(burst_progress(&c, c.delay).is_some());
+        assert!(burst_progress(&c, c.delay + c.duration * 0.99).is_some());
+    }
+
+    #[test]
+    fn a_frame_landing_one_ulp_inside_the_window_still_paints_nothing() {
+        let mut c = cfg();
+        c.duration = 0.4;
+        let at_end = c.delay + c.duration;
+        let progress = burst_progress(&c, at_end)
+            .expect("0.4 is not exactly representable: delay + duration - delay < duration");
+        let (tail, head) = burst_stroke_span(progress, 0.0);
+        assert_eq!(
+            tail, head,
+            "the window test cannot be exact for every duration, so the guarantee is \
+             geometric: a stroke at progress 1.0 has zero length and paints nothing"
+        );
+    }
+
+    #[test]
+    fn a_zero_or_negative_duration_disables_the_effect_entirely() {
+        let mut c = cfg();
+        c.duration = 0.0;
+        assert_eq!(burst_progress(&c, 1.0), None);
+        c.duration = -1.0;
+        assert_eq!(burst_progress(&c, 1.0), None);
+    }
+
+    #[test]
+    fn the_stroke_has_zero_length_at_both_ends_of_its_own_window() {
+        let (tail, head) = burst_stroke_span(0.0, 0.0);
+        assert_eq!(tail, head, "at the start the head has not left the tail");
+        let (tail, head) = burst_stroke_span(1.0, 0.0);
+        assert_eq!(tail, head, "at the end the tail has caught the head");
+    }
+
+    #[test]
+    fn the_head_reaches_the_far_end_halfway_through_while_the_tail_waits() {
+        let (tail, head) = burst_stroke_span(0.5, 0.0);
+        assert!((head - 1.0).abs() < 1e-6, "head at the far end, got {head}");
+        assert_eq!(tail, 0.0, "tail has not started");
+    }
+
+    #[test]
+    fn the_head_never_overtakes_the_far_end_nor_the_tail_the_head() {
+        for step in 0..=100 {
+            let p = step as f32 / 100.0;
+            for phase in [0.0_f32, 0.15, 0.4] {
+                let (tail, head) = burst_stroke_span(p, phase);
+                assert!((0.0..=1.0).contains(&head), "head {head} at p={p}");
+                assert!(tail <= head + 1e-6, "tail {tail} past head {head} at p={p}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_phase_delays_the_stroke_without_letting_it_outlive_the_window() {
+        let (tail, head) = burst_stroke_span(0.3, 0.4);
+        assert_eq!(tail, head, "a phased stroke has not started at p=0.3");
+        let (tail, head) = burst_stroke_span(1.0, 0.4);
+        assert_eq!(tail, head, "a phased stroke still ends with the window");
     }
 }

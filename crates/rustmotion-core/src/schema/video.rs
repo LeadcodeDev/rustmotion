@@ -111,6 +111,9 @@ pub enum AnimationEffect {
     /// partition and flies the pieces apart (or together). See
     /// [`ShatterConfig`]'s doc comment.
     Shatter(ShatterConfig),
+    /// Throws a ring of short strokes outward from just off the node's own
+    /// box edge, then retracts them. See [`BurstConfig`]'s doc comment.
+    Burst(BurstConfig),
 }
 
 impl AnimationEffect {
@@ -133,6 +136,7 @@ impl AnimationEffect {
             Shimmer(c) => c.delay += by,
             ChromaticAberration(c) => c.delay += by,
             Shatter(c) => c.delay += by,
+            Burst(c) => c.delay += by,
             Glow(_) | Wiggle(_) | Orbit(_) | MotionBlur(_) | Trail(_) => {}
         }
     }
@@ -1096,6 +1100,79 @@ impl Default for ShatterOrigin {
 
 fn default_shatter_origin_component() -> f32 {
     0.5
+}
+
+/// Configuration for the `burst` animation effect: a ring of short strokes
+/// that shoot outward from just off the node's own box edge and then retract,
+/// the splash of ink a pill or a badge throws when it pops in.
+///
+/// Nothing about the node itself is touched — the strokes are painted over it,
+/// outside its box, and take no layout space. Outside
+/// `[delay, delay + duration)` the effect contributes nothing at all.
+///
+/// The stroke is drawn by a head and a tail that each cross the stroke's track
+/// once: the head runs out over the first half of the window, the tail follows
+/// over the second. Both ends of the window therefore have a zero-length
+/// stroke — the burst is invisible at `delay` and at `delay + duration`
+/// without ever being a fade that merely gets small.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BurstConfig {
+    /// Delay before the strokes start shooting out (seconds).
+    #[serde(default)]
+    pub delay: f64,
+    /// Full out-and-back duration (seconds). The head reaches the far end of
+    /// its track at the halfway point.
+    #[serde(default = "default_burst_duration")]
+    pub duration: f64,
+    /// Number of strokes in the ring (default 8, clamped 1..=64).
+    #[serde(default = "default_burst_count")]
+    pub count: u32,
+    /// Length of each stroke's track, in px, measured outward from `gap`
+    /// (default 40).
+    #[serde(default = "default_burst_length")]
+    pub length: f32,
+    /// Distance in px between the node's box edge and the near end of every
+    /// stroke's track (default 12). The box is never overdrawn.
+    #[serde(default = "default_burst_gap")]
+    pub gap: f32,
+    /// Stroke width in px (default 4).
+    #[serde(default = "default_burst_width")]
+    pub width: f32,
+    /// Stroke colour (hex string, default "#FFB020").
+    #[serde(default = "default_burst_color")]
+    pub color: String,
+    /// Seed for the per-stroke angle, length and phase jitter.
+    #[serde(default)]
+    pub seed: u32,
+    /// How far each stroke may stray from its even share of the ring, as a
+    /// fraction of the spacing between two strokes (default 0.2). `0` gives a
+    /// perfectly regular ring; `1` lets a stroke reach its neighbour's slot.
+    /// It also scales the per-stroke length and phase jitter.
+    #[serde(default = "default_burst_jitter")]
+    pub jitter: f32,
+}
+
+fn default_burst_duration() -> f64 {
+    0.4
+}
+fn default_burst_count() -> u32 {
+    8
+}
+fn default_burst_length() -> f32 {
+    40.0
+}
+fn default_burst_gap() -> f32 {
+    12.0
+}
+fn default_burst_width() -> f32 {
+    4.0
+}
+fn default_burst_color() -> String {
+    "#FFB020".to_string()
+}
+fn default_burst_jitter() -> f32 {
+    0.2
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
