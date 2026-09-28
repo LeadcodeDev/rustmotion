@@ -2,7 +2,7 @@
 name = "rustmotion-components"
 version.workspace = true
 edition = "2021"
-description = "Component library for rustmotion (60 components)"
+description = "Component library for rustmotion (61 components)"
 license = "MIT"
 repository = "https://github.com/LeadcodeDev/rustmotion"
 readme = "../../README.md"

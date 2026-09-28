@@ -1410,6 +1410,14 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 css.height = Some(CSize::Length(CLP::String("100%".into())));
             }
         }
+        Emitter(_) => {
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::String("100%".into())));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::String("100%".into())));
+            }
+        }
         Switch(c) => {
             if css.width.is_none() {
                 css.width = Some(CSize::Length(CLP::Px(c.width)));
@@ -1805,6 +1813,7 @@ fn component_style(c: &Component) -> &CssStyle {
         Countdown(c) => &c.style,
         Divider(c) => &c.style,
         DotMap(c) => &c.style,
+        Emitter(c) => &c.style,
         Gauge(c) => &c.style,
         GradientText(c) => &c.style,
         Heatmap(c) => &c.style,
@@ -1864,6 +1873,7 @@ pub fn component_kind(c: &Component) -> &'static str {
         Countdown(_) => "countdown",
         Divider(_) => "divider",
         DotMap(_) => "dot_map",
+        Emitter(_) => "emitter",
         Gauge(_) => "gauge",
         GradientText(_) => "gradient_text",
         Heatmap(_) => "heatmap",
