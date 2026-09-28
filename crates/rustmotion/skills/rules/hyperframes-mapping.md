@@ -22,6 +22,7 @@ If you're asked for an effect from the Hyperframes catalogue (or an effect descr
 | Dynamic Grid | `animated-background` preset `grid_lines` |
 | Page Slide | `transition: { "type": "slide" }` |
 | Chromatic Aberration Wipe | `transition: { "type": "chromatic_wipe" }` |
+| Card Explosion / Glass Break | `style.animation: [{ "name": "shatter" }]` — see [shatter.md](shatter.md) |
 
 ## Two naming traps
 

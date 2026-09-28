@@ -403,6 +403,28 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         }
     }
 
+    match active_shatter(&node.css, ctx.frame.time) {
+        Some((cfg, progress)) => {
+            paint_shattered_node(
+                canvas, node, box_layout, length_ctx, ctx, tree_depth, cfg, progress,
+            );
+        }
+        None => {
+            paint_node_visual(canvas, node, box_layout, length_ctx, ctx, tree_depth);
+        }
+    }
+
+    canvas.restore();
+}
+
+fn paint_node_visual(
+    canvas: &Canvas,
+    node: &BoxNode,
+    box_layout: &BoxLayout,
+    length_ctx: LengthContext,
+    ctx: &PaintContext,
+    tree_depth: usize,
+) {
     let overflow = node.css.overflow.unwrap_or(Overflow::Visible);
 
     let opacity = node.css.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
@@ -606,7 +628,272 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
     if opened_opacity_layer {
         canvas.restore();
     }
-    canvas.restore();
+}
+
+const MAX_SHATTER_PIECES: u32 = 64;
+
+fn active_shatter(css: &CssStyle, time: f64) -> Option<(&crate::schema::ShatterConfig, f32)> {
+    let cfg = css.animation.iter().find_map(|e| match e {
+        crate::schema::AnimationEffect::Shatter(c) => Some(c),
+        _ => None,
+    })?;
+    crate::engine::animator::shatter_progress(cfg, time).map(|progress| (cfg, progress))
+}
+
+fn shatter_hash(seed: u32, index: u32, salt: u32) -> f32 {
+    let mut h = (index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (seed as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)
+        ^ ((salt as u64) << 32).wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^= h >> 30;
+    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 27;
+    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^= h >> 31;
+    ((h >> 11) as f64 / (1u64 << 53) as f64) as f32
+}
+
+fn shatter_seed_points(width: f32, height: f32, pieces: u32, seed: u32) -> Vec<(f32, f32)> {
+    let cols = (pieces as f32).sqrt().ceil().max(1.0) as u32;
+    let rows = pieces.div_ceil(cols).max(1);
+    let cell_w = width / cols as f32;
+    let cell_h = height / rows as f32;
+    (0..pieces)
+        .map(|i| {
+            let col = i % cols;
+            let row = i / cols;
+            let jitter_x = (shatter_hash(seed, i, 1) - 0.5) * cell_w * 0.7;
+            let jitter_y = (shatter_hash(seed, i, 2) - 0.5) * cell_h * 0.7;
+            let x = ((col as f32 + 0.5) * cell_w + jitter_x).clamp(0.0, width);
+            let y = ((row as f32 + 0.5) * cell_h + jitter_y).clamp(0.0, height);
+            (x, y)
+        })
+        .collect()
+}
+
+fn shatter_polygon_side(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
+    (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0)
+}
+
+fn shatter_segment_intersection(
+    p0: (f32, f32),
+    p1: (f32, f32),
+    a: (f32, f32),
+    b: (f32, f32),
+) -> (f32, f32) {
+    let (x1, y1) = p0;
+    let (x2, y2) = p1;
+    let (x3, y3) = a;
+    let (x4, y4) = b;
+    let denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+    if denom.abs() < 1e-6 {
+        return p1;
+    }
+    let t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+    (x1 + t * (x2 - x1), y1 + t * (y2 - y1))
+}
+
+fn shatter_clip_half_plane(poly: Vec<(f32, f32)>, a: (f32, f32), b: (f32, f32)) -> Vec<(f32, f32)> {
+    if poly.is_empty() {
+        return poly;
+    }
+    let n = poly.len();
+    let mut out = Vec::with_capacity(n + 1);
+    for idx in 0..n {
+        let cur = poly[idx];
+        let prev = poly[(idx + n - 1) % n];
+        let cur_in = shatter_polygon_side(cur, a, b) >= 0.0;
+        let prev_in = shatter_polygon_side(prev, a, b) >= 0.0;
+        if cur_in != prev_in {
+            out.push(shatter_segment_intersection(prev, cur, a, b));
+        }
+        if cur_in {
+            out.push(cur);
+        }
+    }
+    out
+}
+
+fn shatter_clip_by_bisector(
+    poly: Vec<(f32, f32)>,
+    keep: (f32, f32),
+    other: (f32, f32),
+    reach: f32,
+) -> Vec<(f32, f32)> {
+    let mid = ((keep.0 + other.0) * 0.5, (keep.1 + other.1) * 0.5);
+    let dir = (other.0 - keep.0, other.1 - keep.1);
+    let len = (dir.0 * dir.0 + dir.1 * dir.1).sqrt().max(1e-6);
+    let perp = (-dir.1 / len, dir.0 / len);
+    let mut a = (mid.0 + perp.0 * reach, mid.1 + perp.1 * reach);
+    let mut b = (mid.0 - perp.0 * reach, mid.1 - perp.1 * reach);
+    if shatter_polygon_side(keep, a, b) < 0.0 {
+        std::mem::swap(&mut a, &mut b);
+    }
+    shatter_clip_half_plane(poly, a, b)
+}
+
+fn shatter_cells(width: f32, height: f32, pieces: u32, seed: u32) -> Vec<Vec<(f32, f32)>> {
+    if width <= 0.0 || height <= 0.0 {
+        return Vec::new();
+    }
+    let pieces = pieces.clamp(1, MAX_SHATTER_PIECES);
+    let points = shatter_seed_points(width, height, pieces, seed);
+    let reach = (width + height) * 4.0 + 1000.0;
+    (0..points.len())
+        .map(|i| {
+            let mut poly = vec![(0.0, 0.0), (width, 0.0), (width, height), (0.0, height)];
+            for (j, &other) in points.iter().enumerate() {
+                if j == i || poly.is_empty() {
+                    continue;
+                }
+                poly = shatter_clip_by_bisector(poly, points[i], other, reach);
+            }
+            poly
+        })
+        .collect()
+}
+
+fn shatter_polygon_centroid(points: &[(f32, f32)]) -> (f32, f32) {
+    let n = points.len();
+    let mut area = 0.0_f32;
+    let mut cx = 0.0_f32;
+    let mut cy = 0.0_f32;
+    for i in 0..n {
+        let (x0, y0) = points[i];
+        let (x1, y1) = points[(i + 1) % n];
+        let cross = x0 * y1 - x1 * y0;
+        area += cross;
+        cx += (x0 + x1) * cross;
+        cy += (y0 + y1) * cross;
+    }
+    area *= 0.5;
+    if area.abs() < 1e-6 {
+        let sum = points
+            .iter()
+            .fold((0.0, 0.0), |acc, p| (acc.0 + p.0, acc.1 + p.1));
+        return (sum.0 / n as f32, sum.1 / n as f32);
+    }
+    (cx / (6.0 * area), cy / (6.0 * area))
+}
+
+fn paint_shattered_node(
+    canvas: &Canvas,
+    node: &BoxNode,
+    box_layout: &BoxLayout,
+    length_ctx: LengthContext,
+    ctx: &PaintContext,
+    tree_depth: usize,
+    cfg: &crate::schema::ShatterConfig,
+    progress: f32,
+) {
+    let width = box_layout.width.max(1.0).ceil() as i32;
+    let height = box_layout.height.max(1.0).ceil() as i32;
+    let info = skia_safe::ImageInfo::new(
+        (width, height),
+        skia_safe::ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    let Some(mut surface) = skia_safe::surfaces::raster(&info, None, None) else {
+        paint_node_visual(canvas, node, box_layout, length_ctx, ctx, tree_depth);
+        return;
+    };
+    let offscreen = surface.canvas();
+    offscreen.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+    offscreen.translate((-box_layout.x, -box_layout.y));
+    let capture_ctx = PaintContext {
+        layout: ctx.layout,
+        frame: ctx.frame,
+        dispatcher: ctx.dispatcher,
+        viewport_size: ctx.viewport_size,
+        hits: None,
+    };
+    paint_node_visual(
+        offscreen,
+        node,
+        box_layout,
+        length_ctx,
+        &capture_ctx,
+        tree_depth,
+    );
+    let image = surface.image_snapshot();
+
+    let pieces = cfg.pieces.clamp(1, MAX_SHATTER_PIECES);
+    let cells = shatter_cells(box_layout.width, box_layout.height, pieces, cfg.seed);
+    let origin_x = cfg.origin.x.clamp(0.0, 1.0) * box_layout.width;
+    let origin_y = cfg.origin.y.clamp(0.0, 1.0) * box_layout.height;
+    let diagonal = (box_layout.width.powi(2) + box_layout.height.powi(2)).sqrt();
+
+    for (i, cell) in cells.iter().enumerate() {
+        if cell.len() < 3 {
+            continue;
+        }
+        let index = i as u32;
+        let centroid = shatter_polygon_centroid(cell);
+        let (mut dx, mut dy) = (centroid.0 - origin_x, centroid.1 - origin_y);
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist < 0.001 {
+            let angle = shatter_hash(cfg.seed, index, 7) * std::f32::consts::TAU;
+            dx = angle.cos();
+            dy = angle.sin();
+        } else {
+            dx /= dist;
+            dy /= dist;
+        }
+
+        let travel_jitter = 0.6 + shatter_hash(cfg.seed, index, 3) * 0.8;
+        let travel = cfg.spread.max(0.0) * diagonal * 0.5 * travel_jitter * progress;
+
+        let spin_sign = if shatter_hash(cfg.seed, index, 5) < 0.5 {
+            -1.0
+        } else {
+            1.0
+        };
+        let spin_jitter = 0.5 + shatter_hash(cfg.seed, index, 6) * 0.5;
+        let rotation = cfg.spin * spin_sign * spin_jitter * progress;
+
+        let depth_value = (shatter_hash(cfg.seed, index, 4) * 2.0 - 1.0) * cfg.depth;
+        let scale = (1.0 + depth_value * progress).max(0.05);
+
+        let alpha = if cfg.fade {
+            ((1.0 - progress).clamp(0.0, 1.0) * 255.0).round() as u8
+        } else {
+            255
+        };
+        if alpha == 0 {
+            continue;
+        }
+
+        let mut clip_builder = PathBuilder::new();
+        for (idx, &(px, py)) in cell.iter().enumerate() {
+            let p = (box_layout.x + px, box_layout.y + py);
+            if idx == 0 {
+                clip_builder.move_to(p);
+            } else {
+                clip_builder.line_to(p);
+            }
+        }
+        clip_builder.close();
+        let clip_path = clip_builder.detach();
+
+        let anchor = (box_layout.x + centroid.0, box_layout.y + centroid.1);
+
+        canvas.save();
+        canvas.translate((anchor.0 + dx * travel, anchor.1 + dy * travel));
+        if rotation.abs() > 0.001 {
+            canvas.rotate(rotation, None);
+        }
+        if (scale - 1.0).abs() > 0.001 {
+            canvas.scale((scale, scale));
+        }
+        canvas.translate((-anchor.0, -anchor.1));
+        canvas.clip_path(&clip_path, ClipOp::Intersect, true);
+
+        let mut paint = Paint::default();
+        paint.set_anti_alias(true);
+        paint.set_alpha(alpha);
+        canvas.draw_image(&image, (box_layout.x, box_layout.y), Some(&paint));
+        canvas.restore();
+    }
 }
 
 fn active_shimmer(css: &CssStyle, time: f64) -> Option<(&crate::schema::ShimmerConfig, f32)> {
@@ -3593,7 +3880,10 @@ mod paint_order_tests {
     use crate::css::units::{Length, LengthPercentage as CLP};
     use crate::engine::box_tree::{BoxKind, BoxNode};
     use crate::engine::layout_pass::run_layout;
-    use crate::schema::{AnimationEffect, ChromaticAberrationConfig, EasingType};
+    use crate::schema::{
+        AnimationEffect, ChromaticAberrationConfig, EasingType, ShatterConfig, ShatterMode,
+        ShatterOrigin,
+    };
 
     fn test_frame(w: u32, h: u32) -> PaintFrame {
         PaintFrame {
@@ -4851,6 +5141,220 @@ mod paint_order_tests {
             right_edge,
             (255, 255, 255),
             "no effect means no fringe on the right edge either, got {right_edge:?}"
+        );
+    }
+
+    fn shatter_cfg(mode: ShatterMode) -> ShatterConfig {
+        ShatterConfig {
+            delay: 0.2,
+            duration: 0.6,
+            mode,
+            pieces: 16,
+            seed: 42,
+            origin: ShatterOrigin::default(),
+            spread: 1.0,
+            spin: 90.0,
+            depth: 0.4,
+            fade: true,
+        }
+    }
+
+    fn any_ink_in_band(buf: &[u8], w: u32, x0: u32, y0: u32, x1: u32, y1: u32) -> bool {
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let i = ((y * w + x) * 4) as usize;
+                if buf[i] > 20 || buf[i + 1] > 20 || buf[i + 2] > 20 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn shatter_out_is_pixel_identical_to_no_effect_before_delay_and_after_duration() {
+        let mut plain = root_node(400.0, 400.0, "#000000", vec![white_square(vec![])]);
+        let baseline = render_pixels_at(&mut plain, 400, 400, 5.0);
+
+        let cfg = shatter_cfg(ShatterMode::Out);
+        let mut before = root_node(
+            400.0,
+            400.0,
+            "#000000",
+            vec![white_square(vec![AnimationEffect::Shatter(cfg.clone())])],
+        );
+        let before_delay = render_pixels_at(&mut before, 400, 400, 0.0);
+        assert_eq!(
+            baseline, before_delay,
+            "before delay, mode: out must contribute nothing at all — pixel-identical to a \
+             node with no shatter effect in its animation list"
+        );
+
+        let mut after = root_node(
+            400.0,
+            400.0,
+            "#000000",
+            vec![white_square(vec![AnimationEffect::Shatter(cfg)])],
+        );
+        let after_duration = render_pixels_at(&mut after, 400, 400, 5.0);
+        assert_eq!(
+            baseline, after_duration,
+            "mode: out must short-circuit back to the plain node once delay + duration has \
+             elapsed — no shards left hanging"
+        );
+    }
+
+    #[test]
+    fn shatter_in_is_pixel_identical_to_no_effect_before_delay_and_after_duration() {
+        let mut plain = root_node(400.0, 400.0, "#000000", vec![white_square(vec![])]);
+        let baseline = render_pixels_at(&mut plain, 400, 400, 5.0);
+
+        let cfg = shatter_cfg(ShatterMode::In);
+        let mut before = root_node(
+            400.0,
+            400.0,
+            "#000000",
+            vec![white_square(vec![AnimationEffect::Shatter(cfg.clone())])],
+        );
+        let before_delay = render_pixels_at(&mut before, 400, 400, 0.0);
+        assert_eq!(
+            baseline, before_delay,
+            "mode: in must also render as the plain node before delay — the mirror still \
+             short-circuits outside its own window"
+        );
+
+        let mut after = root_node(
+            400.0,
+            400.0,
+            "#000000",
+            vec![white_square(vec![AnimationEffect::Shatter(cfg)])],
+        );
+        let after_duration = render_pixels_at(&mut after, 400, 400, 5.0);
+        assert_eq!(
+            baseline, after_duration,
+            "mode: in converges back to the plain node by delay + duration"
+        );
+    }
+
+    #[test]
+    fn shatter_hold_freezes_past_the_window_instead_of_reverting() {
+        let mut plain = root_node(400.0, 400.0, "#000000", vec![white_square(vec![])]);
+        let baseline = render_pixels_at(&mut plain, 400, 400, 5.0);
+
+        let cfg = shatter_cfg(ShatterMode::Hold);
+        let mut held = root_node(
+            400.0,
+            400.0,
+            "#000000",
+            vec![white_square(vec![AnimationEffect::Shatter(cfg)])],
+        );
+        let long_after = render_pixels_at(&mut held, 400, 400, 5.0);
+        assert_ne!(
+            baseline, long_after,
+            "mode: hold must never converge back to the plain node, unlike out/in — the \
+             shards stay frozen in suspension"
+        );
+    }
+
+    #[test]
+    fn shatter_two_renders_of_the_same_instant_are_byte_identical() {
+        let cfg = shatter_cfg(ShatterMode::Out);
+        let mut root_a = root_node(
+            400.0,
+            400.0,
+            "#000000",
+            vec![white_square(vec![AnimationEffect::Shatter(cfg.clone())])],
+        );
+        let a = render_pixels_at(&mut root_a, 400, 400, 0.5);
+
+        let mut root_b = root_node(
+            400.0,
+            400.0,
+            "#000000",
+            vec![white_square(vec![AnimationEffect::Shatter(cfg)])],
+        );
+        let b = render_pixels_at(&mut root_b, 400, 400, 0.5);
+
+        assert_eq!(
+            a, b,
+            "seed + instant must fully determine every shard — two renders of the same frame \
+             must be byte-identical"
+        );
+    }
+
+    #[test]
+    fn shatter_paints_ink_outside_the_nodes_own_box_where_an_intact_node_does_not() {
+        let band = (221u32, 100u32, 320u32, 220u32);
+
+        let mut plain = root_node(400.0, 400.0, "#000000", vec![white_square(vec![])]);
+        let intact = render_pixels_at(&mut plain, 400, 400, 0.0);
+        assert!(
+            !any_ink_in_band(&intact, 400, band.0, band.1, band.2, band.3),
+            "sanity: an intact node must not paint outside its own box"
+        );
+
+        let cfg = shatter_cfg(ShatterMode::Out);
+        let mut shattered = root_node(
+            400.0,
+            400.0,
+            "#000000",
+            vec![white_square(vec![AnimationEffect::Shatter(cfg)])],
+        );
+        let mid_flight = render_pixels_at(&mut shattered, 400, 400, 0.5);
+        assert!(
+            any_ink_in_band(&mid_flight, 400, band.0, band.1, band.2, band.3),
+            "a shattered node mid-flight must have ink outside its own box — a shard has \
+             physically left the node's rect"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn shatter_per_frame_cost_vs_the_plain_node() {
+        let frames = 200;
+        let cfg = shatter_cfg(ShatterMode::Out);
+
+        let time_plain = || {
+            let start = std::time::Instant::now();
+            for i in 0..frames {
+                let mut root = root_node(400.0, 400.0, "#000000", vec![white_square(vec![])]);
+                let _ = render_pixels_at(&mut root, 400, 400, i as f64 / 30.0);
+            }
+            start.elapsed()
+        };
+        let time_shatter = |cfg: &ShatterConfig| {
+            let start = std::time::Instant::now();
+            for i in 0..frames {
+                let mut root = root_node(
+                    400.0,
+                    400.0,
+                    "#000000",
+                    vec![white_square(vec![AnimationEffect::Shatter(cfg.clone())])],
+                );
+                let _ = render_pixels_at(&mut root, 400, 400, i as f64 / 30.0);
+            }
+            start.elapsed()
+        };
+
+        time_plain();
+        time_shatter(&cfg);
+
+        let plain_elapsed = time_plain().min(time_plain());
+        let shatter_elapsed = time_shatter(&cfg).min(time_shatter(&cfg));
+
+        println!(
+            "plain: {:?}/frame, shatter (16 pieces, 120x120 box): {:?}/frame, ratio {:.1}x",
+            plain_elapsed / frames,
+            shatter_elapsed / frames,
+            shatter_elapsed.as_secs_f64() / plain_elapsed.as_secs_f64().max(1e-9)
+        );
+
+        let heavy_cfg = ShatterConfig { pieces: 64, ..cfg };
+        let heavy_elapsed = time_shatter(&heavy_cfg).min(time_shatter(&heavy_cfg));
+        println!(
+            "shatter (64 pieces, 120x120 box): {:?}/frame, ratio {:.1}x",
+            heavy_elapsed / frames,
+            heavy_elapsed.as_secs_f64() / plain_elapsed.as_secs_f64().max(1e-9)
         );
     }
 
