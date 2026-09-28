@@ -61,3 +61,32 @@ cas « non clippé + message stderr ».
   [timeline-sequencing.md](timeline-sequencing.md)) : un `clip-path` posé par
   un pas de `timeline` continue de sauter à l'instant du pas, `morph` ou pas.
   `morph` ne s'adresse qu'au cas `keyframes`.
+
+
+## Plus de deux formes : `via`
+
+Un `morph` va de `from` à `to`. Pour traverser des formes intermédiaires, liste-les
+dans `via`, dans l'ordre :
+
+```json
+"clip-path": {
+  "kind": "morph",
+  "from": { "kind": "circle", "radius": 20 },
+  "via":  [ { "kind": "circle", "radius": 140 } ],
+  "to":   { "kind": "circle", "radius": 60 }
+}
+```
+
+`progress` balaie **toute la chaîne**, pas chaque segment : avec un `via`, `0.5`
+tombe exactement dessus, et `0.25` est à mi-chemin du premier segment. Les
+segments sont de longueur égale en `progress`, quelle que soit la distance
+géométrique entre les formes — si tu veux qu'une étape dure plus longtemps,
+c'est l'easing de la piste `clip_path_progress` qui le décide, pas `via`.
+
+Chaque paire consécutive suit la même règle d'interpolation que le morph à deux
+formes : même `kind`, même nombre de sommets pour un polygone. Une paire
+incompatible au milieu d'une chaîne se signale sur stderr et laisse le nœud non
+clippé, comme une paire incompatible toute seule.
+
+`via` absent ou vide, c'est exactement le morph à deux formes d'avant — rien de
+ce qui a été écrit avant ne change.

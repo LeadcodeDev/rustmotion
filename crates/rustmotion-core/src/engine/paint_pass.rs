@@ -1971,8 +1971,14 @@ fn clip_path_to_skia(
             None
         }
 
-        ClipPath::Morph { from, to, progress } => {
-            morph_clip_path_to_skia(from, to, *progress, layout, ctx)
+        ClipPath::Morph {
+            from,
+            to,
+            via,
+            progress,
+        } => {
+            let (leg_from, leg_to, leg_t) = morph_leg(from, to, via, *progress);
+            morph_clip_path_to_skia(leg_from, leg_to, leg_t, layout, ctx)
         }
     }
 }
@@ -1992,6 +1998,24 @@ fn clip_path_kind_name(clip: &ClipPath) -> &'static str {
 
 fn lerp_f32(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
+}
+
+fn morph_leg<'a>(
+    from: &'a ClipPath,
+    to: &'a ClipPath,
+    via: &'a [ClipPath],
+    progress: f32,
+) -> (&'a ClipPath, &'a ClipPath, f32) {
+    if via.is_empty() {
+        return (from, to, progress);
+    }
+    let legs = via.len() + 1;
+    let scaled = (progress.clamp(0.0, 1.0) * legs as f32).min(legs as f32 - f32::EPSILON);
+    let leg = scaled.floor() as usize;
+    let local = scaled - leg as f32;
+    let leg_from = if leg == 0 { from } else { &via[leg - 1] };
+    let leg_to = if leg == via.len() { to } else { &via[leg] };
+    (leg_from, leg_to, local)
 }
 
 fn morph_clip_path_to_skia(
@@ -3850,6 +3874,123 @@ mod paint_order_tests {
         0.299 * buf[i] as f32 + 0.587 * buf[i + 1] as f32 + 0.114 * buf[i + 2] as f32
     }
 
+    fn morph_chain(progress: f32) -> BoxNode {
+        let square = |inset: f32| ClipPath::Inset {
+            top: CLP::Px(inset),
+            right: CLP::Px(inset),
+            bottom: CLP::Px(inset),
+            left: CLP::Px(inset),
+            radius: None,
+        };
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(0.0)),
+                top: Some(CLP::Px(0.0)),
+                width: Some(CSize::Length(CLP::Px(200.0))),
+                height: Some(CSize::Length(CLP::Px(200.0))),
+                background: Some(Background::Color(CssColor::String("#ff0000".into()))),
+                clip_path: Some(ClipPath::Morph {
+                    from: Box::new(square(0.0)),
+                    to: Box::new(square(0.0)),
+                    via: vec![square(80.0)],
+                    progress,
+                }),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn red_pixels(buf: &[u8]) -> usize {
+        buf.as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|px| px[0] > 200 && px[1] < 60)
+            .count()
+    }
+
+    #[test]
+    fn a_morph_chain_passes_through_its_via_shape_at_the_midpoint() {
+        let start = red_pixels(&render_lit(morph_chain(0.0), None));
+        let middle = red_pixels(&render_lit(morph_chain(0.5), None));
+        let end = red_pixels(&render_lit(morph_chain(1.0), None));
+
+        assert!(
+            middle * 3 < start,
+            "with one `via` shape, progress 0.5 lands exactly on it — an 80px inset of a \
+             200px box, so far smaller than either end: start={start}px, middle={middle}px"
+        );
+        assert!(
+            (start as i64 - end as i64).abs() < 40,
+            "the chain starts and ends on the same shape here, so both ends must match: \
+             start={start}px, end={end}px"
+        );
+    }
+
+    #[test]
+    fn a_morph_chain_keeps_moving_between_its_legs() {
+        let quarter = red_pixels(&render_lit(morph_chain(0.25), None));
+        let middle = red_pixels(&render_lit(morph_chain(0.5), None));
+        let three_quarters = red_pixels(&render_lit(morph_chain(0.75), None));
+        assert!(
+            quarter > middle && three_quarters > middle,
+            "a quarter of the way along each leg is between the endpoints, not at one of \
+             them: 0.25={quarter}px, 0.5={middle}px, 0.75={three_quarters}px"
+        );
+    }
+
+    #[test]
+    fn an_empty_via_leaves_the_two_shape_morph_exactly_as_it_was() {
+        let a = ClipPath::Circle {
+            radius: CLP::Px(10.0),
+            origin: None,
+        };
+        let b = ClipPath::Circle {
+            radius: CLP::Px(90.0),
+            origin: None,
+        };
+        let (from, to, t) = morph_leg(&a, &b, &[], 0.37);
+        assert_eq!(from, &a);
+        assert_eq!(to, &b);
+        assert_eq!(
+            t, 0.37,
+            "with no `via`, the leg is the whole morph and progress passes through \
+             untouched — which is what makes every morph written before this render \
+             identically"
+        );
+    }
+
+    #[test]
+    fn a_via_shape_splits_the_sweep_into_equal_legs() {
+        let a = ClipPath::Circle {
+            radius: CLP::Px(10.0),
+            origin: None,
+        };
+        let mid = ClipPath::Circle {
+            radius: CLP::Px(50.0),
+            origin: None,
+        };
+        let b = ClipPath::Circle {
+            radius: CLP::Px(90.0),
+            origin: None,
+        };
+        let via = [mid.clone()];
+
+        let (f0, t0, p0) = morph_leg(&a, &b, &via, 0.25);
+        assert_eq!((f0, t0), (&a, &mid), "the first half travels a -> via");
+        assert!((p0 - 0.5).abs() < 1e-5, "halfway along that leg: {p0}");
+
+        let (f1, t1, p1) = morph_leg(&a, &b, &via, 0.75);
+        assert_eq!((f1, t1), (&mid, &b), "the second half travels via -> b");
+        assert!((p1 - 0.5).abs() < 1e-5, "halfway along that leg: {p1}");
+    }
+
     fn star_points() -> Vec<(CLP, CLP)> {
         (0..10)
             .map(|i| {
@@ -4586,6 +4727,7 @@ mod paint_order_tests {
                 radius: CLP::Px(150.0),
                 origin: None,
             }),
+            via: Vec::new(),
             progress,
         };
 
@@ -4631,6 +4773,7 @@ mod paint_order_tests {
                 left: CLP::Px(0.0),
                 radius: None,
             }),
+            via: Vec::new(),
             progress,
         };
         assert!(
@@ -4653,6 +4796,7 @@ mod paint_order_tests {
                 ry: CLP::Px(40.0),
                 origin: None,
             }),
+            via: Vec::new(),
             progress,
         };
         assert!(
@@ -4686,6 +4830,7 @@ mod paint_order_tests {
         let morph = ClipPath::Morph {
             from: Box::new(big),
             to: Box::new(small),
+            via: Vec::new(),
             progress: 1.0,
         };
         assert!(
@@ -4712,6 +4857,7 @@ mod paint_order_tests {
                     (CLP::Px(200.0), CLP::Px(400.0)),
                 ],
             }),
+            via: Vec::new(),
             progress: 0.5,
         };
         for (x, y) in [(20, 20), (200, 200), (380, 380)] {
@@ -4745,6 +4891,7 @@ mod paint_order_tests {
         let mismatched = ClipPath::Morph {
             from: Box::new(triangle),
             to: Box::new(square),
+            via: Vec::new(),
             progress: 0.5,
         };
         for (x, y) in [(20, 20), (200, 200), (380, 380)] {
@@ -4778,6 +4925,7 @@ mod paint_order_tests {
                     radius: CLP::Px(150.0),
                     origin: None,
                 }),
+                via: Vec::new(),
                 progress: 0.0,
             }),
             ..Default::default()

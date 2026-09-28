@@ -195,6 +195,7 @@ mod tests {
                     radius: LengthPercentage::Px(50.0),
                     origin: None,
                 }),
+                via: Vec::new(),
                 progress: 0.0,
             }),
             ..CssStyle::default()

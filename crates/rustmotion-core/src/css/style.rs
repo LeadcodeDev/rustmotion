@@ -1513,6 +1513,14 @@ pub enum ClipPath {
     Morph {
         from: Box<ClipPath>,
         to: Box<ClipPath>,
+        /// Shapes the morph passes **through** on its way from `from` to
+        /// `to`, in order. Empty means a direct two-shape sweep, which is
+        /// what a `morph` without this field has always been.
+        ///
+        /// `progress` spans the whole chain, not each leg: with one `via`
+        /// shape, `0.5` is exactly that shape.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        via: Vec<ClipPath>,
         #[serde(default)]
         progress: f32,
     },
