@@ -56,6 +56,10 @@ La partition de Voronoi vient d'un semis de points sur une grille approximative 
 
 Pour chaque éclat, l'ordre des opérations canvas compte : **translation/rotation/échelle d'abord, découpe (`clip_path`) ensuite**, dans ce sens précis. Si la découpe est posée avant la transformation, le masque reste à sa position d'origine pendant que l'image sous-jacente se déplace dessous — l'éclat ne bouge jamais visuellement, seul son contenu glisse sous un trou fixe. C'est un bug qui a été observé et corrigé pendant l'implémentation ; un test dédié (`shatter_paints_ink_outside_the_nodes_own_box_where_an_intact_node_does_not`) l'aurait détecté en le repassant au rouge.
 
+## Le budget d'animation s'applique
+
+`shatter` entre dans le calcul de [animation-completion-budget.md](animation-completion-budget.md) comme n'importe quelle entrée : `start_at + delay + duration ≤ scene_duration`. Ce n'est **pas** un preset de sortie exempté — même en `mode: "out"` ou `"hold"`, où l'effet se lit pourtant comme une sortie. Un éclatement destiné à finir sur la coupe doit donc tomber pile à la fin de la scène, pas la déborder : `delay + duration == scene_duration`. Sinon le validateur émet l'erreur de budget habituelle.
+
 ## Piège : `origin` est une fraction, pas des px
 
 Contrairement à `TransformOrigin` (CSS, `LengthPercentage`), `shatter.origin` est une paire de flottants `0..1` relative à la boîte du nœud — `{ "x": 0.5, "y": 0.5 }` est le centre, `{ "x": 0.0, "y": 0.0 }` le coin haut-gauche. Donner des pixels ici ne produit pas d'erreur de schéma (le champ accepte n'importe quel flottant) mais un point d'origine hors de la boîte, donc une dispersion qui tire tous les éclats dans une direction quasi uniforme au lieu de rayonner.
