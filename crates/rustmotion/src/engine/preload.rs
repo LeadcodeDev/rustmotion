@@ -2,7 +2,8 @@ use std::io::Read;
 use std::sync::Arc;
 
 use crate::components::{ChildComponent, Component};
-use crate::schema::Scene;
+use crate::encode::audio_analysis::analyze_scenario_audio;
+use crate::schema::{ResolvedScenario, Scene};
 use rustmotion_core::engine::renderer::{
     asset_cache, fetch_icon_svg, ffmpeg_available, icon_cache_dir, icon_cache_key,
     video_frame_cache,
@@ -32,6 +33,22 @@ fn video_frame_cache_bytes() -> u64 {
                 .sum::<u64>()
         })
         .sum()
+}
+
+pub fn preload_scenario_assets(scenario: &ResolvedScenario) -> crate::error::Result<()> {
+    if !scenario.fonts.is_empty() {
+        rustmotion_core::engine::renderer::load_custom_fonts(&scenario.fonts);
+    }
+    for view in &scenario.views {
+        prefetch_icons(&view.scenes)?;
+    }
+    for failure in analyze_scenario_audio(scenario) {
+        eprintln!(
+            "rustmotion: audio-reactive: {failure} — waveform/audio_spectrum will render flat \
+             for this track."
+        );
+    }
+    Ok(())
 }
 
 pub fn prefetch_icons(scenes: &[Scene]) -> crate::error::Result<()> {

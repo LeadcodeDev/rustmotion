@@ -39,13 +39,7 @@ pub fn cmd_still(
     format: Option<String>,
     quality: u8,
 ) -> Result<()> {
-    if !scenario.fonts.is_empty() {
-        engine::renderer::load_custom_fonts(&scenario.fonts);
-    }
-
-    for view in &scenario.views {
-        engine::prefetch_icons(&view.scenes)?;
-    }
+    engine::preload::preload_scenario_assets(&scenario)?;
 
     let config = &scenario.video;
     let fps = config.fps;

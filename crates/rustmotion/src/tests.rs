@@ -1596,7 +1596,7 @@ mod audio_tests {
 
     use rustmotion_core::engine::renderer::audio_analysis::{audio_analysis_cache, AudioAnalysis};
 
-    fn make_sine_wav(
+    pub(super) fn make_sine_wav(
         total_samples: u32,
         sine_samples: u32,
         freq: f32,
@@ -1629,7 +1629,7 @@ mod audio_tests {
         }
         wav
     }
-    fn nanos() -> u128 {
+    pub(super) fn nanos() -> u128 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -3767,6 +3767,58 @@ mod self_painting_background_animation_tests {
             centre_rgb(&json, 1.8),
             (255, 0, 0),
             "with nothing animating the background, the clone must not be taken at all"
+        );
+    }
+}
+
+#[cfg(test)]
+mod still_runs_the_audio_analysis_tests {
+    use super::audio_tests::{make_sine_wav, nanos};
+    use rustmotion_core::engine::renderer::audio_analysis_cache;
+
+    fn scenario_json(wav: &str) -> String {
+        serde_json::json!({
+            "video": { "width": 64, "height": 64, "fps": 30 },
+            "audio": [{ "src": wav }],
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "audio_spectrum", "bars": 8, "mode": "bars", "color": "#ffffff",
+                    "style": { "position": "absolute", "left": 0, "top": 0,
+                               "width": 64, "height": 64 }
+                }]
+            }]
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn the_shared_preload_analyses_the_track_the_way_an_encode_does() {
+        let sample_rate = 44100u32;
+        let wav = make_sine_wav(sample_rate, sample_rate / 2, 440.0, sample_rate);
+        let wav_path = std::env::temp_dir().join(format!("rm_still_audio_{}.wav", nanos()));
+        std::fs::write(&wav_path, &wav).expect("write wav fixture");
+        let src = wav_path.to_str().unwrap().to_string();
+
+        let scenario = crate::loader::load_scenario_from_source(None, Some(&scenario_json(&src)))
+            .expect("load scenario");
+
+        audio_analysis_cache().remove(&src);
+        assert!(
+            audio_analysis_cache().get(&src).is_none(),
+            "test setup: the track must not already be analysed"
+        );
+
+        crate::engine::preload::preload_scenario_assets(&scenario).expect("preload");
+
+        let analysed = audio_analysis_cache().get(&src).is_some();
+        std::fs::remove_file(&wav_path).ok();
+
+        assert!(
+            analysed,
+            "still and sheet went through this preamble without analysing the track, so every \
+             audio-reactive component in an exported frame sat at its min — the flat bars \
+             reported in issue #349"
         );
     }
 }
