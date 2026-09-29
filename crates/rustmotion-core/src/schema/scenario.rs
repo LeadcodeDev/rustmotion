@@ -645,6 +645,12 @@ pub struct Scene {
     pub background: Option<BackgroundValue>,
     #[serde(default)]
     pub children: Vec<serde_json::Value>,
+    /// Filled once, by whoever first deserializes `children` into the component
+    /// type it owns. `rustmotion-core` cannot name that type, so it is held
+    /// erased; `Scene::prepared_children` is the typed accessor.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub prepared_children: std::sync::OnceLock<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
     #[serde(default)]
     pub transition: Option<Transition>,
     #[serde(default)]
