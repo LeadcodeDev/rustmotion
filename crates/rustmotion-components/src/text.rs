@@ -2161,4 +2161,370 @@ mod tests {
              animated field defaults to NaN precisely so absent means absent"
         );
     }
+
+    fn render_pipeline(
+        component_json: serde_json::Value,
+        box_x: f32,
+        box_y: f32,
+        w: i32,
+        h: i32,
+        time: f64,
+        scene_duration: f64,
+    ) -> Vec<u8> {
+        use crate::box_builder::{build_scene_with_anim, BuildAnimationCtx};
+        use crate::legacy_dispatch::LegacyPaintDispatcher;
+        use crate::{ChildComponent, Component, PositionMode};
+        use rustmotion_core::css::taffy_bridge::ConversionContext;
+        use rustmotion_core::engine::layout_pass::run_layout;
+        use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
+
+        let component: Component = serde_json::from_value(component_json).expect("deserialize");
+        let child = ChildComponent {
+            id: None,
+            component,
+            position: Some(PositionMode::Absolute { x: box_x, y: box_y }),
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        };
+        let children = vec![child];
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w, h)).expect("raster surface");
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+
+        let built = build_scene_with_anim(
+            &children,
+            (w as f32, h as f32),
+            BuildAnimationCtx {
+                time,
+                scenario_time: time,
+                scene_duration,
+                fps: 30,
+            },
+        );
+        let layout = run_layout(
+            &built.root,
+            (w as f32, h as f32),
+            &ConversionContext::default(),
+        );
+        let dispatcher = LegacyPaintDispatcher::for_scene(&built);
+        let frame = PaintFrame {
+            light: Default::default(),
+            time,
+            scenario_time: time,
+            frame_index: (time * 30.0) as u32,
+            fps: 30,
+            video_width: w as u32,
+            video_height: h as u32,
+            scene_duration,
+            camera: None,
+        };
+        paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
+
+        let row_bytes = w as usize * 4;
+        let mut pixels = vec![0u8; row_bytes * h as usize];
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        surface.read_pixels(&info, &mut pixels, row_bytes, (0, 0));
+        pixels
+    }
+
+    fn ink_x_range(pixels: &[u8], w: i32, h: i32) -> Option<(i32, i32)> {
+        let mut lo = None;
+        let mut hi = None;
+        for y in 0..h {
+            for x in 0..w {
+                let idx = ((y * w + x) * 4 + 3) as usize;
+                if pixels[idx] > 0 {
+                    lo = Some(lo.map_or(x, |m: i32| m.min(x)));
+                    hi = Some(hi.map_or(x, |m: i32| m.max(x)));
+                }
+            }
+        }
+        lo.zip(hi)
+    }
+
+    #[test]
+    fn rotate_from_tilts_a_unit_and_widens_its_footprint_mid_animation() {
+        const W: i32 = 400;
+        const H: i32 = 220;
+
+        let json_for = |rotate_from: Option<f64>| {
+            let mut anim = serde_json::json!({
+                "name": "char_fade_in",
+                "granularity": "char",
+                "duration": 1.0,
+                "stagger": 0.0,
+            });
+            if let Some(r) = rotate_from {
+                anim["rotate_from"] = serde_json::json!(r);
+            }
+            serde_json::json!({
+                "type": "text",
+                "content": "I",
+                "style": {
+                    "width": 300, "height": 200,
+                    "font-size": 120,
+                    "color": "#ffffff",
+                    "white-space": "nowrap",
+                    "animation": [anim]
+                }
+            })
+        };
+
+        let plain = render_pipeline(json_for(None), 40.0, 10.0, W, H, 0.5, 1.0);
+        let tilted = render_pipeline(json_for(Some(80.0)), 40.0, 10.0, W, H, 0.5, 1.0);
+
+        let (plain_lo, plain_hi) = ink_x_range(&plain, W, H).expect("plain glyph paints ink");
+        let (tilted_lo, tilted_hi) = ink_x_range(&tilted, W, H).expect("tilted glyph paints ink");
+
+        let plain_width = plain_hi - plain_lo;
+        let tilted_width = tilted_hi - tilted_lo;
+
+        assert!(
+            tilted_width > plain_width + 20,
+            "rotate_from must visibly tilt the unit mid-animation, widening its horizontal \
+             footprint: plain width={plain_width}px, tilted width={tilted_width}px"
+        );
+    }
+
+    #[test]
+    fn rotate_from_has_settled_to_upright_by_the_end_of_the_units_own_animation() {
+        const W: i32 = 400;
+        const H: i32 = 220;
+
+        let json_for = |rotate_from: Option<f64>| {
+            let mut anim = serde_json::json!({
+                "name": "char_fade_in",
+                "granularity": "char",
+                "duration": 1.0,
+                "stagger": 0.0,
+            });
+            if let Some(r) = rotate_from {
+                anim["rotate_from"] = serde_json::json!(r);
+            }
+            serde_json::json!({
+                "type": "text",
+                "content": "I",
+                "style": {
+                    "width": 300, "height": 200,
+                    "font-size": 120,
+                    "color": "#ffffff",
+                    "white-space": "nowrap",
+                    "animation": [anim]
+                }
+            })
+        };
+
+        let plain = render_pipeline(json_for(None), 40.0, 10.0, W, H, 1.0, 1.0);
+        let settled = render_pipeline(json_for(Some(80.0)), 40.0, 10.0, W, H, 1.0, 1.0);
+
+        let plain_range = ink_x_range(&plain, W, H).expect("plain glyph paints ink");
+        let settled_range = ink_x_range(&settled, W, H).expect("settled glyph paints ink");
+
+        assert_eq!(
+            plain_range, settled_range,
+            "rotate_from must straighten to upright by the end of the unit's own animation, \
+             landing at the same horizontal footprint as no rotation at all"
+        );
+    }
+
+    #[test]
+    fn scale_jitter_perturbs_a_units_born_size_and_settles_away_by_the_end() {
+        const W: i32 = 300;
+        const H: i32 = 200;
+
+        let json_for = |scale_jitter: Option<f64>| {
+            let mut anim = serde_json::json!({
+                "name": "char_fade_in",
+                "granularity": "char",
+                "duration": 1.0,
+                "stagger": 0.0,
+                "seed": 7,
+            });
+            if let Some(s) = scale_jitter {
+                anim["scale_jitter"] = serde_json::json!(s);
+            }
+            serde_json::json!({
+                "type": "text",
+                "content": "O",
+                "style": {
+                    "width": 200, "height": 150,
+                    "font-size": 100,
+                    "color": "#ffffff",
+                    "white-space": "nowrap",
+                    "animation": [anim]
+                }
+            })
+        };
+
+        let plain_mid = render_pipeline(json_for(None), 30.0, 20.0, W, H, 0.5, 1.0);
+        let jittered_mid = render_pipeline(json_for(Some(0.6)), 30.0, 20.0, W, H, 0.5, 1.0);
+        assert_ne!(
+            plain_mid, jittered_mid,
+            "scale_jitter must visibly perturb a unit's size mid-animation"
+        );
+
+        let plain_end = render_pipeline(json_for(None), 30.0, 20.0, W, H, 1.0, 1.0);
+        let jittered_end = render_pipeline(json_for(Some(0.6)), 30.0, 20.0, W, H, 1.0, 1.0);
+        let plain_range = ink_x_range(&plain_end, W, H).expect("plain glyph paints ink");
+        let jittered_range = ink_x_range(&jittered_end, W, H).expect("jittered glyph paints ink");
+        assert_eq!(
+            plain_range, jittered_range,
+            "scale_jitter must settle away by the end of the unit's own animation, landing at \
+             the same footprint as no jitter at all — letters born at different sizes, then \
+             aligning"
+        );
+    }
+
+    #[test]
+    fn baseline_jitter_perturbs_a_units_born_baseline_and_settles_away_by_the_end() {
+        const W: i32 = 300;
+        const H: i32 = 200;
+
+        let json_for = |baseline_jitter: Option<f64>| {
+            let mut anim = serde_json::json!({
+                "name": "char_fade_in",
+                "granularity": "char",
+                "duration": 1.0,
+                "stagger": 0.0,
+                "seed": 11,
+            });
+            if let Some(b) = baseline_jitter {
+                anim["baseline_jitter"] = serde_json::json!(b);
+            }
+            serde_json::json!({
+                "type": "text",
+                "content": "O",
+                "style": {
+                    "width": 200, "height": 150,
+                    "font-size": 100,
+                    "color": "#ffffff",
+                    "white-space": "nowrap",
+                    "animation": [anim]
+                }
+            })
+        };
+
+        let plain_mid = render_pipeline(json_for(None), 30.0, 20.0, W, H, 0.5, 1.0);
+        let jittered_mid = render_pipeline(json_for(Some(0.3)), 30.0, 20.0, W, H, 0.5, 1.0);
+        assert_ne!(
+            plain_mid, jittered_mid,
+            "baseline_jitter must visibly perturb a unit's baseline mid-animation"
+        );
+
+        let plain_end = render_pipeline(json_for(None), 30.0, 20.0, W, H, 1.0, 1.0);
+        let jittered_end = render_pipeline(json_for(Some(0.3)), 30.0, 20.0, W, H, 1.0, 1.0);
+        assert_eq!(
+            plain_end, jittered_end,
+            "baseline_jitter must settle away by the end of the unit's own animation, landing \
+             on the same laid-out baseline as no jitter at all"
+        );
+    }
+
+    #[test]
+    fn reflow_keeps_a_centered_line_centred_while_it_is_being_written() {
+        const W: i32 = 900;
+        const H: i32 = 200;
+        const BOX_X: f32 = 0.0;
+        const BOX_W: f32 = 700.0;
+        let box_center = BOX_X + BOX_W / 2.0;
+
+        let json_for = |reflow: bool| {
+            serde_json::json!({
+                "type": "text",
+                "content": "reflowing centered text",
+                "style": {
+                    "width": BOX_W, "height": 100,
+                    "font-size": 48,
+                    "color": "#ffffff",
+                    "text-align": "center",
+                    "white-space": "nowrap",
+                    "animation": [{
+                        "name": "char_fade_in",
+                        "granularity": "char",
+                        "duration": 0.05,
+                        "stagger": 0.05,
+                        "reflow": reflow,
+                    }]
+                }
+            })
+        };
+
+        let sample_time = 0.5;
+        let no_reflow = render_pipeline(json_for(false), BOX_X, 40.0, W, H, sample_time, 2.0);
+        let reflowed = render_pipeline(json_for(true), BOX_X, 40.0, W, H, sample_time, 2.0);
+
+        let (lo_a, hi_a) =
+            ink_x_range(&no_reflow, W, H).expect("no-reflow must paint some ink by this time");
+        let (lo_b, hi_b) =
+            ink_x_range(&reflowed, W, H).expect("reflow must paint some ink by this time");
+
+        let center_no_reflow = (lo_a + hi_a) as f32 / 2.0;
+        let center_reflow = (lo_b + hi_b) as f32 / 2.0;
+
+        assert!(
+            (center_reflow - box_center).abs() < 20.0,
+            "reflow must keep the growing centred line's ink centred on the box: box \
+             center={box_center}, got ink center={center_reflow}"
+        );
+        assert!(
+            center_no_reflow < box_center - 40.0,
+            "control: without reflow, a partially revealed centred line must still read left \
+             of the box center, since every unit reserves its final (fully revealed) position \
+             from frame one and only the early units have appeared yet — box \
+             center={box_center}, got ink center={center_no_reflow}"
+        );
+    }
+
+    #[test]
+    fn rotate_from_also_reaches_gradient_text_through_the_shared_render_path() {
+        const W: i32 = 400;
+        const H: i32 = 220;
+
+        let json_for = |rotate_from: Option<f64>| {
+            let mut anim = serde_json::json!({
+                "name": "char_fade_in",
+                "granularity": "char",
+                "duration": 1.0,
+                "stagger": 0.0,
+            });
+            if let Some(r) = rotate_from {
+                anim["rotate_from"] = serde_json::json!(r);
+            }
+            serde_json::json!({
+                "type": "gradient_text",
+                "content": "I",
+                "colors": ["#FF4FB0", "#4B5BFF"],
+                "style": {
+                    "width": 300, "height": 200,
+                    "font-size": 120,
+                    "white-space": "nowrap",
+                    "animation": [anim]
+                }
+            })
+        };
+
+        let plain = render_pipeline(json_for(None), 40.0, 10.0, W, H, 0.5, 1.0);
+        let tilted = render_pipeline(json_for(Some(80.0)), 40.0, 10.0, W, H, 0.5, 1.0);
+
+        let (plain_lo, plain_hi) = ink_x_range(&plain, W, H).expect("plain glyph paints ink");
+        let (tilted_lo, tilted_hi) = ink_x_range(&tilted, W, H).expect("tilted glyph paints ink");
+
+        let plain_width = plain_hi - plain_lo;
+        let tilted_width = tilted_hi - tilted_lo;
+
+        assert!(
+            tilted_width > plain_width + 20,
+            "rotate_from must also tilt a gradient_text unit through the shared \
+             intrinsic::render_char_animation path, without any change to gradient_text.rs \
+             itself: plain width={plain_width}px, tilted width={tilted_width}px"
+        );
+    }
 }
