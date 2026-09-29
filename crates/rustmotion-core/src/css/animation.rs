@@ -1,5 +1,5 @@
 use crate::css::style::CssStyle;
-use crate::css::style::{BorderRadius, ClipPath, FilterFn, Size, TransformFn};
+use crate::css::style::{BorderRadius, ClipPath, Edges, FilterFn, Gap, Size, TransformFn};
 use crate::css::units::{Length, LengthPercentage};
 use crate::engine::animator::AnimatedProperties;
 
@@ -39,8 +39,7 @@ pub fn apply_animated_props(css: &mut CssStyle, props: &AnimatedProperties) {
     }
 
     if (props.opacity - 1.0).abs() > 1e-4 {
-        let base = css.opacity.unwrap_or(1.0);
-        css.opacity = Some(base * props.opacity);
+        css.opacity = Some(props.opacity);
     }
 
     let mut filters: Vec<FilterFn> = Vec::new();
@@ -88,6 +87,22 @@ pub fn apply_animated_props(css: &mut CssStyle, props: &AnimatedProperties) {
             *progress = props.clip_path_progress;
         }
     }
+
+    if props.font_size >= 0.0 {
+        css.font_size = Some(Length::Px(props.font_size));
+    }
+
+    if props.letter_spacing.is_finite() {
+        css.letter_spacing = Some(Length::Px(props.letter_spacing));
+    }
+
+    if props.gap >= 0.0 {
+        css.gap = Some(Gap::Uniform(LengthPercentage::Px(props.gap)));
+    }
+
+    if props.padding >= 0.0 {
+        css.padding = Some(Edges::Uniform(LengthPercentage::Px(props.padding)));
+    }
 }
 
 #[cfg(test)]
@@ -116,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn opacity_is_multiplied_with_existing_css_opacity() {
+    fn an_active_opacity_animation_replaces_the_declared_static_opacity() {
         let mut css = CssStyle {
             opacity: Some(0.5),
             ..CssStyle::default()
@@ -126,7 +141,32 @@ mod tests {
             ..AnimatedProperties::default()
         };
         apply_animated_props(&mut css, &props);
-        assert!((css.opacity.unwrap() - 0.25).abs() < 1e-6);
+        assert!(
+            (css.opacity.unwrap() - 0.5).abs() < 1e-6,
+            "an animation touching opacity must overwrite the static declaration outright, the \
+             same last-value-written rule every other animated property in this function \
+             follows — not multiply against it, got {:?}",
+            css.opacity
+        );
+    }
+
+    #[test]
+    fn a_static_opacity_of_zero_is_overridden_by_an_active_fade_in_animation() {
+        let mut css = CssStyle {
+            opacity: Some(0.0),
+            ..CssStyle::default()
+        };
+        let props = AnimatedProperties {
+            opacity: 0.8,
+            ..AnimatedProperties::default()
+        };
+        apply_animated_props(&mut css, &props);
+        assert!(
+            (css.opacity.unwrap() - 0.8).abs() < 1e-6,
+            "a declared opacity: 0 authored as the fade-in's own starting point must not cancel \
+             the animation for the rest of its run (issue #430); got {:?}",
+            css.opacity
+        );
     }
 
     #[test]
@@ -254,5 +294,64 @@ mod tests {
         assert_eq!(filters.len(), 2);
         assert!(matches!(filters[0], FilterFn::Blur { .. }));
         assert!(matches!(filters[1], FilterFn::DropShadow { .. }));
+    }
+
+    #[test]
+    fn an_animation_touching_only_font_size_reaches_the_css_style() {
+        let mut css = CssStyle::default();
+        let props = AnimatedProperties {
+            font_size: 120.0,
+            ..AnimatedProperties::default()
+        };
+        apply_animated_props(&mut css, &props);
+        assert_eq!(css.font_size, Some(Length::Px(120.0)));
+    }
+
+    #[test]
+    fn an_animation_touching_only_letter_spacing_reaches_the_css_style() {
+        let mut css = CssStyle::default();
+        let props = AnimatedProperties {
+            letter_spacing: 6.0,
+            ..AnimatedProperties::default()
+        };
+        apply_animated_props(&mut css, &props);
+        assert_eq!(css.letter_spacing, Some(Length::Px(6.0)));
+    }
+
+    #[test]
+    fn an_untouched_letter_spacing_nan_resting_value_leaves_css_untouched() {
+        let mut css = CssStyle::default();
+        let props = AnimatedProperties::default();
+        apply_animated_props(&mut css, &props);
+        assert!(
+            css.letter_spacing.is_none(),
+            "letter_spacing's resting value is NaN precisely so 'not animated' can be told apart \
+             from 'animated to zero'; it must not be written as a css value"
+        );
+    }
+
+    #[test]
+    fn an_animation_touching_only_gap_reaches_the_css_style() {
+        let mut css = CssStyle::default();
+        let props = AnimatedProperties {
+            gap: 24.0,
+            ..AnimatedProperties::default()
+        };
+        apply_animated_props(&mut css, &props);
+        assert_eq!(css.gap, Some(Gap::Uniform(LengthPercentage::Px(24.0))));
+    }
+
+    #[test]
+    fn an_animation_touching_only_padding_reaches_the_css_style() {
+        let mut css = CssStyle::default();
+        let props = AnimatedProperties {
+            padding: 32.0,
+            ..AnimatedProperties::default()
+        };
+        apply_animated_props(&mut css, &props);
+        assert_eq!(
+            css.padding,
+            Some(Edges::Uniform(LengthPercentage::Px(32.0)))
+        );
     }
 }

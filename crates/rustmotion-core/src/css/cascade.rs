@@ -39,6 +39,45 @@ pub fn inherit_from(parent: &CssStyle, child: &mut CssStyle) {
     }
 }
 
+pub fn overlay_resolved_typography(resolved: &CssStyle, own: &mut CssStyle) {
+    if resolved.color.is_some() {
+        own.color = resolved.color.clone();
+    }
+    if resolved.font_family.is_some() {
+        own.font_family = resolved.font_family.clone();
+    }
+    if resolved.font_size.is_some() {
+        own.font_size = resolved.font_size.clone();
+    }
+    if resolved.font_weight.is_some() {
+        own.font_weight = resolved.font_weight.clone();
+    }
+    if resolved.font_style.is_some() {
+        own.font_style = resolved.font_style;
+    }
+    if resolved.line_height.is_some() {
+        own.line_height = resolved.line_height.clone();
+    }
+    if resolved.letter_spacing.is_some() {
+        own.letter_spacing = resolved.letter_spacing.clone();
+    }
+    if resolved.text_align.is_some() {
+        own.text_align = resolved.text_align;
+    }
+    if resolved.white_space.is_some() {
+        own.white_space = resolved.white_space;
+    }
+    if resolved.overflow_wrap.is_some() {
+        own.overflow_wrap = resolved.overflow_wrap;
+    }
+    if resolved.visibility.is_some() {
+        own.visibility = resolved.visibility;
+    }
+    if resolved.text_decoration.is_some() {
+        own.text_decoration = resolved.text_decoration.clone();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,5 +135,56 @@ mod tests {
         assert_eq!(child.font_family.as_deref(), Some("Arial"));
         assert_eq!(child.font_style, Some(FontStyle::Italic));
         assert_eq!(child.text_align, Some(TextAlign::Center));
+    }
+
+    #[test]
+    fn overlay_resolved_typography_replaces_a_component_own_static_font_size() {
+        use crate::css::units::Length;
+
+        let resolved = CssStyle {
+            font_size: Some(Length::Px(120.0)),
+            ..Default::default()
+        };
+        let mut own = CssStyle {
+            font_size: Some(Length::Px(20.0)),
+            ..Default::default()
+        };
+        overlay_resolved_typography(&resolved, &mut own);
+        assert_eq!(
+            own.font_size,
+            Some(Length::Px(120.0)),
+            "the box's own already-animated resolved font-size must win over the component's \
+             declared static one, unlike inherit_from's fill-only-if-none rule"
+        );
+    }
+
+    #[test]
+    fn overlay_resolved_typography_replaces_a_component_own_static_letter_spacing() {
+        use crate::css::units::Length;
+
+        let resolved = CssStyle {
+            letter_spacing: Some(Length::Px(18.0)),
+            ..Default::default()
+        };
+        let mut own = CssStyle {
+            letter_spacing: Some(Length::Px(0.0)),
+            ..Default::default()
+        };
+        overlay_resolved_typography(&resolved, &mut own);
+        assert_eq!(own.letter_spacing, Some(Length::Px(18.0)));
+    }
+
+    #[test]
+    fn overlay_resolved_typography_leaves_a_field_alone_when_resolved_lacks_it() {
+        let resolved = CssStyle::default();
+        let mut own = CssStyle {
+            color: Some(Color::String("#00ff00".into())),
+            ..Default::default()
+        };
+        overlay_resolved_typography(&resolved, &mut own);
+        match own.color {
+            Some(Color::String(s)) => assert_eq!(s, "#00ff00"),
+            other => panic!("resolved had no color; own's must be left alone, got {other:?}"),
+        }
     }
 }

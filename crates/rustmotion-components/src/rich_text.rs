@@ -131,6 +131,7 @@ fn resolve_span_fonts(
     spans: &[RichTextSpan],
     style: &CssStyle,
     default_size: f32,
+    default_letter_spacing: f32,
 ) -> Vec<Option<SpanFontInfo>> {
     let default_color = style.color_str_or("#FFFFFF");
     let default_family = style.font_family_or("Inter");
@@ -154,7 +155,7 @@ fn resolve_span_fonts(
             let weight = span.font_weight.as_ref().unwrap_or(&default_weight);
             let fstyle = span.font_style.as_ref().unwrap_or(&default_font_style);
             let color = span.color.as_deref().unwrap_or(default_color).to_string();
-            let letter_spacing = span.letter_spacing.unwrap_or(0.0);
+            let letter_spacing = span.letter_spacing.unwrap_or(default_letter_spacing);
             make_font(family, weight, fstyle, size).map(|font| SpanFontInfo {
                 font,
                 color,
@@ -198,9 +199,9 @@ impl RichText {
             viewport_height,
             wrap_width.unwrap_or(0.0),
         );
-        let (default_size, _letter_spacing_unused, line_height_val) =
+        let (default_size, default_letter_spacing, line_height_val) =
             style.typography_px_ctx(&base_ctx, 48.0);
-        let span_fonts = resolve_span_fonts(spans, style, default_size);
+        let span_fonts = resolve_span_fonts(spans, style, default_size, default_letter_spacing);
         let emoji_tf = emoji_typeface();
 
         let texts: Vec<String> = if visible_chars_progress >= 0.0 {
@@ -409,8 +410,14 @@ impl RichText {
             ctx.video_height as f32,
             wrap_width.unwrap_or(0.0),
         );
-        let default_size = self.style.font_size_px_ctx(&base_ctx, 48.0);
-        let span_fonts = resolve_span_fonts(&self.spans, &self.style, default_size);
+        let (default_size, default_letter_spacing, _) =
+            self.style.typography_px_ctx(&base_ctx, 48.0);
+        let span_fonts = resolve_span_fonts(
+            &self.spans,
+            &self.style,
+            default_size,
+            default_letter_spacing,
+        );
         let emoji_tf = emoji_typeface();
 
         let align_width = if layout_width.is_finite() && layout_width > 0.0 {

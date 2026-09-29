@@ -735,7 +735,60 @@ impl Component {
             Component::Tooltip(c) => c.style_config_mut(),
             _ => unreachable!("classified as typographic by the match above"),
         };
-        rustmotion_core::css::cascade::inherit_from(resolved, style);
+        rustmotion_core::css::cascade::overlay_resolved_typography(resolved, style);
         Some(clone)
+    }
+}
+
+#[cfg(test)]
+mod with_cascaded_style_tests {
+    use super::*;
+    use rustmotion_core::css::units::Length;
+
+    #[test]
+    fn a_declared_static_font_size_does_not_shadow_the_resolved_animated_one() {
+        let text: Component = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": { "font-size": 20 }
+        }))
+        .expect("component deserializes");
+
+        let resolved = CssStyle {
+            font_size: Some(Length::Px(120.0)),
+            ..text.as_styled().style_config().clone()
+        };
+
+        let cascaded = text
+            .with_cascaded_style(&resolved)
+            .expect("text is typographic");
+        assert_eq!(
+            cascaded.as_styled().style_config().font_size,
+            Some(Length::Px(120.0)),
+            "measurement/paint must see the resolved (animated) font-size, not the component's \
+             own declared 20px — this is the exact bug behind issues #426/#430"
+        );
+    }
+
+    #[test]
+    fn a_component_with_no_static_font_size_still_inherits_the_resolved_one() {
+        let text: Component = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi"
+        }))
+        .expect("component deserializes");
+
+        let resolved = CssStyle {
+            font_size: Some(Length::Px(64.0)),
+            ..text.as_styled().style_config().clone()
+        };
+
+        let cascaded = text
+            .with_cascaded_style(&resolved)
+            .expect("text is typographic");
+        assert_eq!(
+            cascaded.as_styled().style_config().font_size,
+            Some(Length::Px(64.0))
+        );
     }
 }
