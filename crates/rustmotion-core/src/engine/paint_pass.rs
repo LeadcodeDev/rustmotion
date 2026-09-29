@@ -17,6 +17,7 @@ use crate::css::units::{
 use crate::engine::animator::{burst_progress, burst_stroke_span};
 use crate::engine::box_tree::{BoxKind, BoxNode, NodeId};
 use crate::engine::layout_pass::{BoxLayout, LayoutResult};
+use crate::engine::transition::{blob_local_path, scaled_mask_path};
 use crate::schema::{AnimationEffect as SchemaAnimationEffect, BurstConfig};
 
 #[derive(Debug, Clone, Copy)]
@@ -2514,6 +2515,27 @@ fn clip_path_to_skia(
             Some(parsed.with_offset((layout.x, layout.y)))
         }
 
+        ClipPath::Blob {
+            radius,
+            origin,
+            lobes,
+            wobble,
+            seed,
+        } => {
+            let (cx, cy, _) = resolve_origin(origin.as_ref(), layout, ctx);
+            let reference = LengthContext {
+                parent_size: (layout.width.powi(2) + layout.height.powi(2)).sqrt()
+                    / std::f32::consts::SQRT_2,
+                ..*ctx
+            };
+            let r = radius.resolve(&reference);
+            if r <= 0.0 {
+                return Some(PathBuilder::new().detach());
+            }
+            let local = blob_local_path(*lobes, *wobble, *seed);
+            Some(scaled_mask_path(&local, r, (cx, cy)))
+        }
+
         ClipPath::NodePath { id } => {
             eprintln!(
                 "rustmotion: clip-path {{ kind: node-path, id: \"{id}\" }} is not implemented \
@@ -2544,6 +2566,7 @@ fn clip_path_kind_name(clip: &ClipPath) -> &'static str {
         ClipPath::Ellipse { .. } => "ellipse",
         ClipPath::Polygon { .. } => "polygon",
         ClipPath::Path { .. } => "path",
+        ClipPath::Blob { .. } => "blob",
         ClipPath::NodePath { .. } => "node-path",
         ClipPath::Morph { .. } => "morph",
     }
@@ -4204,6 +4227,63 @@ mod paint_order_tests {
         assert!(
             !is_red_at(Some(left_half), 300, 200),
             "the right half is clipped away"
+        );
+    }
+
+    #[test]
+    fn clip_path_blob_keeps_the_centre_and_drops_the_far_corner() {
+        let blob = ClipPath::Blob {
+            radius: CLP::Px(150.0),
+            origin: None,
+            lobes: 8,
+            wobble: 0.15,
+            seed: 11,
+        };
+        assert!(
+            is_red_at(Some(blob.clone()), 200, 200),
+            "the centre is inside a centred organic blob of radius 150"
+        );
+        assert!(
+            !is_red_at(Some(blob), 20, 20),
+            "the far corner, well beyond the blob's radius, is outside it"
+        );
+    }
+
+    #[test]
+    fn clip_path_blob_reuses_the_wobbling_lobe_generator_instead_of_drawing_a_plain_circle() {
+        let radius = 150.0;
+        let circle = ClipPath::Circle {
+            radius: CLP::Px(radius),
+            origin: None,
+        };
+        let blob = ClipPath::Blob {
+            radius: CLP::Px(radius),
+            origin: None,
+            lobes: 8,
+            wobble: 0.45,
+            seed: 11,
+        };
+        let mut saw_a_difference = false;
+        for deg in (0..360).step_by(3) {
+            let rad = (deg as f32).to_radians();
+            let probe_r = radius * 0.98;
+            let x = 200.0 + probe_r * rad.cos();
+            let y = 200.0 + probe_r * rad.sin();
+            if !(0.0..400.0).contains(&x) || !(0.0..400.0).contains(&y) {
+                continue;
+            }
+            let (xi, yi) = (x.round() as u32, y.round() as u32);
+            if is_red_at(Some(circle.clone()), xi, yi) != is_red_at(Some(blob.clone()), xi, yi) {
+                saw_a_difference = true;
+                break;
+            }
+        }
+        assert!(
+            saw_a_difference,
+            "a wobble of 0.45 must make the blob's edge diverge from a perfect circle \
+             somewhere around a ring just inside the nominal radius — if every sample agrees \
+             with the circle, clip-path blob is not reusing the transition's wobbling-lobe \
+             generator, just drawing a circle under a different name"
         );
     }
 

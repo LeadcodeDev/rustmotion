@@ -4,8 +4,9 @@ use rustmotion::core::css::style::{
 };
 use rustmotion::engine::animator::{motion_path_length, MOTION_PATH_MIN_LENGTH};
 use rustmotion::schema::{
-    AnimationEffect, CharAnimationTiming, MotionPathConfig, ResolvedScenario, SceneStart,
-    SpringConfig, TimeError,
+    AnimationEffect, CharAnimationTiming, IrisShape, MotionPathConfig, PanBackground,
+    PixelDissolveOrder, ResolvedScenario, SceneStart, SpringConfig, TimeError, Transition,
+    TransitionCorner, TransitionDirection, TransitionType,
 };
 
 pub fn validate_scenario(scenario: &ResolvedScenario) -> (Vec<String>, Vec<String>) {
@@ -28,6 +29,12 @@ pub fn validate_scenario(scenario: &ResolvedScenario) -> (Vec<String>, Vec<Strin
     }
 
     for (vi, view) in scenario.views.iter().enumerate() {
+        if let Some(transition) = &view.transition {
+            check_transition_ignored_fields(transition, &format!("views[{vi}]"), &mut warnings);
+            check_mask_transition_shape(transition, &format!("views[{vi}]"), &mut errors);
+            check_transition_origin_units(transition, &format!("views[{vi}]"), &mut warnings);
+        }
+
         for (si, scene) in view.scenes.iter().enumerate() {
             if scene.duration <= 0.0 {
                 errors.push(format!("views[{}].scenes[{}].duration must be > 0", vi, si));
@@ -42,6 +49,13 @@ pub fn validate_scenario(scenario: &ResolvedScenario) -> (Vec<String>, Vec<Strin
                          `bpm` at the scenario root, or use an `s`/`ms` unit instead)"
                     ));
                 }
+            }
+
+            if let Some(transition) = &scene.transition {
+                let path = format!("views[{vi}].scenes[{si}]");
+                check_transition_ignored_fields(transition, &path, &mut warnings);
+                check_mask_transition_shape(transition, &path, &mut errors);
+                check_transition_origin_units(transition, &path, &mut warnings);
             }
 
             let children = rustmotion::engine::render::deserialize_children(scene);
@@ -582,6 +596,208 @@ fn check_transition_smoothing(component: &Component, path: &str, warnings: &mut 
         }
         current = serde_json::Value::Object(merged);
     }
+}
+
+const TRANSITION_DEFAULT_CELL: f32 = 48.0;
+const TRANSITION_DEFAULT_SEED: u32 = 11;
+const TRANSITION_DEFAULT_ABERRATION: f32 = 1.0;
+const TRANSITION_DEFAULT_STRENGTH: f32 = 1.0;
+const TRANSITION_DEFAULT_ASPECT: f32 = 1.0;
+const TRANSITION_DEFAULT_HOLD: f32 = 0.0;
+const TRANSITION_DEFAULT_FROM_SCALE: f32 = 0.0;
+const TRANSITION_DEFAULT_TO_SCALE: f32 = 20.0;
+const TRANSITION_DEFAULT_LOBES: u32 = 8;
+const TRANSITION_DEFAULT_WOBBLE: f32 = 0.15;
+const TRANSITION_DEFAULT_FEATHER: f32 = 0.0;
+
+fn transition_used_field_names(transition_type: &TransitionType) -> &'static [&'static str] {
+    use TransitionType::*;
+    match transition_type {
+        Fade => &[],
+        WipeLeft | WipeRight | WipeUp | WipeDown => &["feather", "band_color"],
+        ZoomIn | ZoomOut => &[],
+        Flip => &[],
+        ClockWipe => &[],
+        Iris => &[
+            "origin", "shape", "aspect", "fill", "hold", "ring", "reverse",
+        ],
+        Slide => &[],
+        Dissolve => &[],
+        CornerReveal => &["corner"],
+        PixelDissolve => &["cell", "seed", "order"],
+        CameraPan => &["background"],
+        ChromaticWipe => &["direction", "aberration"],
+        ZoomBlur => &["strength", "origin"],
+        Whip => &["strength", "direction"],
+        Mask => &[
+            "silhouette",
+            "origin",
+            "from_scale",
+            "to_scale",
+            "feather",
+            "band_color",
+        ],
+        Blob => &["origin", "lobes", "wobble", "seed", "feather", "band_color"],
+        TransitionType::None => &[],
+    }
+}
+
+fn transition_type_json_name(transition_type: &TransitionType) -> String {
+    serde_json::to_value(transition_type)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| "?".to_string())
+}
+
+fn check_mask_transition_shape(transition: &Transition, path: &str, errors: &mut Vec<String>) {
+    use rustmotion::schema::TransitionType;
+
+    if !matches!(transition.transition_type, TransitionType::Mask) {
+        return;
+    }
+    let Some(shape) = transition.silhouette.as_ref() else {
+        errors.push(format!(
+            "{path}.transition: type \"mask\" needs a `silhouette` — a `polygon` with at least \
+             3 points, or a `path` with SVG path data. Without one it falls back to a plain \
+             fade at render, which looks like the transition was ignored."
+        ));
+        return;
+    };
+    if rustmotion::engine::transition::mask_shape_to_local_path(shape).is_none() {
+        errors.push(format!(
+            "{path}.transition.silhouette did not resolve to a path — a `polygon` needs at \
+             least 3 points, a `path`'s `d` must be valid SVG path data. It falls back to a \
+             plain fade at render."
+        ));
+    }
+}
+
+fn check_transition_origin_units(transition: &Transition, path: &str, warnings: &mut Vec<String>) {
+    use rustmotion::schema::TransitionType;
+
+    if !matches!(
+        transition.transition_type,
+        TransitionType::Mask
+            | TransitionType::Blob
+            | TransitionType::Iris
+            | TransitionType::ZoomBlur
+    ) {
+        return;
+    }
+    let Some(origin) = transition.origin.as_ref() else {
+        return;
+    };
+    let looks_like_a_fraction = origin.x > 0.0
+        && origin.x <= 1.0
+        && origin.y > 0.0
+        && origin.y <= 1.0
+        && (origin.x != 1.0 || origin.y != 1.0);
+    if looks_like_a_fraction {
+        warnings.push(format!(
+            "{path}.transition.origin is ({}, {}), which is in pixels — that places it within \
+             one pixel of the frame's top-left corner. `zoom_blur`, `iris`, `mask` and `blob` \
+             all take frame pixels here, not a 0..1 fraction: the centre of a 1920x1080 frame \
+             is {{ \"x\": 960, \"y\": 540 }}.",
+            origin.x, origin.y
+        ));
+    }
+}
+
+fn check_transition_ignored_fields(
+    transition: &Transition,
+    path: &str,
+    warnings: &mut Vec<String>,
+) {
+    let used = transition_used_field_names(&transition.transition_type);
+    let is_used = |name: &str| used.contains(&name);
+
+    let mut ignored: Vec<&str> = Vec::new();
+    if !is_used("corner") && transition.corner != TransitionCorner::default() {
+        ignored.push("corner");
+    }
+    if !is_used("cell") && transition.cell != TRANSITION_DEFAULT_CELL {
+        ignored.push("cell");
+    }
+    if !is_used("seed") && transition.seed != TRANSITION_DEFAULT_SEED {
+        ignored.push("seed");
+    }
+    if !is_used("order") && transition.order != PixelDissolveOrder::default() {
+        ignored.push("order");
+    }
+    if !is_used("direction") && transition.direction != TransitionDirection::default() {
+        ignored.push("direction");
+    }
+    if !is_used("aberration") && transition.aberration != TRANSITION_DEFAULT_ABERRATION {
+        ignored.push("aberration");
+    }
+    if !is_used("strength") && transition.strength != TRANSITION_DEFAULT_STRENGTH {
+        ignored.push("strength");
+    }
+    if !is_used("origin") && transition.origin.is_some() {
+        ignored.push("origin");
+    }
+    if !is_used("shape") && transition.shape != IrisShape::default() {
+        ignored.push("shape");
+    }
+    if !is_used("aspect") && transition.aspect != TRANSITION_DEFAULT_ASPECT {
+        ignored.push("aspect");
+    }
+    if !is_used("fill") && transition.fill.is_some() {
+        ignored.push("fill");
+    }
+    if !is_used("hold") && transition.hold != TRANSITION_DEFAULT_HOLD {
+        ignored.push("hold");
+    }
+    if !is_used("ring") && transition.ring.is_some() {
+        ignored.push("ring");
+    }
+    if !is_used("reverse") && transition.reverse {
+        ignored.push("reverse");
+    }
+    if !is_used("silhouette") && transition.silhouette.is_some() {
+        ignored.push("silhouette");
+    }
+    if !is_used("from_scale") && transition.from_scale != TRANSITION_DEFAULT_FROM_SCALE {
+        ignored.push("from_scale");
+    }
+    if !is_used("to_scale") && transition.to_scale != TRANSITION_DEFAULT_TO_SCALE {
+        ignored.push("to_scale");
+    }
+    if !is_used("lobes") && transition.lobes != TRANSITION_DEFAULT_LOBES {
+        ignored.push("lobes");
+    }
+    if !is_used("wobble") && transition.wobble != TRANSITION_DEFAULT_WOBBLE {
+        ignored.push("wobble");
+    }
+    if !is_used("feather") && transition.feather != TRANSITION_DEFAULT_FEATHER {
+        ignored.push("feather");
+    }
+    if !is_used("band_color") && transition.band_color.is_some() {
+        ignored.push("band_color");
+    }
+    if !is_used("background") && transition.background != PanBackground::default() {
+        ignored.push("background");
+    }
+
+    if ignored.is_empty() {
+        return;
+    }
+
+    let type_name = transition_type_json_name(&transition.transition_type);
+    let field_word = if ignored.len() == 1 {
+        "field"
+    } else {
+        "fields"
+    };
+    let field_list = ignored
+        .iter()
+        .map(|f| format!("`{f}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    warnings.push(format!(
+        "{path}.transition: type \"{type_name}\" ignores {field_word} {field_list} — accepted \
+         by the schema but without effect on this transition type."
+    ));
 }
 
 fn check_spring_config(spring: &SpringConfig, path: &str, errors: &mut Vec<String>) {
@@ -1767,6 +1983,209 @@ mod unresolved_beat_unit_tests {
         assert!(
             errors.iter().all(|e| !e.contains("unresolved_beat_unit")),
             "an s/ms-unit `at` never needs bpm: {errors:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod transition_ignored_field_tests {
+    use super::*;
+    use rustmotion::loader::load_scenario_from_source;
+
+    fn parse(json: &str) -> ResolvedScenario {
+        load_scenario_from_source(None, Some(json)).expect("scenario parses")
+    }
+
+    #[test]
+    fn a_fade_transition_names_every_field_it_ignores_in_one_warning() {
+        let json = r##"{
+            "video": {"width": 64, "height": 64, "fps": 20},
+            "scenes": [
+                {"duration": 1.0, "children": []},
+                {
+                    "duration": 1.0,
+                    "children": [],
+                    "transition": {
+                        "type": "fade",
+                        "duration": 0.6,
+                        "origin": {"x": 10, "y": 10},
+                        "ring": {"color": "#fff", "width": 4},
+                        "shape": "pill"
+                    }
+                }
+            ]
+        }"##;
+        let scenario = parse(json);
+        let (_errors, warnings) = validate_scenario(&scenario);
+        let hit = warnings
+            .iter()
+            .find(|w| w.contains("views[0].scenes[1]") && w.contains("fade"))
+            .unwrap_or_else(|| panic!("expected an ignored-field warning, got: {warnings:?}"));
+        for field in ["origin", "ring", "shape"] {
+            assert!(
+                hit.contains(&format!("`{field}`")),
+                "must name `{field}` as ignored by \"fade\": {hit}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_field_the_transition_type_actually_uses_produces_no_warning() {
+        let json = r##"{
+            "video": {"width": 64, "height": 64, "fps": 20},
+            "scenes": [
+                {"duration": 1.0, "children": []},
+                {
+                    "duration": 1.0,
+                    "children": [],
+                    "transition": {
+                        "type": "wipe_left",
+                        "duration": 0.5,
+                        "feather": 40.0,
+                        "band_color": "#ff00ff"
+                    }
+                }
+            ]
+        }"##;
+        let scenario = parse(json);
+        let (_errors, warnings) = validate_scenario(&scenario);
+        assert!(
+            warnings.iter().all(|w| !w.contains("ignores")),
+            "feather and band_color are used by wipe_left — must not be reported as ignored: \
+             {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_field_left_at_its_default_is_not_reported_even_though_the_type_ignores_it() {
+        let json = r##"{
+            "video": {"width": 64, "height": 64, "fps": 20},
+            "scenes": [
+                {"duration": 1.0, "children": []},
+                {
+                    "duration": 1.0,
+                    "children": [],
+                    "transition": {
+                        "type": "fade",
+                        "duration": 0.6,
+                        "shape": "circle"
+                    }
+                }
+            ]
+        }"##;
+        let scenario = parse(json);
+        let (_errors, warnings) = validate_scenario(&scenario);
+        assert!(
+            warnings.iter().all(|w| !w.contains("ignores")),
+            "shape: \"circle\" is the default — leaving it at the default must not be flagged \
+             as an explicit, ineffective override: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_view_level_transition_is_checked_the_same_way_as_a_scene_level_one() {
+        let json = r##"{
+            "video": {"width": 64, "height": 64, "fps": 20},
+            "composition": [
+                {
+                    "type": "slide",
+                    "transition": {
+                        "type": "slide",
+                        "duration": 0.4,
+                        "corner": "top_left",
+                        "cell": 12.0
+                    },
+                    "scenes": [ {"duration": 1.0, "children": []} ]
+                }
+            ]
+        }"##;
+        let scenario = parse(json);
+        let (_errors, warnings) = validate_scenario(&scenario);
+        let hit = warnings
+            .iter()
+            .find(|w| w.contains("views[0]") && w.contains("slide") && w.contains("ignores"))
+            .unwrap_or_else(|| panic!("expected a view-level ignored-field warning: {warnings:?}"));
+        assert!(hit.contains("`corner`") && hit.contains("`cell`"), "{hit}");
+    }
+}
+
+#[cfg(test)]
+mod mask_transition_message_tests {
+    use super::*;
+
+    fn scenario(transition: serde_json::Value) -> rustmotion::schema::ResolvedScenario {
+        let json = serde_json::json!({
+            "version": "1.0",
+            "video": { "width": 1920, "height": 1080, "fps": 30 },
+            "scenes": [
+                { "duration": 1.0, "children": [] },
+                { "duration": 1.0, "children": [], "transition": transition }
+            ]
+        })
+        .to_string();
+        rustmotion::loader::load_scenario_from_source(None, Some(&json)).expect("load")
+    }
+
+    #[test]
+    fn a_mask_with_no_silhouette_is_named_rather_than_falling_back_to_a_fade_at_render() {
+        let (errors, _) = validate_scenario(&scenario(
+            serde_json::json!({ "type": "mask", "duration": 0.6 }),
+        ));
+        assert!(
+            errors.iter().any(|e| e.contains("needs a `silhouette`")),
+            "the render-time fallback is a stderr line under a zero exit code, which reads as \
+             the transition being ignored: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_polygon_with_two_points_is_named_before_the_render_silently_fades() {
+        let (errors, _) = validate_scenario(&scenario(serde_json::json!({
+            "type": "mask",
+            "duration": 0.6,
+            "silhouette": { "kind": "polygon", "points": [[0.0, 0.0], [10.0, 0.0]] }
+        })));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("did not resolve to a path")),
+            "got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_usable_silhouette_produces_no_error() {
+        let (errors, _) = validate_scenario(&scenario(serde_json::json!({
+            "type": "mask",
+            "duration": 0.6,
+            "silhouette": { "kind": "polygon", "points": [[0.0, 0.0], [10.0, 0.0], [5.0, 9.0]] }
+        })));
+        assert!(errors.is_empty(), "got {errors:?}");
+    }
+
+    #[test]
+    fn a_fractional_origin_is_flagged_because_the_field_is_in_frame_pixels() {
+        let (_, warnings) = validate_scenario(&scenario(serde_json::json!({
+            "type": "iris",
+            "duration": 0.6,
+            "origin": { "x": 0.5, "y": 0.5 }
+        })));
+        assert!(
+            warnings.iter().any(|w| w.contains("in pixels")),
+            "0.5 reads as the frame's centre and lands half a pixel from its corner: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_pixel_origin_is_left_alone() {
+        let (_, warnings) = validate_scenario(&scenario(serde_json::json!({
+            "type": "iris",
+            "duration": 0.6,
+            "origin": { "x": 960.0, "y": 540.0 }
+        })));
+        assert!(
+            !warnings.iter().any(|w| w.contains("in pixels")),
+            "got {warnings:?}"
         );
     }
 }

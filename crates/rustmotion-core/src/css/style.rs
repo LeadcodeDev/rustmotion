@@ -1596,6 +1596,18 @@ impl Material {
     }
 }
 
+fn default_clip_path_blob_lobes() -> u32 {
+    8
+}
+
+fn default_clip_path_blob_wobble() -> f32 {
+    0.15
+}
+
+fn default_clip_path_blob_seed() -> u32 {
+    11
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ClipPath {
@@ -1624,6 +1636,30 @@ pub enum ClipPath {
     },
     Path {
         d: String,
+    },
+    /// A procedurally generated organic silhouette — the same wobbling-lobe
+    /// shape a `blob` scene `transition` grows across a whole cut, scoped
+    /// here to one element's own clip instead. `lobes` control points sit
+    /// around a circle of `radius`, each nudged radially by a deterministic
+    /// noise scaled by `wobble` and picked by `seed`; the same three values
+    /// reproduce the same silhouette, byte for byte. `wobble: 0` degenerates
+    /// to a plain circle, the same way `radius` alone does for `circle`.
+    Blob {
+        radius: LengthPercentage,
+        #[serde(default)]
+        origin: Option<TransformOrigin>,
+        /// How many lobes the silhouette grows. Same field as
+        /// `transition.lobes`.
+        #[serde(default = "default_clip_path_blob_lobes")]
+        lobes: u32,
+        /// How far each lobe's radius wanders from a perfect circle, as a
+        /// fraction of it. Same field as `transition.wobble`.
+        #[serde(default = "default_clip_path_blob_wobble")]
+        wobble: f32,
+        /// Stable selector for the lobe noise, same selector as
+        /// `pixel_dissolve.seed` and `transition.seed`.
+        #[serde(default = "default_clip_path_blob_seed")]
+        seed: u32,
     },
     /// Clip to another node's own path geometry, by id, instead of a literal
     /// `d` frozen at author time. The motivating shape: two copies of the
@@ -1722,6 +1758,58 @@ mod tests {
                 .unwrap();
         assert!(matches!(s1.color, Some(Color::String(_))));
         assert!(matches!(s2.color, Some(Color::Rgba { r: 255, .. })));
+    }
+
+    #[test]
+    fn deserialize_clip_path_blob_falls_back_to_the_transition_defaults() {
+        let json = r#"{ "clip-path": { "kind": "blob", "radius": 120 } }"#;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        match s.clip_path {
+            Some(ClipPath::Blob {
+                radius,
+                origin,
+                lobes,
+                wobble,
+                seed,
+            }) => {
+                assert_eq!(radius, LengthPercentage::Px(120.0));
+                assert!(origin.is_none());
+                assert_eq!(
+                    lobes, 8,
+                    "must default to the same lobes as transition: blob"
+                );
+                assert_eq!(
+                    wobble, 0.15,
+                    "must default to the same wobble as transition: blob"
+                );
+                assert_eq!(
+                    seed, 11,
+                    "must default to the same seed as transition: blob"
+                );
+            }
+            other => panic!("expected ClipPath::Blob, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_clip_path_blob_with_explicit_lobes_wobble_seed() {
+        let json = r#"{
+            "clip-path": { "kind": "blob", "radius": 90, "lobes": 5, "wobble": 0.4, "seed": 3 }
+        }"#;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        match s.clip_path {
+            Some(ClipPath::Blob {
+                lobes,
+                wobble,
+                seed,
+                ..
+            }) => {
+                assert_eq!(lobes, 5);
+                assert_eq!(wobble, 0.4);
+                assert_eq!(seed, 3);
+            }
+            other => panic!("expected ClipPath::Blob, got {other:?}"),
+        }
     }
 
     #[test]
