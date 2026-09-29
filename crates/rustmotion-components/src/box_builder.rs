@@ -259,9 +259,7 @@ fn ghost_css_for(
     }
     if let Some(ghost_effects) = effective_effects(&child.component, extra_delay, ghost_time) {
         let props = resolve_props_for_effects(&ghost_effects, ghost_time, scene_duration);
-        if props_has_paint_overrides(&props) {
-            apply_animated_props(&mut css, &props);
-        }
+        apply_animated_props(&mut css, &props);
         apply_glow_effect(&mut css, &ghost_effects);
         carry_paint_pass_effects(&mut css, &ghost_effects);
         apply_directional_blur_props(&mut css, &props);
@@ -559,9 +557,7 @@ fn build_child<'a>(
     if let Some(actx) = local_actx {
         if let Some(effects) = effective_effects(&child.component, anim_delay, actx.time) {
             let props = resolve_props_for_effects(&effects, actx.time, actx.scene_duration);
-            if props_has_paint_overrides(&props) {
-                apply_animated_props(&mut css, &props);
-            }
+            apply_animated_props(&mut css, &props);
             apply_glow_effect(&mut css, &effects);
             carry_paint_pass_effects(&mut css, &effects);
             apply_directional_blur_props(&mut css, &props);
@@ -1034,22 +1030,6 @@ pub(crate) fn resolve_transition_css_overrides(
         }
     }
     out
-}
-
-fn props_has_paint_overrides(p: &AnimatedProperties) -> bool {
-    p.translate_x != 0.0
-        || p.translate_y != 0.0
-        || (p.scale_x - 1.0).abs() > 1e-4
-        || (p.scale_y - 1.0).abs() > 1e-4
-        || p.rotation.abs() > 1e-3
-        || p.rotate_x.abs() > 1e-3
-        || p.rotate_y.abs() > 1e-3
-        || (p.opacity - 1.0).abs() > 1e-4
-        || p.blur > 0.0
-        || (p.glow_radius > 0.0 && p.glow_intensity > 0.0)
-        || p.perspective > 0.0
-        || p.width >= 0.0
-        || p.height >= 0.0
 }
 
 fn carry_paint_pass_effects(
@@ -3501,5 +3481,511 @@ mod tests {
             }
             other => panic!("expected Blur, got {:?}", other),
         }
+    }
+
+    fn read_pixel(surface: &mut skia_safe::Surface, x: i32, y: i32) -> [u8; 4] {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (1, 1),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = [0u8; 4];
+        assert!(
+            snapshot.read_pixels(
+                &info,
+                &mut buf,
+                4,
+                skia_safe::IPoint::new(x, y),
+                skia_safe::image::CachingHint::Disallow,
+            ),
+            "pixel read should succeed"
+        );
+        buf
+    }
+
+    fn ink_extent_x(
+        surface: &mut skia_safe::Surface,
+        width: i32,
+        height: i32,
+        y0: i32,
+        y1: i32,
+    ) -> Option<(i32, i32)> {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (width, height),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (width * height * 4) as usize];
+        assert!(
+            snapshot.read_pixels(
+                &info,
+                &mut buf,
+                (width * 4) as usize,
+                skia_safe::IPoint::new(0, 0),
+                skia_safe::image::CachingHint::Disallow,
+            ),
+            "pixel read should succeed"
+        );
+        let mut min_x: Option<i32> = None;
+        let mut max_x: Option<i32> = None;
+        for y in y0.max(0)..y1.min(height) {
+            for x in 0..width {
+                let alpha = buf[((y * width + x) * 4 + 3) as usize];
+                if alpha > 0 {
+                    min_x = Some(min_x.map_or(x, |m| m.min(x)));
+                    max_x = Some(max_x.map_or(x, |m| m.max(x)));
+                }
+            }
+        }
+        min_x.zip(max_x)
+    }
+
+    fn paint_scene_at(
+        built: &BuiltScene,
+        layout: &rustmotion_core::engine::layout_pass::LayoutResult,
+        width: i32,
+        height: i32,
+        time: f64,
+    ) -> skia_safe::Surface {
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((width, height)).expect("raster surface");
+        let canvas = surface.canvas();
+        let dispatcher = LegacyPaintDispatcher::for_scene(built);
+        let frame = PaintFrame {
+            light: Default::default(),
+            time,
+            scenario_time: time,
+            frame_index: (time * 30.0).round() as u32,
+            fps: 30,
+            video_width: width as u32,
+            video_height: height as u32,
+            scene_duration: 1.0,
+            camera: None,
+        };
+        paint_tree(canvas, &built.root, layout, &frame, &dispatcher);
+        surface
+    }
+
+    #[test]
+    fn an_animation_touching_only_border_radius_reaches_the_painted_frame() {
+        const SIZE: i32 = 200;
+        let scene = vec![child_from_json(json!({
+            "type": "div",
+            "style": {
+                "width": SIZE, "height": SIZE,
+                "background": "#FF2D55",
+                "animation": [{ "name": "keyframes", "duration": 1.0, "keyframes": [
+                    { "property": "border_radius", "easing": "linear", "keyframes": [
+                        { "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 100.0 }
+                    ] }
+                ] }]
+            }
+        }))];
+        let anim = BuildAnimationCtx {
+            time: 1.0,
+            scenario_time: 1.0,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let built = build_scene_at_time(
+            &scene,
+            (SIZE as f32, SIZE as f32),
+            default_root_css((SIZE as f32, SIZE as f32)),
+            anim,
+        );
+        let layout = run_layout(
+            &built.root,
+            (SIZE as f32, SIZE as f32),
+            &ConversionContext::default(),
+        );
+        let mut surface = paint_scene_at(&built, &layout, SIZE, SIZE, 1.0);
+
+        let corner = read_pixel(&mut surface, 2, 2);
+        assert_eq!(
+            corner[3], 0,
+            "a 200x200 box animated to a 100px border-radius (t=1) must clip its very corner to \
+             transparent; an animation touching only border_radius must still reach paint \
+             through box_builder's css, got rgba {:?}",
+            corner
+        );
+    }
+
+    #[test]
+    fn an_animation_touching_only_clip_path_progress_reaches_the_painted_frame() {
+        const SIZE: i32 = 200;
+        let scene = vec![child_from_json(json!({
+            "type": "div",
+            "style": {
+                "width": SIZE, "height": SIZE,
+                "background": "#00AAFF",
+                "clip-path": {
+                    "kind": "morph",
+                    "from": { "kind": "circle", "radius": 10 },
+                    "to": { "kind": "circle", "radius": 150 },
+                    "progress": 0
+                },
+                "animation": [{ "name": "keyframes", "duration": 1.0, "keyframes": [
+                    { "property": "clip_path_progress", "easing": "linear", "keyframes": [
+                        { "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 1.0 }
+                    ] }
+                ] }]
+            }
+        }))];
+        let anim = BuildAnimationCtx {
+            time: 1.0,
+            scenario_time: 1.0,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let built = build_scene_at_time(
+            &scene,
+            (SIZE as f32, SIZE as f32),
+            default_root_css((SIZE as f32, SIZE as f32)),
+            anim,
+        );
+        let layout = run_layout(
+            &built.root,
+            (SIZE as f32, SIZE as f32),
+            &ConversionContext::default(),
+        );
+        let mut surface = paint_scene_at(&built, &layout, SIZE, SIZE, 1.0);
+
+        let corner = read_pixel(&mut surface, 5, 5);
+        assert!(
+            corner[3] > 200,
+            "at t=1 the clip-path morph must have swept to its 150px-radius `to` circle, which \
+             covers this corner; an animation touching only clip_path_progress must still reach \
+             paint through box_builder's css, got rgba {:?}",
+            corner
+        );
+    }
+
+    #[test]
+    fn an_animation_touching_only_gap_reaches_the_painted_frame() {
+        const W: i32 = 400;
+        const H: i32 = 80;
+        let scene = vec![child_from_json(json!({
+            "type": "div",
+            "style": {
+                "display": "flex", "flex-direction": "row",
+                "width": W, "height": H,
+                "animation": [{ "name": "keyframes", "duration": 1.0, "keyframes": [
+                    { "property": "gap", "easing": "linear", "keyframes": [
+                        { "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 100.0 }
+                    ] }
+                ] }]
+            },
+            "children": [
+                { "type": "shape", "shape": "rect", "fill": "#00AA00",
+                  "style": { "width": 80, "height": 80 } },
+                { "type": "shape", "shape": "rect", "fill": "#0000AA",
+                  "style": { "width": 80, "height": 80 } }
+            ]
+        }))];
+        let anim = BuildAnimationCtx {
+            time: 1.0,
+            scenario_time: 1.0,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let built = build_scene_at_time(
+            &scene,
+            (W as f32, H as f32),
+            default_root_css((W as f32, H as f32)),
+            anim,
+        );
+        let layout = run_layout(
+            &built.root,
+            (W as f32, H as f32),
+            &ConversionContext::default(),
+        );
+        let mut surface = paint_scene_at(&built, &layout, W, H, 1.0);
+
+        let between = read_pixel(&mut surface, 130, 40);
+        assert_eq!(
+            between[3], 0,
+            "at t=1 a 100px gap must leave a transparent strip between the two 80px shapes \
+             (x=80..180); an animation touching only gap must still reach layout through \
+             box_builder's css, got rgba {:?}",
+            between
+        );
+    }
+
+    #[test]
+    fn an_animation_touching_only_padding_reaches_the_painted_frame() {
+        const SIZE: i32 = 200;
+        let scene = vec![child_from_json(json!({
+            "type": "div",
+            "style": {
+                "width": SIZE, "height": SIZE,
+                "animation": [{ "name": "keyframes", "duration": 1.0, "keyframes": [
+                    { "property": "padding", "easing": "linear", "keyframes": [
+                        { "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 60.0 }
+                    ] }
+                ] }]
+            },
+            "children": [
+                { "type": "shape", "shape": "rect", "fill": "#FFAA00",
+                  "style": { "width": 40, "height": 40 } }
+            ]
+        }))];
+        let anim = BuildAnimationCtx {
+            time: 1.0,
+            scenario_time: 1.0,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let built = build_scene_at_time(
+            &scene,
+            (SIZE as f32, SIZE as f32),
+            default_root_css((SIZE as f32, SIZE as f32)),
+            anim,
+        );
+        let layout = run_layout(
+            &built.root,
+            (SIZE as f32, SIZE as f32),
+            &ConversionContext::default(),
+        );
+        let mut surface = paint_scene_at(&built, &layout, SIZE, SIZE, 1.0);
+
+        let near_origin = read_pixel(&mut surface, 10, 10);
+        assert_eq!(
+            near_origin[3], 0,
+            "at t=1 a 60px padding must push the 40px child away from the container's top-left \
+             corner; an animation touching only padding must still reach layout through \
+             box_builder's css, got rgba {:?}",
+            near_origin
+        );
+    }
+
+    #[test]
+    fn an_animated_font_size_reaches_layout_not_only_paint() {
+        let make_text = |style_extra: serde_json::Value| {
+            child_from_json(json!({
+                "type": "text",
+                "content": "The quick brown fox jumps over the lazy dog",
+                "style": style_extra
+            }))
+        };
+
+        let baseline_scene = vec![make_text(json!({
+            "font-size": 20, "white-space": "nowrap", "align-self": "flex-start"
+        }))];
+        let baseline_built = build_scene(&baseline_scene, (4000.0, 400.0));
+        let baseline_layout = run_layout(
+            &baseline_built.root,
+            (4000.0, 400.0),
+            &ConversionContext::default(),
+        );
+        let baseline_width = baseline_layout
+            .get(baseline_built.root.children[0].id)
+            .expect("baseline text laid out")
+            .width;
+
+        let animated_scene = vec![make_text(json!({
+            "font-size": 20,
+            "white-space": "nowrap",
+            "align-self": "flex-start",
+            "animation": [{ "name": "keyframes", "duration": 1.0, "keyframes": [
+                { "property": "font_size", "easing": "linear", "keyframes": [
+                    { "time": 0.0, "value": 20.0 }, { "time": 1.0, "value": 120.0 }
+                ] }
+            ] }]
+        }))];
+        let anim = BuildAnimationCtx {
+            time: 1.0,
+            scenario_time: 1.0,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let animated_built = build_scene_at_time(
+            &animated_scene,
+            (4000.0, 400.0),
+            default_root_css((4000.0, 400.0)),
+            anim,
+        );
+        let animated_layout = run_layout(
+            &animated_built.root,
+            (4000.0, 400.0),
+            &ConversionContext::default(),
+        );
+        let animated_width = animated_layout
+            .get(animated_built.root.children[0].id)
+            .expect("animated text laid out")
+            .width;
+
+        assert!(
+            animated_width > baseline_width * 2.0,
+            "at t=1 the font_size animation has reached 120px (6x the declared static 20px); \
+             the LAYOUT width must reflect that, not just the painted glyphs — issue #426/#430's \
+             'paint right, layout stale' symptom. baseline={baseline_width}, \
+             animated={animated_width}"
+        );
+    }
+
+    #[test]
+    fn an_animated_letter_spacing_on_text_reaches_layout_not_only_paint() {
+        let make_text = |style_extra: serde_json::Value| {
+            child_from_json(json!({
+                "type": "text",
+                "content": "WWWWWWWWWW",
+                "style": style_extra
+            }))
+        };
+
+        let baseline_scene = vec![make_text(json!({
+            "letter-spacing": 0, "font-size": 40, "white-space": "nowrap",
+            "align-self": "flex-start"
+        }))];
+        let baseline_built = build_scene(&baseline_scene, (4000.0, 400.0));
+        let baseline_layout = run_layout(
+            &baseline_built.root,
+            (4000.0, 400.0),
+            &ConversionContext::default(),
+        );
+        let baseline_width = baseline_layout
+            .get(baseline_built.root.children[0].id)
+            .expect("baseline text laid out")
+            .width;
+
+        let animated_scene = vec![make_text(json!({
+            "letter-spacing": 0, "font-size": 40, "white-space": "nowrap",
+            "align-self": "flex-start",
+            "animation": [{ "name": "keyframes", "duration": 1.0, "keyframes": [
+                { "property": "letter_spacing", "easing": "linear", "keyframes": [
+                    { "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 40.0 }
+                ] }
+            ] }]
+        }))];
+        let anim = BuildAnimationCtx {
+            time: 1.0,
+            scenario_time: 1.0,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let animated_built = build_scene_at_time(
+            &animated_scene,
+            (4000.0, 400.0),
+            default_root_css((4000.0, 400.0)),
+            anim,
+        );
+        let animated_layout = run_layout(
+            &animated_built.root,
+            (4000.0, 400.0),
+            &ConversionContext::default(),
+        );
+        let animated_width = animated_layout
+            .get(animated_built.root.children[0].id)
+            .expect("animated text laid out")
+            .width;
+
+        assert!(
+            animated_width > baseline_width + 200.0,
+            "at t=1 a 40px letter-spacing animation must widen the measured LAYOUT box, or the \
+             box the text was given overflows — issue #430's overflow symptom exactly. \
+             baseline={baseline_width}, animated={animated_width}"
+        );
+    }
+
+    #[test]
+    fn an_animated_letter_spacing_reaches_rich_text_through_the_full_pipeline() {
+        const W: i32 = 800;
+        const H: i32 = 120;
+        let scene = vec![child_from_json(json!({
+            "type": "rich_text",
+            "spans": [{ "text": "WWWWWWWWWW", "color": "#FFFFFF" }],
+            "style": {
+                "letter-spacing": 0, "font-size": 60,
+                "animation": [{ "name": "keyframes", "duration": 1.0, "keyframes": [
+                    { "property": "letter_spacing", "easing": "linear", "keyframes": [
+                        { "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 40.0 }
+                    ] }
+                ] }]
+            }
+        }))];
+
+        let render_extent_at = |time: f64| -> (i32, i32) {
+            let anim = BuildAnimationCtx {
+                time,
+                scenario_time: time,
+                scene_duration: 1.0,
+                fps: 30,
+            };
+            let built = build_scene_at_time(
+                &scene,
+                (W as f32, H as f32),
+                default_root_css((W as f32, H as f32)),
+                anim,
+            );
+            let layout = run_layout(
+                &built.root,
+                (W as f32, H as f32),
+                &ConversionContext::default(),
+            );
+            let mut surface = paint_scene_at(&built, &layout, W, H, time);
+            ink_extent_x(&mut surface, W, H, 0, H).expect("rich_text must paint some ink")
+        };
+
+        let (start0, end0) = render_extent_at(0.0);
+        let (start1, end1) = render_extent_at(1.0);
+        let extent0 = end0 - start0;
+        let extent1 = end1 - start1;
+
+        assert!(
+            extent1 > extent0 + 100,
+            "an animated style.letter-spacing (no per-span override) must widen rich_text's \
+             painted ink extent — both the box_builder wiring and rich_text's own static/\
+             animated fallback must be in place (issue #430); extent at t=0 was {extent0}px \
+             [{start0},{end0}], at t=1 {extent1}px [{start1},{end1}]"
+        );
+    }
+
+    #[test]
+    fn a_static_opacity_zero_is_overridden_by_an_active_fade_in_animation_end_to_end() {
+        const SIZE: i32 = 100;
+        let scene = vec![child_from_json(json!({
+            "type": "div",
+            "style": {
+                "width": SIZE, "height": SIZE,
+                "background": "#00FF00",
+                "opacity": 0,
+                "animation": [{ "name": "keyframes", "duration": 1.0, "keyframes": [
+                    { "property": "opacity", "easing": "linear", "keyframes": [
+                        { "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 0.8 }
+                    ] }
+                ] }]
+            }
+        }))];
+        let anim = BuildAnimationCtx {
+            time: 1.0,
+            scenario_time: 1.0,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let built = build_scene_at_time(
+            &scene,
+            (SIZE as f32, SIZE as f32),
+            default_root_css((SIZE as f32, SIZE as f32)),
+            anim,
+        );
+        let layout = run_layout(
+            &built.root,
+            (SIZE as f32, SIZE as f32),
+            &ConversionContext::default(),
+        );
+        let mut surface = paint_scene_at(&built, &layout, SIZE, SIZE, 1.0);
+
+        let center = read_pixel(&mut surface, SIZE / 2, SIZE / 2);
+        assert!(
+            center[3] > 100,
+            "the fade-in animation resolves opacity to 0.8 at t=1; a declared `opacity: 0` \
+             authored as the animation's own starting point must not multiply it back to zero \
+             for the rest of the run (issue #430), got rgba {:?}",
+            center
+        );
     }
 }
