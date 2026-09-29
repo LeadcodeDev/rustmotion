@@ -16,6 +16,31 @@ pub fn font_cache_dir() -> PathBuf {
     base.join("rustmotion").join("fonts")
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RemoteFontPolicy {
+    #[default]
+    Deny,
+    Allow,
+}
+
+static REMOTE_FONT_POLICY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_remote_font_policy(policy: RemoteFontPolicy) {
+    REMOTE_FONT_POLICY.store(
+        policy == RemoteFontPolicy::Allow,
+        std::sync::atomic::Ordering::Release,
+    );
+}
+
+pub fn remote_font_policy() -> RemoteFontPolicy {
+    if REMOTE_FONT_POLICY.load(std::sync::atomic::Ordering::Acquire) {
+        RemoteFontPolicy::Allow
+    } else {
+        RemoteFontPolicy::Deny
+    }
+}
+
 pub fn resolve_google_font(
     family: &str,
     weights: &[u16],
@@ -41,6 +66,18 @@ pub fn resolve_google_font(
     }
 
     let url = build_css2_url(family, &missing_weights);
+    if remote_font_policy() != RemoteFontPolicy::Allow {
+        return Err(RustmotionError::RemoteFontDenied {
+            family: family.to_string(),
+            weights: missing_weights
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+            url: url.clone(),
+            cache_hint: cache_dir.display().to_string(),
+        });
+    }
     let css = fetch_css2(&url, family)?;
 
     let ttf_urls = parse_ttf_urls(&css);
@@ -289,5 +326,100 @@ mod tests {
     fn family_slug_lowercases_and_hyphenates() {
         assert_eq!(family_slug("JetBrains Mono"), "jetbrains-mono");
         assert_eq!(family_slug("Inter"), "inter");
+    }
+}
+
+#[cfg(test)]
+mod remote_font_policy_tests {
+    use super::*;
+
+    struct Restore(RemoteFontPolicy);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_remote_font_policy(self.0);
+        }
+    }
+
+    fn a_cache_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "rm_font_policy_{}_{}_{name}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("cache dir");
+        dir
+    }
+
+    #[test]
+    fn the_default_is_deny() {
+        assert_eq!(
+            RemoteFontPolicy::default(),
+            RemoteFontPolicy::Deny,
+            "a scenario is untrusted input and it chooses the target of the request"
+        );
+    }
+
+    #[test]
+    fn a_family_that_is_not_cached_is_refused_by_name_without_touching_the_network() {
+        let _restore = Restore(remote_font_policy());
+        set_remote_font_policy(RemoteFontPolicy::Deny);
+        let dir = a_cache_dir("denied");
+
+        let err = resolve_google_font("Zilla Slab Highlight", &[700], &dir)
+            .expect_err("a missing weight would have to be fetched");
+        let message = err.to_string();
+        assert!(
+            message.contains("Zilla Slab Highlight") && message.contains("700"),
+            "the refusal has to name the family and the weights: {message}"
+        );
+        assert!(
+            message.contains("fonts.googleapis.com"),
+            "and the target it declined to reach: {message}"
+        );
+        assert!(
+            message.contains("--allow-remote-fonts"),
+            "and the one flag that opts in: {message}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_family_already_in_the_cache_needs_no_flag() {
+        let _restore = Restore(remote_font_policy());
+        set_remote_font_policy(RemoteFontPolicy::Deny);
+        let dir = a_cache_dir("cached");
+        let slug = family_slug("Zilla Slab Highlight");
+        std::fs::write(dir.join(format!("{slug}-700.ttf")), b"not a real face").expect("seed");
+
+        let paths = resolve_google_font("Zilla Slab Highlight", &[700], &dir)
+            .expect("nothing has to be fetched, so nothing is denied");
+        assert_eq!(
+            paths.len(),
+            1,
+            "denying the network must not break an offline render that already has its fonts"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn only_the_weights_that_are_missing_are_named_in_the_refusal() {
+        let _restore = Restore(remote_font_policy());
+        set_remote_font_policy(RemoteFontPolicy::Deny);
+        let dir = a_cache_dir("partial");
+        let slug = family_slug("Inter");
+        std::fs::write(dir.join(format!("{slug}-400.ttf")), b"not a real face").expect("seed");
+
+        let message = resolve_google_font("Inter", &[400, 700], &dir)
+            .expect_err("700 is missing")
+            .to_string();
+        assert!(
+            message.contains("700") && !message.contains("400, 700"),
+            "400 is already on disk and needs no request, so it has no business in the \
+             refusal: {message}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

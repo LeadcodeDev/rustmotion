@@ -25,6 +25,31 @@ CLI :
 - `--strict-attrs` — promeut en erreurs les attributs inconnus (détection schéma + did-you-mean, activée par défaut en warnings)
 - `--lenient` — warnings au lieu d'errors
 
+## Google Fonts: the network is denied by default
+
+A scenario declaring `fonts: [{ "family": "Inter", "source": "google", "weights": [400, 700] }]`
+downloads the face from `fonts.googleapis.com` into the cache
+(`~/.cache/rustmotion/fonts`). The declared consumer of a scenario is a model
+generating JSON, so the file is **untrusted input** — and it is the file that
+chooses the target of the request. Validating someone else's scenario should not
+be a network operation, and on a CI runner it turns a lint step into an outbound
+fetch.
+
+`--allow-remote-fonts` (global, on any subcommand) is the only way to consent to
+it. Without it, a weight **missing from the cache** is refused by naming the
+family, the missing weights, the URL that was not called, and the directory to
+drop a TTF into by hand:
+
+```
+Google Fonts: 'Zilla Slab Highlight' (weights 700) is not in the font cache, and
+fetching it would reach https://fonts.googleapis.com/css2?family=... — a scenario
+chooses that target, so it is denied by default.
+```
+
+A face **already in the cache** asks for nothing: the refusal fires at the exact
+moment a request would leave. An offline render that has its fonts keeps working
+without the flag.
+
 ## Encodage
 
 - ffmpeg est auto-détecté et utilisé par défaut (10-bit H.264, meilleure qualité sur les gradients sombres)

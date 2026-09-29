@@ -1,3 +1,4 @@
+use rustmotion::encode::video::quantised_spans;
 use rustmotion::error::{Result, RustmotionError};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -35,7 +36,7 @@ fn migrate_scenes_array(scenes: &mut [Value], fps: u32, label: &str) -> Result<(
         .collect::<Result<_>>()?;
     let incoming: Vec<f64> = scenes.iter().map(incoming_transition_seconds).collect();
 
-    let spans = rustmotion::encode::video::quantised_spans(&durations, &incoming, fps);
+    let spans = quantised_spans(&durations, &incoming, fps);
 
     let n = scenes.len();
     let at_frames: Vec<u32> = spans.iter().map(|s| s.start).collect();

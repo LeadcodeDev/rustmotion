@@ -97,6 +97,18 @@ pub enum RustmotionError {
     },
 
     #[error(
+        "Google Fonts: '{family}' (weights {weights}) is not in the font cache, and fetching \
+         it would reach {url} — a scenario chooses that target, so it is denied by default.\n\
+         Pass --allow-remote-fonts to opt in, or place a TTF for each weight at:\n  {cache_hint}"
+    )]
+    RemoteFontDenied {
+        family: String,
+        weights: String,
+        url: String,
+        cache_hint: String,
+    },
+
+    #[error(
         "Google Fonts: no font URLs found in CSS response for '{family}' — \
          the family name may be misspelled or unavailable"
     )]
