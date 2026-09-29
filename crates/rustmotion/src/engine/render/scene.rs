@@ -1,5 +1,6 @@
 use crate::error::Result;
 use skia_safe::{surfaces, Canvas, ClipOp, ColorType, ImageInfo, Paint, Rect};
+use std::sync::Arc;
 
 use super::background::draw_animated_background;
 use super::background::draw_world_bg_with_parallax;
@@ -680,8 +681,13 @@ pub fn deserialize_children(scene: &Scene) -> Vec<ChildComponent> {
         .collect()
 }
 
-pub fn prepare_scene(scene: &Scene, _config: &VideoConfig) -> Vec<ChildComponent> {
-    deserialize_children(scene)
+pub fn prepare_scene(scene: &Scene, _config: &VideoConfig) -> Arc<Vec<ChildComponent>> {
+    scene
+        .prepared_children
+        .get_or_init(|| Arc::new(deserialize_children(scene)))
+        .clone()
+        .downcast::<Vec<ChildComponent>>()
+        .expect("prepare_scene is the only writer of Scene::prepared_children")
 }
 
 pub fn resolve_node_references(
@@ -1460,4 +1466,77 @@ pub(super) fn apply_camera_transform(
         canvas.scale((zoom, zoom));
     }
     canvas.translate((-cx - x, -cy - y));
+}
+
+#[cfg(test)]
+mod prepared_children_tests {
+    use super::*;
+
+    fn scenario(children: &str) -> crate::schema::ResolvedScenario {
+        let json = format!(
+            r##"{{
+              "version": "1.0",
+              "video": {{ "width": 160, "height": 90, "fps": 30, "background": "#000000" }},
+              "scenes": [
+                {{ "duration": 1.0, "children": [{children}] }},
+                {{ "duration": 1.0, "children": [{children}] }}
+              ]
+            }}"##
+        );
+        crate::loader::load_scenario_from_source(None, Some(&json)).expect("load")
+    }
+
+    const TEXT: &str = r##"{ "type": "text", "content": "hi", "style": { "font-size": 20 } }"##;
+
+    #[test]
+    fn a_scene_is_deserialized_once_and_every_later_frame_gets_that_same_vec() {
+        let scenario = scenario(TEXT);
+        let scene = &scenario.views[0].scenes[0];
+
+        let first = prepare_scene(scene, &scenario.video);
+        let second = prepare_scene(scene, &scenario.video);
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "prepare_scene runs once per frame and its result depends only on the scene — a \
+             second call must hand back the same allocation, not re-parse a 57-variant untagged \
+             enum for every child"
+        );
+        assert_eq!(first.len(), 1);
+    }
+
+    #[test]
+    fn two_scenes_do_not_share_one_anothers_children() {
+        let scenario = scenario(TEXT);
+        let first = prepare_scene(&scenario.views[0].scenes[0], &scenario.video);
+        let second = prepare_scene(&scenario.views[0].scenes[1], &scenario.video);
+        assert!(
+            !Arc::ptr_eq(&first, &second),
+            "the memo lives on the scene, so two scenes must each get their own"
+        );
+    }
+
+    #[test]
+    fn the_memo_carries_the_children_the_scene_actually_declares() {
+        let scenario = scenario(TEXT);
+        let prepared = prepare_scene(&scenario.views[0].scenes[0], &scenario.video);
+        assert_eq!(
+            prepared.len(),
+            scenario.views[0].scenes[0].children.len(),
+            "every readable child must be there — the memo is a cache, not a filter"
+        );
+    }
+
+    #[test]
+    fn a_child_that_cannot_be_read_is_reported_once_rather_than_once_per_frame() {
+        let scenario = scenario(r##"{ "type": "no-such-component" }"##);
+        let scene = &scenario.views[0].scenes[0];
+        let first = prepare_scene(scene, &scenario.video);
+        let second = prepare_scene(scene, &scenario.video);
+        assert!(first.is_empty(), "the unreadable child is dropped");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "the stderr warning deserialize_children emits rode on that repetition — one \
+             deserialization means one warning per scene, not one per frame"
+        );
+    }
 }
