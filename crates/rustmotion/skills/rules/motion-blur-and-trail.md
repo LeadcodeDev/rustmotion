@@ -1,6 +1,6 @@
-# Rule: `motion_blur` et `trail` — les fantômes ne sont plus des enfants du flex
+# Rule: `motion_blur` and `trail` — a ghost is never a flex item
 
-`motion_blur` et `trail` (`style.animation`) peignent des copies fantômes du composant à des instants antérieurs (`BoxKind::Ghost` dans `box_builder.rs`), avec une opacité décroissante. Jusqu'à la régression de l'issue #359, ces fantômes se comportaient mal sur trois points distincts. Les trois sont corrigés ; ce fichier documente le comportement actuel et ce qui reste volontairement hors scope.
+`motion_blur` and `trail` (`style.animation`) paint ghost copies of the component at earlier instants (`BoxKind::Ghost` in `box_builder.rs`), at decreasing opacity. Up to the regression in issue #359 these ghosts misbehaved in three distinct ways. All three are fixed; this file documents the current behaviour and what is deliberately out of scope.
 
 ```json
 {
@@ -12,31 +12,35 @@
 }
 ```
 
-## 1. Un fantôme ne prend jamais de place dans le flex
+## 1. A ghost never takes up room in the flex
 
-Avant la correction, un fantôme d'un enfant **en flux** (sans `position: absolute`) devenait lui-même un item flex à part entière — `samples` copies pleine taille en plus de l'élément réel, qui poussaient les frères suivants hors cadre. Un fantôme est maintenant systématiquement `position: absolute`, que le nœud qu'il duplique soit lui-même en flux ou déjà positionné :
+Before the fix, the ghost of an **in-flow** child (no `position: absolute`) became a full flex item in its own right — `samples` full-size copies on top of the real element, pushing the following siblings out of frame. A ghost is now always `position: absolute`, whether the node it duplicates is itself in flow or already positioned:
 
-- Nœud déjà `position: absolute` → le fantôme reprend exactement son `left`/`top` (comportement inchangé).
-- Nœud en flux → le fantôme n'a pas d'inset explicite ; Taffy le positionne alors selon `justify-content`/`align-items` du conteneur, comme n'importe quel enfant absolu sans `top`/`left` — il ne consomme aucun slot et ne déplace aucun frère, même si la position exacte du fantôme peut légèrement différer de celle du principal dans une mise en page asymétrique (`space-between`, plusieurs frères de tailles différentes). Le principal, lui, reste résolu par le flex normalement.
+- Node already `position: absolute` → the ghost takes its exact `left`/`top` (unchanged behaviour).
+- Node in flow → the ghost has no explicit inset, so Taffy would place it by the container's `justify-content`/`align-items`, like any absolute child with no `top`/`left` — often the wrong spot in an asymmetric layout. The render corrects that afterwards: `apply_ghost_layout_fixup` (`crates/rustmotion/src/engine/render/scene.rs`) shifts every ghost, and its whole subtree by the same delta, onto the position taffy actually resolved for its principal in the `LayoutResult` it has just produced. The ghost therefore lands exactly on the box of the node it duplicates, including under `space-between` or between siblings of different sizes — this is no longer an approximation.
 
-## 2. Le fantôme d'un conteneur porte son propre sous-arbre
+## 2. A container's ghost carries its own subtree
 
-Un fantôme n'est plus construit avec `children: Vec::new()`. Un `div` avec un fond et un enfant `text` voit maintenant les deux dupliqués — le sous-arbre est reconstruit à l'instant propre du fantôme (via `container_children`), pas simplement recopié depuis le principal : un enfant qui a sa propre animation (délai, keyframes) est donc rejoué à l'instant du fantôme, pas à l'instant courant de la scène. C'est la brique qui permet à une carte ou un mockup entier de traîner comme une unité.
+A ghost is no longer built with `children: Vec::new()`. A `div` with a background and a `text` child now sees both duplicated — the subtree is rebuilt at the ghost's own instant (through `container_children`), not simply copied from the principal: a child with its own animation (delay, keyframes) is replayed at the ghost's instant, not at the scene's current one. That is what lets a whole card or mockup trail as one unit.
 
-Un fantôme d'un composant **mesuré** (`text`, `counter`, `badge`, `table`, `rich_text`, `kbd`, `caption`, `number_wheel`) porte aussi son propre `intrinsic` — sans quoi la boîte se mesurait à zéro et rien ne se peignait, exactement le symptôme "le texte n'a aucune traînée, la forme d'à côté oui" de l'issue.
+The ghost of a **measured** component (`text`, `counter`, `badge`, `table`, `rich_text`, `kbd`, `caption`, `number_wheel`) also carries its own `intrinsic` — without it the box measured to zero and nothing painted, exactly the "the text has no trail, the shape next to it does" symptom in the issue.
 
-> Pas de champ `scope: "self" | "subtree"` pour choisir de ne fantômer que la boîte du conteneur sans ses enfants — chaque fantôme d'un conteneur embarque systématiquement tout son sous-arbre. Aucun cas d'usage vérifié n'en a besoin ; à ajouter si un scénario réel le demande.
+> There is no `scope: "self" | "subtree"` field to ghost only a container's box without its children — a container's ghost always carries its whole subtree. No verified use case needs it; add it if a real scenario asks.
 
-## 3. `pointer.path` est échantillonné par fantôme
+## 3. `pointer.path` is sampled per ghost
 
-Un `pointer` dont le déplacement vient de `path` (pas de `translate_x`/`translate_y` en keyframes) calcule sa position dans son propre `paint_content`, à partir de `ctx.time` — pas via `style.transform`. Chaque fantôme reçoit maintenant sa propre horloge locale (`time_params`, la même table que celle qui pilote `stagger_offset`), décalée exactement de l'écart temporel de cet échantillon. Un pointeur dont le trajet est piloté par `path` laisse donc une traînée le long de sa trajectoire, comme un pointeur piloté par keyframes.
+A `pointer` moved by `path` no longer computes its position internally from `ctx.time`: `box_builder.rs` resolves `waypoint_offset` while building each node (ghost or principal) and injects it as `style.transform: translate(dx, dy)`, at that node's own instant — the very channel keyframed `translate_x`/`translate_y` already use. `Pointer::paint_content` no longer does that computation itself.
 
-## `mode: "smear"` — pas de fantômes du tout
+Each ghost gets its own local clock (`time_params`, the same table that drives `stagger_offset`), offset by exactly this sample's time delta. A pointer driven by `path` therefore trails along its trajectory, like one driven by keyframes.
+
+> Structural trap found while fixing this: the opacity layer the engine opens for any node at `opacity < 1` (so every ghost) bounds its `SaveLayerRec` on the node's *untransformed* layout box. A displacement applied inside `paint_content` (as the old `canvas.translate` did) is invisible to that bounds computation and gets clipped away. `style.transform` moves the canvas *before* those bounds are computed, so it lines up correctly. Any future in-`Painter` positioning must go through `style.transform`, never through an ad-hoc `canvas.translate`.
+
+## `mode: "smear"` — no ghosts at all
 
 ```json
 { "name": "motion_blur", "mode": "smear", "shutter": 1.0 }
 ```
 
-Au lieu d'empiler des copies (`mode: "stack"`, le défaut), `smear` mesure le déplacement du composant sur la fenêtre `shutter / fps` qui précède l'instant courant, et pose directement un filtre `{ "fn": "blur", "radius-x": …, "radius-y": … }` sur le principal — voir [rules/directional-blur.md](directional-blur.md). Zéro nœud fantôme créé : `samples` est ignoré en mode `smear`. C'est la solution recommandée pour un déplacement rapide et rectiligne (un mot qui traverse le cadre) — un vrai flou directionnel au lieu d'un escalier de copies visibles à haute vitesse.
+Instead of stacking copies (`mode: "stack"`, the default), `smear` measures the component's displacement over the `shutter / fps` window preceding the current instant and puts a `{ "fn": "directional-blur", "angle": …, "radius": … }` filter straight on the principal — see [rules/directional-blur.md](directional-blur.md). Zero ghost nodes created: `samples` is ignored in `smear` mode. This is the recommended answer for fast, straight movement (a word crossing the frame) — a real directional blur instead of a staircase of copies visible at speed.
 
-`samples: "auto"` (densifier les copies de `mode: "stack"` jusqu'à moins de 2px d'écart entre elles, mentionné dans l'issue #360 comme filet de sécurité si un vrai noyau de flou n'était pas atteignable) n'est pas implémenté — `mode: "smear"` couvre ce besoin directement, `samples` reste un entier `1..=16`.
+`samples: "auto"` (densifying `mode: "stack"`'s copies until they sit less than 2px apart, mentioned in issue #360 as a safety net if a real blur kernel turned out to be unreachable) is not implemented — `mode: "smear"` covers that need directly, and `samples` stays an integer in `1..=16`.

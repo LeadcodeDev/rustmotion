@@ -1,10 +1,9 @@
-# Incliner tout le plan : `camera.rotate_x` / `rotate_y` / `perspective`
+# Tilting the whole plane: `camera.rotate_x` / `rotate_y` / `perspective`
 
-La parallaxe de `style.depth` connaît la translation et le zoom. Pour faire
-basculer un plan entier, on copiait jusqu'ici les mêmes keyframes `rotate_x` sur
-chaque groupe — et **chaque groupe se retrouvait avec son propre point de fuite**,
-ce qui ne lit pas comme une caméra mais comme des cartes qui tournent chacune dans
-son coin.
+`style.depth` parallax knows about translation and zoom. To tilt a whole plane,
+the workaround used to be copying the same `rotate_x` keyframes onto every group
+— and **each group ended up with its own vanishing point**, which does not read
+as a camera but as cards each spinning in its own corner.
 
 ```json
 "camera": {
@@ -17,36 +16,34 @@ son coin.
 }
 ```
 
-| Champ | Défaut | Rôle |
+| Field | Default | Role |
 |---|---|---|
-| `rotate_x` | `0` | bascule autour de l'axe horizontal, en degrés |
-| `rotate_y` | `0` | bascule autour de l'axe vertical |
-| `perspective` | `0` | distance d'observation en pixels ; `0` = projection orthographique |
+| `rotate_x` | `0` | tilt about the horizontal axis, in degrees |
+| `rotate_y` | `0` | tilt about the vertical axis |
+| `perspective` | `0` | viewing distance in pixels; `0` = orthographic projection |
 
-Les trois s'animent par `keyframes` comme `zoom` et `rotation`.
+All three animate through `keyframes`, like `zoom` and `rotation`.
 
-## Un seul point de fuite, et l'échelle par profondeur
+## One vanishing point, and depth-scaled rotation
 
-La perspective est appliquée **une fois**, autour de l'origine de la caméra. C'est
-toute la différence avec la version copiée sur chaque groupe.
+Perspective is applied **once**, around the camera's origin. That is the whole
+difference from the version copied onto each group.
 
-La rotation, elle, est mise à l'échelle par le `style.depth` de chaque enfant
-direct de la scène — la même règle que la parallaxe et que `camera.focus` suivent
-déjà. Un plan à `depth: 3` bascule trois fois plus qu'un plan à `depth: 1`, ce qui
-est ce qui donne la sensation de volume.
+The rotation, in turn, is scaled by each direct scene child's `style.depth` — the
+same rule parallax and `camera.focus` already follow. A plane at `depth: 3` tilts
+three times as much as one at `depth: 1`, and that is what gives the sense of
+volume.
 
-## Deux pièges
+## Two traps
 
-**Ça ne s'applique qu'aux enfants directs de la scène.** Comme la parallaxe : un
-plan est une couche. Poser `depth` sur un nœud enfoui dans un sous-arbre ne le
-fait pas basculer tout seul.
+**It only applies to direct scene children.** Like parallax: a plane is a layer.
+Putting `depth` on a node buried in a subtree does not tilt it on its own.
 
-**`perspective: 0` n'est pas « pas de rotation ».** C'est une bascule
-orthographique — la forme se déforme sans converger. Pour une caméra qui lit comme
-une caméra, il faut une distance, et `1200`–`1800` couvre la plupart des cadrages.
+**`perspective: 0` is not "no rotation".** It is an orthographic tilt — the shape
+skews without converging. For a camera that reads as a camera you need a
+distance, and `1200`–`1800` covers most framings.
 
-## Ce qui n'y est pas
+## See also
 
-Le flou de mouvement de caméra (#362 partie 2) n'est pas ici. Il demande
-d'accumuler plusieurs rendus sous-frame le long du mouvement, ce qui vit dans la
-boucle d'encodage et non dans le pass de peinture.
+Camera motion blur (#362) is now implemented — `camera.motion_blur`, see
+[rules/camera-motion-blur.md](camera-motion-blur.md).

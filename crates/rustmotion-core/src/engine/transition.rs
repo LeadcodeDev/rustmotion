@@ -1289,8 +1289,8 @@ fn zoom_blur_transition(
     surface_to_pixels(streak_surface, width, height)
 }
 
-const WHIP_STEPS: usize = 10;
 const WHIP_MAX_REACH: f32 = 0.5;
+const WHIP_STEPS: usize = 120;
 
 fn whip_transition(
     frame_a: &[u8],
@@ -1899,6 +1899,69 @@ mod iris_pill_shape_tests {
              radius on the diagonal must fall outside it; the old 0.2 corner fraction left a \
              barely-rounded square whose corner reached out to radius*sqrt(2), well past this \
              point"
+        );
+    }
+}
+
+#[cfg(test)]
+mod whip_continuity_tests {
+    use super::*;
+
+    fn solid_rgb(width: u32, height: u32, r: u8, g: u8, b: u8) -> Vec<u8> {
+        (0..width * height).flat_map(|_| [r, g, b, 255]).collect()
+    }
+
+    fn off_centre_stripe(width: u32, height: u32) -> Vec<u8> {
+        let mut out = Vec::with_capacity((width * height * 4) as usize);
+        let (x0, x1) = (width * 5 / 8, width * 7 / 8);
+        for _y in 0..height {
+            for x in 0..width {
+                if x >= x0 && x < x1 {
+                    out.extend_from_slice(&[240, 240, 240, 255]);
+                } else {
+                    out.extend_from_slice(&[10, 10, 10, 255]);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_wide_streak_has_no_large_jump_between_adjacent_pixels() {
+        const W: u32 = 640;
+        const H: u32 = 48;
+        let a = off_centre_stripe(W, H);
+        let b = solid_rgb(W, H, 40, 40, 40);
+        let out = whip_transition(&a, &b, W, H, 0.5, 6.0, TransitionDirection::Left);
+
+        let row = H / 2;
+        let value_at = |x: u32| -> i32 {
+            let i = ((row * W + x) * 4) as usize;
+            out[i] as i32
+        };
+
+        let shift = (0.5 * W as f32) as u32;
+        let sharp_edges = [W * 5 / 8 - shift, W * 7 / 8 - shift];
+        let excluded = |x: u32| sharp_edges.iter().any(|&e| x.abs_diff(e) < 20);
+
+        let mut max_jump = 0i32;
+        let mut jump_at = 0u32;
+        for x in 0..W - 1 {
+            if excluded(x) || excluded(x + 1) {
+                continue;
+            }
+            let jump = (value_at(x + 1) - value_at(x)).abs();
+            if jump > max_jump {
+                max_jump = jump;
+                jump_at = x;
+            }
+        }
+
+        assert!(
+            max_jump < 40,
+            "the streak must fade continuously across the trail, not in visible discrete \
+             bands stepping between a handful of stamped copies — the biggest single-pixel \
+             jump found was {max_jump} at x={jump_at} (row {row})"
         );
     }
 }

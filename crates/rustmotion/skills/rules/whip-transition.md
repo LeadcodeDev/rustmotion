@@ -1,8 +1,8 @@
-# Rule: `whip` — le pan flouté directionnel
+# Rule: `whip` — the directional motion-blurred pan
 
-`whip` est une `transition` (au même titre que `slide`, `chromatic_wipe`, `zoom_blur`…) : comme toute transition d'une vue `slide`, elle composite deux frame-buffers **déjà rendus** — aucun élément ne survit à la coupe, seuls les pixels sont mélangés. Voir la section « Composition » de `CLAUDE.md`.
+`whip` is a `transition` (like `slide`, `chromatic_wipe`, `zoom_blur`…): as with every transition in a `slide` view, it composites two **already rendered** frame buffers — no element survives the cut, only pixels are mixed. See the "Composition" section of `CLAUDE.md`.
 
-L'effet : un `slide` classique le long d'un axe, dont le déplacement porte un filé de mouvement qui culmine à mi-transition — la scène sortante s'étire en traînée derrière elle le long de `direction` en s'estompant, et la scène entrante arrive déjà striée avant de se stabiliser, nette, à l'arrivée.
+The effect: a plain `slide` along an axis, whose displacement carries a motion streak peaking mid-transition — the outgoing scene stretches into a trail behind itself along `direction` as it fades, and the incoming scene arrives already streaked before settling, crisp, on arrival.
 
 ```json
 {
@@ -16,32 +16,41 @@ L'effet : un `slide` classique le long d'un axe, dont le déplacement porte un f
 }
 ```
 
-(exemple de placement — `transition` se pose entre deux scènes d'une vue `slide`, comme n'importe quelle autre transition)
+The `transition` goes on the scene being **entered** — here, on the second scene, not the first. A transition on a view's first scene has nothing to come from, and the engine says so and ignores it:
 
-## Ne pas confondre avec `slide`, `chromatic_wipe` ni l'effet `motion_blur`
+```
+Warning: the `transition` on view 0's first scene has no effect — a transition
+belongs to the scene being entered, and the first scene has nothing to come from.
+```
 
-- **`slide`** est le même déplacement, sec, sans traînée : `whip` avec `strength: 0` lui est byte-identique à chaque instant de la transition.
-- **`chromatic_wipe`** voyage sur le même axe (`direction` prend les mêmes valeurs), mais son pic est une séparation **chromatique** (rouge/cyan) sur le bord de coupe, pas un filé spatial de la frame entière.
-- **`motion_blur`** (effet d'animation, `style.animation`) traîne la trajectoire d'un **composant individuel** en accumulant des échantillons de sa propre animation. Il ne voit rien dans une transition, qui ne dispose plus que de deux buffers RGBA déjà peints — c'est exactement le trou que `whip` bouche côté transition, comme `zoom_blur` l'a fait pour le zoom radial. Voir [rules/zoom-blur-transition.md](zoom-blur-transition.md).
+## Not to be confused with `slide`, `chromatic_wipe` or the `motion_blur` effect
 
-## Champs
+- **`slide`** is the same displacement, dry, with no trail: `whip` with `strength: 0` is byte-identical to it at every instant of the transition.
+- **`chromatic_wipe`** travels along the same axis (`direction` takes the same values), but its peak is a **chromatic** split (red/cyan) at the cut edge, not a spatial streak of the whole frame.
+- **`motion_blur`** (an animation effect, `style.animation`) trails an **individual component**'s trajectory by accumulating samples of its own animation. It sees nothing inside a transition, which only has two already-painted RGBA buffers — exactly the gap `whip` fills on the transition side, as `zoom_blur` did for the radial zoom. See [rules/zoom-blur-transition.md](zoom-blur-transition.md).
 
-| Champ | Rôle | Défaut |
+## Fields
+
+| Field | Role | Default |
 |---|---|---|
-| `direction` | Axe de déplacement des deux frames, mêmes valeurs que `slide`/`chromatic_wipe` (`left`/`right`/`up`/`down`). | `left` |
-| `strength` | Portée de la traînée. `0` supprime la passe de flou et laisse un `slide` sec — pas de traînée à aucun instant, même à mi-transition. Les valeurs plus grandes tirent les copies plus loin derrière leur position courante. | `1.0` |
-| `duration`, `easing` | Communs à toutes les transitions. | `0.5`, `ease_in_out` |
+| `direction` | Travel axis for both frames, same values as `slide`/`chromatic_wipe` (`left`/`right`/`up`/`down`). | `left` |
+| `strength` | Reach of the trail. `0` removes the blur pass and leaves a dry `slide` — no trail at any instant, not even mid-transition. Larger values pull the copies further behind their current position. | `1.0` |
+| `duration`, `easing` | Common to every transition. | `0.5`, `ease_in_out` |
 
-## Zéro aux deux bouts, par construction
+## Zero at both ends, by construction
 
-Comme `zoom_blur` et `chromatic_wipe`, l'intensité suit `peak = 1 - |2p - 1|` : nulle à `progress = 0` et à `progress = 1`, quelle que soit `strength`. Le moteur ne laisse pas cette courbe tendre vers zéro : à `reach <= 0.0` (donc `peak == 0`, aux deux bornes), il retourne directement le slide net, sans jamais construire la passe de traînée — un court-circuit, pas une atténuation flottante qui pourrait laisser un résidu d'arrondi. `progress = 0` rend exactement la frame source, `progress = 1` exactement la frame de destination : rien ne bave sur la scène suivante.
+Like `zoom_blur` and `chromatic_wipe`, the intensity follows `peak = 1 - |2p - 1|`: zero at `progress = 0` and at `progress = 1`, whatever `strength` is. The engine does not let that curve merely tend to zero: at `reach <= 0.0` (so `peak == 0`, at both bounds) it returns the crisp slide directly, never building the trail pass at all — a short circuit, not a floating-point fade that could leave a rounding residue. `progress = 0` renders exactly the source frame, `progress = 1` exactly the destination frame: nothing bleeds into the next scene.
 
-`strength: 0` prend le même court-circuit à **tout instant** de la transition, pas seulement aux bords : la transition dégénère alors en un `slide` sec, sans jamais poser la passe de traînée.
+`strength: 0` takes the same short circuit at **every** instant of the transition, not only at the edges: the transition then degenerates into a dry `slide`, never laying down the trail pass.
 
-## Comment c'est construit
+## How it is built
 
-Le socle net (`sharp`) est le même calcul que le `slide` interne de `chromatic_wipe` — factorisé dans `directional_slide` et partagé par les deux transitions : les deux frames pleinement opaques, carrelées côte à côte le long de `direction`, sans aucun mélange alpha. Quand `strength` et la position dans la transition l'exigent, une dizaine de copies translatées de **chaque** frame — la sortante ET l'entrante, contrairement à `zoom_blur` qui ne traîne que la frame sortante — sont redessinées de plus en plus loin derrière leur position courante, à une opacité qui décroît avec la distance. C'est la même somme de copies pondérées que `zoom_blur`, translatée le long d'un axe au lieu d'être mise à l'échelle radialement autour d'un `origin`.
+The crisp base (`sharp`) is the same computation as `chromatic_wipe`'s internal slide — factored into `directional_slide` and shared by both transitions: two fully opaque frames, tiled side by side along `direction`, with no alpha mixing at all. When `strength` and the position in the transition call for it, a fine series of translated copies of **each** frame (120 of them, close enough together that no visible band survives) — the outgoing one AND the incoming one, unlike `zoom_blur`, which only trails the outgoing frame — are redrawn further and further behind their current position, at an opacity decreasing with distance. It is the same weighted sum of copies as `zoom_blur`, translated along an axis instead of scaled radially around an `origin`.
 
-## Piège : une `strength` élevée fait déborder le fantôme sur l'autre scène
+The step count is fixed rather than scaled to `reach`, and it costs: 120 steps means 240 `draw_image` calls per transition frame, measured at about 10 ms per frame at 1920×1080. Only transition frames pay it, so a 0.6 s whip adds roughly 0.2 s to a render.
 
-Les copies translatées sont dessinées sur tout le cadre, pas seulement dans le territoire qui appartient encore à leur propre frame. Une `strength` très élevée fait donc bleeder un fantôme semi-transparent de la scène sortante dans la zone déjà occupée par l'entrante, et réciproquement — c'est voulu, c'est précisément ce qui donne l'impression d'un filé de mouvement qui traverse la coupe plutôt que deux images qui glissent l'une sur l'autre. Si l'effet paraît trop étalé, baisser `strength` plutôt que `duration` : raccourcir la durée ne change rien au pic de `peak`, seulement la vitesse à laquelle la transition le traverse.
+> A truly reach-invariant result would need the trail computed as a real weight *integral* (additive accumulation normalised by sample density) rather than N sequential "over" composites, which saturate non-linearly. The fixed step count is what keeps two different `strength` values comparable: making the density follow `reach` gives them different sampling and breaks the "a bigger strength streaks further" property.
+
+## Trap: a high `strength` bleeds the ghost onto the other scene
+
+The translated copies are drawn over the whole frame, not only in the territory still owned by their own frame. A very high `strength` therefore bleeds a semi-transparent ghost of the outgoing scene into the area the incoming one already occupies, and vice versa — that is intended, and is precisely what reads as a motion streak crossing the cut rather than two images sliding over each other. If the effect looks too spread out, lower `strength` rather than `duration`: shortening the duration does not change `peak`'s maximum, only how fast the transition travels through it.
