@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use super::background::draw_animated_background;
 use super::background::draw_world_bg_with_parallax;
+use super::background::interpolate_animated_bg;
 use crate::components::ChildComponent;
 use crate::error::RustmotionError;
 use crate::schema::{Camera, Scene, SceneLayout, VideoConfig, ViewType};
@@ -163,6 +164,49 @@ fn per_plane_camera(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn draw_unpaired_layers_faded(
+    canvas: &Canvas,
+    layers: &[crate::schema::AnimatedBackground],
+    continuous_time: f32,
+    w: f32,
+    h: f32,
+    alpha: f32,
+    scaled_w: i32,
+    scaled_h: i32,
+    scale_factor: f32,
+) {
+    if layers.is_empty() || alpha <= 0.0 {
+        return;
+    }
+    let bg_info = ImageInfo::new(
+        (scaled_w, scaled_h),
+        ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    let Some(mut layer_surface) = surfaces::raster(&bg_info, None, None) else {
+        return;
+    };
+    let layer_canvas = layer_surface.canvas();
+    if scale_factor != 1.0 {
+        layer_canvas.scale((scale_factor, scale_factor));
+    }
+    layer_canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+    for anim_bg in layers {
+        draw_animated_background(layer_canvas, anim_bg, continuous_time, w, h);
+    }
+    let snapshot = layer_surface.image_snapshot();
+    let mut paint = Paint::default();
+    paint.set_alpha_f(alpha);
+    canvas.save();
+    if scale_factor != 1.0 {
+        canvas.reset_matrix();
+    }
+    canvas.draw_image(&snapshot, (0.0, 0.0), Some(&paint));
+    canvas.restore();
+}
+
 pub fn render_frame_v2(
     config: &VideoConfig,
     scene: &Scene,
@@ -233,60 +277,35 @@ pub fn render_frame_v2_scaled(
             let w = config.width as f32;
             let h = config.height as f32;
 
-            if progress < 1.0 {
-                let bg_info = ImageInfo::new(
-                    (scaled_w, scaled_h),
-                    ColorType::RGBA8888,
-                    skia_safe::AlphaType::Premul,
-                    None,
-                );
-                if let Some(mut prev_surface) = surfaces::raster(&bg_info, None, None) {
-                    let prev_canvas = prev_surface.canvas();
-                    if scale_factor != 1.0 {
-                        prev_canvas.scale((scale_factor, scale_factor));
-                    }
-                    prev_canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
-                    for anim_bg in &prev.animated {
-                        draw_animated_background(prev_canvas, anim_bg, continuous_time, w, h);
-                    }
-                    let snapshot = prev_surface.image_snapshot();
-                    let mut paint = Paint::default();
-                    paint.set_alpha_f(1.0 - progress);
-                    canvas.save();
-                    if scale_factor != 1.0 {
-                        canvas.reset_matrix();
-                    }
-                    canvas.draw_image(&snapshot, (0.0, 0.0), Some(&paint));
-                    canvas.restore();
-                }
+            let paired = prev.animated.len().min(cur_bg.animated.len());
+            for i in 0..paired {
+                let blended =
+                    interpolate_animated_bg(&prev.animated[i], &cur_bg.animated[i], progress);
+                draw_animated_background(canvas, &blended, continuous_time, w, h);
             }
-            if progress > 0.0 {
-                let bg_info = ImageInfo::new(
-                    (scaled_w, scaled_h),
-                    ColorType::RGBA8888,
-                    skia_safe::AlphaType::Premul,
-                    None,
-                );
-                if let Some(mut cur_surface) = surfaces::raster(&bg_info, None, None) {
-                    let cur_canvas = cur_surface.canvas();
-                    if scale_factor != 1.0 {
-                        cur_canvas.scale((scale_factor, scale_factor));
-                    }
-                    cur_canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
-                    for anim_bg in &cur_bg.animated {
-                        draw_animated_background(cur_canvas, anim_bg, continuous_time, w, h);
-                    }
-                    let snapshot = cur_surface.image_snapshot();
-                    let mut paint = Paint::default();
-                    paint.set_alpha_f(progress);
-                    canvas.save();
-                    if scale_factor != 1.0 {
-                        canvas.reset_matrix();
-                    }
-                    canvas.draw_image(&snapshot, (0.0, 0.0), Some(&paint));
-                    canvas.restore();
-                }
-            }
+
+            draw_unpaired_layers_faded(
+                canvas,
+                &prev.animated[paired..],
+                continuous_time,
+                w,
+                h,
+                1.0 - progress,
+                scaled_w,
+                scaled_h,
+                scale_factor,
+            );
+            draw_unpaired_layers_faded(
+                canvas,
+                &cur_bg.animated[paired..],
+                continuous_time,
+                w,
+                h,
+                progress,
+                scaled_w,
+                scaled_h,
+                scale_factor,
+            );
         } else {
             for anim_bg in &cur_bg.animated {
                 draw_animated_background(
@@ -1537,6 +1556,100 @@ mod prepared_children_tests {
             Arc::ptr_eq(&first, &second),
             "the stderr warning deserialize_children emits rode on that repetition — one \
              deserialization means one warning per scene, not one per frame"
+        );
+    }
+}
+
+#[cfg(test)]
+mod halo_transition_wiring_tests {
+    use crate::encode::video::{build_frame_tasks, render_frame_task, FrameTask};
+
+    const W: usize = 400;
+    const H: usize = 300;
+
+    fn two_scene_halo_scenario(
+        from_x: f64,
+        to_x: f64,
+        transition_duration: f64,
+    ) -> crate::schema::ResolvedScenario {
+        let json = format!(
+            r##"{{
+              "version": "1.0",
+              "video": {{ "width": {W}, "height": {H}, "fps": 30, "background": "#000000" }},
+              "scenes": [
+                {{
+                  "duration": 1.0,
+                  "background": {{
+                    "preset": "halo",
+                    "halo": {{ "zones": [
+                      {{ "color": "#FFFFFF", "x": {from_x}, "y": 0.5, "radius": 0.15,
+                         "opacity": 1.0 }}
+                    ] }}
+                  }},
+                  "children": []
+                }},
+                {{
+                  "duration": 2.0,
+                  "background": {{
+                    "preset": "halo",
+                    "halo": {{ "zones": [
+                      {{ "color": "#FFFFFF", "x": {to_x}, "y": 0.5, "radius": 0.15,
+                         "opacity": 1.0 }}
+                    ] }},
+                    "transition": {{ "duration": {transition_duration}, "easing": "linear" }}
+                  }},
+                  "children": []
+                }}
+              ]
+            }}"##
+        );
+        crate::loader::load_scenario_from_source(None, Some(&json)).expect("load")
+    }
+
+    fn frame_at_scene_1_time(
+        scenario: &crate::schema::ResolvedScenario,
+        fps: u32,
+        t: f64,
+    ) -> Vec<u8> {
+        let target_frame_in_scene = (t * fps as f64).round() as u32;
+        let tasks = build_frame_tasks(scenario);
+        let task = tasks
+            .iter()
+            .find(|task| {
+                matches!(
+                    task,
+                    FrameTask::Normal {
+                        scene_idx: 1,
+                        frame_in_scene,
+                        ..
+                    } if *frame_in_scene == target_frame_in_scene
+                )
+            })
+            .expect("a frame task for scene 1 at the requested time must exist");
+        render_frame_task(&scenario.video, scenario, task).expect("render")
+    }
+
+    fn luma_at(buf: &[u8], w: usize, x: usize, y: usize) -> f32 {
+        let i = (y * w + x) * 4;
+        0.299 * buf[i] as f32 + 0.587 * buf[i + 1] as f32 + 0.114 * buf[i + 2] as f32
+    }
+
+    #[test]
+    fn a_halo_transition_moves_the_zone_instead_of_cross_fading_two_static_copies() {
+        let scenario = two_scene_halo_scenario(0.1, 0.9, 1.0);
+        let mid = frame_at_scene_1_time(&scenario, 30, 0.5);
+
+        let from_scene_position = (0.1 * W as f64) as usize;
+        let luma_at_from_position = luma_at(&mid, W, from_scene_position, H / 2);
+
+        assert!(
+            luma_at_from_position < 40.0,
+            "halfway through the transition, the outgoing scene's own halo position \
+             (x={from_scene_position}) must show background again — a single interpolated \
+             zone has already moved on towards the frame's midpoint by t=0.5; a leftover \
+             50%-alpha copy still sitting at its original spot would mean the transition \
+             cross-fades two static renders instead of interpolating one shape. measured \
+             luma={luma_at_from_position}"
         );
     }
 }

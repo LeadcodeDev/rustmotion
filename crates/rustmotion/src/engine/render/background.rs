@@ -592,7 +592,6 @@ fn heropattern_raster_size(width: f32, height: f32, scale: f32) -> (u32, u32) {
     (pw, ph)
 }
 
-#[allow(dead_code)]
 pub(super) fn interpolate_animated_bg(
     a: &AnimatedBackground,
     b: &AnimatedBackground,
