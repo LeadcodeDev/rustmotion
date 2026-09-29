@@ -181,7 +181,7 @@ fn ffmpeg_args(
                     &mut args,
                 );
             }
-            _ => {
+            "h264_10bit" => {
                 push(
                     &[
                         "-c:v",
@@ -194,6 +194,23 @@ fn ffmpeg_args(
                         "high10",
                         "-pix_fmt",
                         "yuv420p10le",
+                    ],
+                    &mut args,
+                );
+            }
+            _ => {
+                push(
+                    &[
+                        "-c:v",
+                        "libx264",
+                        "-crf",
+                        &crf,
+                        "-preset",
+                        "medium",
+                        "-profile:v",
+                        "high",
+                        "-pix_fmt",
+                        "yuv420p",
                     ],
                     &mut args,
                 );
@@ -786,6 +803,45 @@ mod tests {
                 "{codec}: output must be last"
             );
         }
+    }
+
+    fn value_after(args: &[String], flag: &str) -> Option<String> {
+        let at = args.iter().position(|s| s == flag)?;
+        args.get(at + 1).cloned()
+    }
+
+    #[test]
+    fn the_default_h264_output_is_eight_bit() {
+        let args = ffmpeg_args(320, 240, 30, "h264", 23, false, None, None, "o.mp4");
+        assert_eq!(
+            value_after(&args, "-pix_fmt").as_deref(),
+            Some("yuv420p"),
+            "High 10 is what QuickTime and Safari refuse to play, and it was the default"
+        );
+        assert_eq!(value_after(&args, "-profile:v").as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn ten_bit_is_still_reachable_by_asking_for_it() {
+        let args = ffmpeg_args(320, 240, 30, "h264_10bit", 23, false, None, None, "o.mp4");
+        assert_eq!(
+            value_after(&args, "-pix_fmt").as_deref(),
+            Some("yuv420p10le"),
+            "a dark gradient still needs 10-bit, so it stays available"
+        );
+        assert_eq!(value_after(&args, "-profile:v").as_deref(), Some("high10"));
+        assert!(args.iter().any(|s| s == "libx264"), "still H.264");
+    }
+
+    #[test]
+    fn an_unknown_codec_name_falls_back_to_the_playable_default() {
+        let args = ffmpeg_args(320, 240, 30, "not-a-codec", 23, false, None, None, "o.mp4");
+        assert_eq!(
+            value_after(&args, "-pix_fmt").as_deref(),
+            Some("yuv420p"),
+            "the catch-all arm is what an unrecognised --codec lands in, so it must be the \
+             playable one"
+        );
     }
 
     #[test]

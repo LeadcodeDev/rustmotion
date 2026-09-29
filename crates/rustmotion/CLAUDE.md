@@ -52,7 +52,7 @@ without the flag.
 
 ## Encodage
 
-- ffmpeg est auto-détecté et utilisé par défaut (10-bit H.264, meilleure qualité sur les gradients sombres)
+- ffmpeg is auto-detected and used by default. H.264 output is **8-bit** (`yuv420p`, `high` profile), which QuickTime and Safari play; `--codec h264_10bit` trades that for `yuv420p10le`/`high10`, which is banding-free on dark gradients and refused by both players.
 - `--hardware-acceleration` sonde `ffmpeg -encoders` et bascule sur VideoToolbox/NVENC/QSV/AMF si la machine en offre un. Indisponible → message explicite et repli logiciel, jamais de bascule silencieuse. Le CRF n'a pas de sens sur la plupart des encodeurs matériels : le passer avec l'accélération produit un avertissement.
 - `--frames a-b` rend une plage de frames en segment autonome, avec **sa** tranche d'audio (les pistes ne repartent pas de zéro). `rustmotion concat seg1.mp4 seg2.mp4 -o out.mp4` les recolle via le concat demuxer de ffmpeg. C'est la brique d'un rendu distribué.
 - Sans ffmpeg, le fallback openh264 intégré encode en 8-bit

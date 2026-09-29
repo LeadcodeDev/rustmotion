@@ -609,10 +609,10 @@ These four are the worked reference for [rules/composition-recipes.md](rules/com
 | `height`     | u32    | required    | Video height in pixels. **Must be even for H.264.**     |
 | `fps`        | u32    | `30`        | Frames per second                                       |
 | `background` | string | `"#000000"` | Default background color (hex `#RRGGBB` or `#RRGGBBAA`) |
-| `codec`      | string | `null`      | `"h264"` (10-bit), `"h265"`, `"vp9"`, `"prores"`        |
+| `codec`      | string | `null`      | `"h264"` (8-bit), `"h264_10bit"`, `"h265"`, `"vp9"`, `"prores"` |
 | `crf`        | u8     | `23`        | Constant Rate Factor (0-51, lower = better quality)     |
 
-> **Encoding note:** H.264 outputs 10-bit (`yuv420p10le`) by default when ffmpeg is available, which reduces color banding on dark gradients. For best quality on gradient-heavy videos, use `--codec prores` (lossless).
+> **Encoding note:** H.264 outputs 8-bit (`yuv420p`) by default, which plays in QuickTime and Safari. `--codec h264_10bit` gives `yuv420p10le` and reduces banding on dark gradients, at the cost of those two players refusing the file. For best quality on gradient-heavy videos, use `--codec prores` (lossless).
 
 #### `audio` (optional array)
 

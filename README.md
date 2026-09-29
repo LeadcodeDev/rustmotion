@@ -2028,7 +2028,8 @@ Renders multiple sub-frames and composites them for physically-correct motion bl
 
 | Format | Command | Requires |
 |---|---|---|
-| **MP4 (H.264 10-bit)** | `rustmotion render in.json -o out.mp4` | ffmpeg (auto-detected) |
+| **MP4 (H.264 8-bit)** | `rustmotion render in.json -o out.mp4` | ffmpeg (auto-detected) |
+| **MP4 (H.264 10-bit)** | `rustmotion render in.json --codec h264_10bit -o out.mp4` | ffmpeg |
 | **MP4 (H.264 8-bit)** | `rustmotion render in.json -o out.mp4` | Built-in (fallback without ffmpeg) |
 | **MP4 (H.265)** | `rustmotion render in.json -o out.mp4 --codec h265` | ffmpeg |
 | **WebM (VP9)** | `rustmotion render in.json -o out.webm --codec vp9` | ffmpeg |
@@ -2039,7 +2040,7 @@ Renders multiple sub-frames and composites them for physically-correct motion bl
 
 Transparency is supported with `--transparent` for PNG sequences, WebM (VP9), and ProRes 4444.
 
-> **Gradient quality:** When ffmpeg is available, H.264 uses 10-bit color depth (`yuv420p10le`, `high10` profile) which greatly reduces banding on dark gradients. For maximum quality, use `--codec prores`. The built-in openh264 encoder (fallback without ffmpeg) outputs 8-bit only.
+> **Gradient quality:** H.264 output is 8-bit (`yuv420p`, `high` profile) so it plays everywhere, QuickTime and Safari included. `--codec h264_10bit` gives 10-bit (`yuv420p10le`, `high10`), which greatly reduces banding on dark gradients — at the cost of those two players refusing the file. For maximum quality, use `--codec prores`. The built-in openh264 encoder (fallback without ffmpeg) outputs 8-bit only.
 
 ---
 

@@ -590,7 +590,7 @@ mod tests {
 
 fn containers_for(codec: &str) -> Option<&'static [&'static str]> {
     match codec {
-        "h264" => Some(&["mp4", "mov", "mkv"]),
+        "h264" | "h264_10bit" => Some(&["mp4", "mov", "mkv"]),
         "h265" | "hevc" => Some(&["mp4", "mov", "mkv"]),
         "vp9" => Some(&["webm", "mkv"]),
         "prores" => Some(&["mov", "mkv"]),

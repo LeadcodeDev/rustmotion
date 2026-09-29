@@ -274,7 +274,7 @@ pub fn transitions_with_nothing_to_come_from(scenario: &ResolvedScenario) -> Vec
 
 pub fn check_codec(codec: Option<&str>) -> Result<()> {
     if let Some(c) = codec {
-        let allowed = ["h264", "h265", "vp9", "prores"];
+        let allowed = ["h264", "h264_10bit", "h265", "vp9", "prores"];
         if !allowed.contains(&c) {
             return Err(RustmotionError::UnknownCodec {
                 codec: c.to_string(),
@@ -749,5 +749,31 @@ mod check_crf_tests {
     fn out_of_range_crf_still_errors_even_with_hardware_acceleration() {
         assert!(check_crf(Some(52), true).is_err());
         assert!(check_crf(Some(52), false).is_err());
+    }
+}
+
+#[cfg(test)]
+mod codec_name_tests {
+    use super::check_codec;
+
+    #[test]
+    fn the_ten_bit_h264_name_is_accepted() {
+        assert!(
+            check_codec(Some("h264_10bit")).is_ok(),
+            "ffmpeg_args knows this name; rejecting it here made the opt-in unreachable from \
+             the command line"
+        );
+    }
+
+    #[test]
+    fn every_name_ffmpeg_args_branches_on_is_accepted_here() {
+        for name in ["h264", "h264_10bit", "h265", "vp9", "prores"] {
+            assert!(check_codec(Some(name)).is_ok(), "{name} must be reachable");
+        }
+    }
+
+    #[test]
+    fn a_name_nothing_branches_on_is_still_refused() {
+        assert!(check_codec(Some("h266")).is_err());
     }
 }
