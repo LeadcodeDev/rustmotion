@@ -78,9 +78,13 @@ pub struct GlobeRotation {
 
 /// A great-circle arc lifted off the globe's surface, drawn between two
 /// `[lat, lng]` endpoints. `draw_in` reveals the arc from `from` towards
-/// `to` (1.0 = fully drawn), the counterpart of `draw_progress` on `line`/
-/// `arrow` — a plain static fraction here, since an arc's shape (which
-/// hemisphere it crosses) already changes as the globe itself rotates.
+/// `to` (1.0 = fully drawn) as a per-arc ceiling: the fraction actually
+/// painted this frame is `draw_in` scaled by the node's own animated
+/// `draw_progress` when one is active (the same property `line`/`arrow`
+/// read), so a `draw_progress` keyframe on the `dot_map` component now
+/// sweeps every arc in over time instead of being silently inert. With no
+/// `draw_progress` animation, `draw_in` alone still applies as a fixed
+/// fraction.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct GreatCircleArc {
     pub from: [f64; 2],
@@ -293,13 +297,20 @@ impl DotMap {
         1.0 - (1.0 - p).powi(3)
     }
 
-    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, ctx: &PaintCtx) {
+    fn paint(
+        &self,
+        canvas: &Canvas,
+        layout_w: f32,
+        layout_h: f32,
+        ctx: &PaintCtx,
+        arc_draw_progress: f32,
+    ) {
         match self.projection {
             DotMapProjection::Equirectangular => {
                 self.paint_equirectangular(canvas, layout_w, layout_h, ctx.time)
             }
             DotMapProjection::Orthographic => {
-                self.paint_orthographic(canvas, layout_w, layout_h, ctx.time)
+                self.paint_orthographic(canvas, layout_w, layout_h, ctx.time, arc_draw_progress)
             }
         }
     }
@@ -321,7 +332,14 @@ impl DotMap {
         (center_lat, center_lng)
     }
 
-    fn paint_orthographic(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
+    fn paint_orthographic(
+        &self,
+        canvas: &Canvas,
+        layout_w: f32,
+        layout_h: f32,
+        time: f64,
+        arc_draw_progress: f32,
+    ) {
         let w = layout_w;
         let h = layout_h;
         let progress = self.progress_at(time);
@@ -342,7 +360,14 @@ impl DotMap {
         self.paint_points_orthographic(
             canvas, center, radius, center_lat, center_lng, progress, time,
         );
-        self.paint_arcs_orthographic(canvas, center, radius, center_lat, center_lng);
+        self.paint_arcs_orthographic(
+            canvas,
+            center,
+            radius,
+            center_lat,
+            center_lng,
+            arc_draw_progress,
+        );
     }
 
     fn paint_world_dots_orthographic(
@@ -495,6 +520,7 @@ impl DotMap {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn paint_arcs_orthographic(
         &self,
         canvas: &Canvas,
@@ -502,9 +528,15 @@ impl DotMap {
         radius: f32,
         center_lat: f64,
         center_lng: f64,
+        arc_draw_progress: f32,
     ) {
+        let animated_reveal = if arc_draw_progress >= 0.0 {
+            arc_draw_progress.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
         for arc in &self.arcs {
-            let max_t = arc.draw_in.clamp(0.0, 1.0) as f64;
+            let max_t = (arc.draw_in.clamp(0.0, 1.0) * animated_reveal) as f64;
             if max_t <= 0.0 {
                 continue;
             }
@@ -680,10 +712,16 @@ impl Painter for DotMap {
         &self,
         canvas: &Canvas,
         layout: &BoxLayout,
-        _props: &AnimatedProperties,
+        props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        self.paint(canvas, layout.width, layout.height, ctx);
+        self.paint(
+            canvas,
+            layout.width,
+            layout.height,
+            ctx,
+            props.draw_progress,
+        );
     }
 }
 
@@ -705,8 +743,29 @@ mod tests {
     }
 
     fn render(map: &DotMap, w: u32, h: u32, time: f64) -> Vec<u8> {
+        render_via_paint_content(map, w, h, time, -1.0)
+    }
+
+    fn render_via_paint_content(
+        map: &DotMap,
+        w: u32,
+        h: u32,
+        time: f64,
+        draw_progress: f32,
+    ) -> Vec<u8> {
         let mut surface = skia_safe::surfaces::raster_n32_premul((w as i32, h as i32)).unwrap();
-        map.paint(surface.canvas(), w as f32, h as f32, &test_ctx(time));
+        let layout = BoxLayout {
+            x: 0.0,
+            y: 0.0,
+            width: w as f32,
+            height: h as f32,
+            ..Default::default()
+        };
+        let props = AnimatedProperties {
+            draw_progress,
+            ..Default::default()
+        };
+        map.paint_content(surface.canvas(), &layout, &props, &test_ctx(time));
         let info = skia_safe::ImageInfo::new(
             (w as i32, h as i32),
             skia_safe::ColorType::RGBA8888,
@@ -891,6 +950,51 @@ mod tests {
             !has_orange_pixel(&out_hidden),
             "an arc entirely on the far hemisphere must be culled, not drawn straight through \
              the globe"
+        );
+    }
+
+    #[test]
+    fn animating_the_nodes_draw_progress_sweeps_an_arc_in_instead_of_being_ignored() {
+        let map = dot_map_from(serde_json::json!({
+            "projection": "orthographic",
+            "points": [],
+            "show_world": false,
+            "arcs": [{"from": [10.0, -30.0], "to": [10.0, 30.0], "draw_in": 1.0}],
+        }));
+        let at_zero = render_via_paint_content(&map, 300, 300, 1.0, 0.0);
+        let at_full = render_via_paint_content(&map, 300, 300, 1.0, 1.0);
+        assert!(
+            !has_orange_pixel(&at_zero),
+            "an animated draw_progress of 0.0 on the dot_map node must paint no arc stroke \
+             at all, not the fully-drawn arc"
+        );
+        assert!(
+            has_orange_pixel(&at_full),
+            "an animated draw_progress of 1.0 on the dot_map node must paint the arc's \
+             (default orange) stroke"
+        );
+    }
+
+    #[test]
+    fn a_static_draw_in_still_caps_the_arc_once_draw_progress_is_fully_animated_in() {
+        let capped = dot_map_from(serde_json::json!({
+            "projection": "orthographic",
+            "points": [],
+            "show_world": false,
+            "arcs": [{"from": [10.0, -60.0], "to": [10.0, 60.0], "draw_in": 0.2}],
+        }));
+        let full = dot_map_from(serde_json::json!({
+            "projection": "orthographic",
+            "points": [],
+            "show_world": false,
+            "arcs": [{"from": [10.0, -60.0], "to": [10.0, 60.0], "draw_in": 1.0}],
+        }));
+        let out_capped = render_via_paint_content(&capped, 300, 300, 1.0, 1.0);
+        let out_full = render_via_paint_content(&full, 300, 300, 1.0, 1.0);
+        assert_ne!(
+            out_capped, out_full,
+            "draw_in must still cap how much of the arc paints even once the node's own \
+             animated draw_progress has reached 1.0"
         );
     }
 }

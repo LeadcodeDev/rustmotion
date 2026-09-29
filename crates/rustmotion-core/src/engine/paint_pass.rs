@@ -141,10 +141,20 @@ impl LayoutSurfaceFrame {
         )
     }
 
+    fn child_facing(&self, nu: f32, nv: f32) -> (f32, f32) {
+        layout_surface_child_angles(self.kind, self.arc_x_deg, self.arc_y_deg, nu, nv)
+    }
+
     fn apply(&self, canvas: &Canvas, child: &BoxLayout) {
         let nu = ((child.cx() - self.pivot.0) / self.half_w).clamp(-1.0, 1.0);
         let nv = ((child.cy() - self.pivot.1) / self.half_h).clamp(-1.0, 1.0);
         let (dx, dy, dz) = self.child_delta(nu, nv);
+        let (theta_x, theta_y) = self.child_facing(nu, nv);
+        let flat_x = nu * self.half_w;
+        let flat_y = nv * self.half_h;
+        let target_x = flat_x + dx;
+        let target_y = flat_y + dy;
+        let target_z = dz;
 
         let mut m = M44::new_identity();
         m.pre_concat(&M44::translate(self.pivot.0, self.pivot.1, 0.0));
@@ -163,10 +173,34 @@ impl LayoutSurfaceFrame {
                 self.rotate_x_deg.to_radians(),
             ));
         }
-        m.pre_concat(&M44::translate(dx, dy, dz));
+        m.pre_concat(&M44::translate(target_x, target_y, target_z));
+        if theta_x.abs() > 0.0001 {
+            m.pre_concat(&M44::rotate(V3::new(0.0, 1.0, 0.0), theta_x));
+        }
+        if theta_y.abs() > 0.0001 {
+            m.pre_concat(&M44::rotate(V3::new(1.0, 0.0, 0.0), theta_y));
+        }
+        m.pre_concat(&M44::translate(-flat_x, -flat_y, 0.0));
         m.pre_concat(&M44::translate(-self.pivot.0, -self.pivot.1, 0.0));
         canvas.concat_44(&m);
     }
+}
+
+fn layout_surface_child_angles(
+    kind: SurfaceKind,
+    arc_x_deg: f32,
+    arc_y_deg: f32,
+    nu: f32,
+    nv: f32,
+) -> (f32, f32) {
+    let nu = nu.clamp(-1.0, 1.0);
+    let nv = nv.clamp(-1.0, 1.0);
+    let theta_x = nu * arc_x_deg.to_radians() / 2.0;
+    let theta_y = match kind {
+        SurfaceKind::Sphere => nv * arc_y_deg.to_radians() / 2.0,
+        SurfaceKind::Cylinder => 0.0,
+    };
+    (theta_x, theta_y)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -182,11 +216,10 @@ fn layout_surface_child_delta(
 ) -> (f32, f32, f32) {
     let nu = nu.clamp(-1.0, 1.0);
     let nv = nv.clamp(-1.0, 1.0);
-    let theta_x = nu * arc_x_deg.to_radians() / 2.0;
+    let (theta_x, theta_y) = layout_surface_child_angles(kind, arc_x_deg, arc_y_deg, nu, nv);
     let flat_x = nu * half_w;
     match kind {
         SurfaceKind::Sphere => {
-            let theta_y = nv * arc_y_deg.to_radians() / 2.0;
             let flat_y = nv * half_h;
             let target_x = radius * theta_x.sin() * theta_y.cos();
             let target_y = radius * theta_y.sin();
@@ -2135,6 +2168,22 @@ fn silhouette_alpha_field(
     Some((field, width as usize, height as usize))
 }
 
+const ORDERED_DITHER_4X4: [[f32; 4]; 4] = [
+    [0.0, 8.0, 2.0, 10.0],
+    [12.0, 4.0, 14.0, 6.0],
+    [3.0, 11.0, 1.0, 9.0],
+    [15.0, 7.0, 13.0, 5.0],
+];
+
+fn quantize_with_ordered_dither(value: f32, x: usize, y: usize) -> u8 {
+    let clamped = value.clamp(0.0, 255.0);
+    let base = clamped.floor();
+    let frac = clamped - base;
+    let threshold = (ORDERED_DITHER_4X4[y % 4][x % 4] + 0.5) / 16.0;
+    let rounded = if frac > threshold { base + 1.0 } else { base };
+    rounded.clamp(0.0, 255.0) as u8
+}
+
 fn paint_inflated_material(
     canvas: &Canvas,
     layout: &BoxLayout,
@@ -2170,7 +2219,8 @@ fn paint_inflated_material(
 
             let index = (y * width + x) * 4;
             let coverage = field[y * width + x];
-            let alpha = (amount.abs() * coverage * 255.0) as u8;
+            let raw_alpha = amount.abs() * coverage * 255.0;
+            let alpha = quantize_with_ordered_dither(raw_alpha, x, y);
             let tone = if amount >= 0.0 {
                 (light.color.r(), light.color.g(), light.color.b())
             } else {
@@ -2781,7 +2831,14 @@ fn paint_box_shadow(
             layout.height + spread * 2.0,
         );
         let rrect = rrect_from_corners(rect, radius);
+        let own_rrect = rrect_from_corners(
+            Rect::from_xywh(layout.x, layout.y, layout.width, layout.height),
+            radius,
+        );
+        canvas.save();
+        canvas.clip_rrect(own_rrect, ClipOp::Difference, true);
         canvas.draw_rrect(rrect, &paint);
+        canvas.restore();
     } else {
         let (px, py, pw, ph) = layout.padding_box();
         let outer = rrect_from_corners(Rect::from_xywh(px, py, pw, ph), radius);
@@ -4614,6 +4671,49 @@ mod paint_order_tests {
         );
     }
 
+    fn without_trailing_plateau(values: &[i32]) -> &[i32] {
+        let mut end = values.len();
+        if end == 0 {
+            return values;
+        }
+        let last = values[end - 1];
+        while end > 0 && values[end - 1] == last {
+            end -= 1;
+        }
+        &values[..end]
+    }
+
+    fn flat_pair_count(values: &[i32]) -> usize {
+        values.windows(2).filter(|w| w[0] == w[1]).count()
+    }
+
+    #[test]
+    fn a_wide_inflated_bevel_does_not_posterize_its_ramp_into_solid_flat_plateaus() {
+        let bevel = 48.0f32;
+        let mut node = material_tile(Some(Material::Tuned {
+            preset: MaterialPreset::Inflated,
+            intensity: 1.0,
+            bevel,
+            softness: 0.6,
+        }));
+        node.css.border_radius = Some(BorderRadius::Uniform(CLP::Px(100.0)));
+        let buf = render_lit(node, None);
+        let y = 200usize;
+        let x_max = 100 + (bevel * 2.0) as usize;
+        let lumas: Vec<i32> = (100..x_max).map(|x| luma_at(&buf, x, y) as i32).collect();
+        let ramp = without_trailing_plateau(&lumas);
+        let flat_pairs = flat_pair_count(ramp);
+        assert!(
+            flat_pairs <= 28,
+            "a bevel of {bevel} across a 100px radius must not hold {flat_pairs} \
+             adjacent same-luminance pixel pairs inside its shading ramp (out of {} \
+             pairs sampled) — quantizing the shading alpha to 8 bits without dithering \
+             posterizes a shallow gradient into wide flat plateaus, visible as \
+             stair-stepped bands along the inner bevel",
+            ramp.len().saturating_sub(1)
+        );
+    }
+
     #[test]
     fn a_node_without_a_material_is_untouched() {
         let plain = render_lit(material_tile(None), None);
@@ -5048,6 +5148,57 @@ mod paint_order_tests {
             halo_count_plain, halo_count_hidden,
             "halo pixel count must be identical with/without overflow:hidden \
              (plain={halo_count_plain}, hidden={halo_count_hidden})"
+        );
+    }
+
+    #[test]
+    fn an_outset_box_shadow_does_not_paint_under_a_transparent_box() {
+        let transparent_card = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(50.0)),
+                top: Some(CLP::Px(50.0)),
+                width: Some(CSize::Length(CLP::Px(100.0))),
+                height: Some(CSize::Length(CLP::Px(100.0))),
+                box_shadow: Some(vec![BoxShadow {
+                    offset_x: Length::Px(0.0),
+                    offset_y: Length::Px(0.0),
+                    blur: None,
+                    spread: Some(Length::Px(20.0)),
+                    color: Some(CssColor::String("#ff0000".into())),
+                    inset: None,
+                }]),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        };
+        let mut root = root_node(200.0, 200.0, "#000000", vec![transparent_card]);
+        let buf = render_pixels(&mut root, 200, 200);
+
+        let probe = |x: usize, y: usize| -> (u8, u8, u8) {
+            let i = (y * 200 + x) * 4;
+            (buf[i], buf[i + 1], buf[i + 2])
+        };
+
+        let centre = probe(100, 100);
+        assert!(
+            centre.0 < 50 && centre.1 < 50 && centre.2 < 50,
+            "a box with no background of its own must leave its border-box area showing the \
+             root's black background, not the shadow bleeding through in red — the shadow is \
+             clipped to outside the border edge in CSS regardless of what (if anything) the \
+             box itself paints — got {centre:?}"
+        );
+
+        let halo = probe(100, 45);
+        assert!(
+            halo.0 > 200 && halo.1 < 50,
+            "the shadow halo outside the box's own footprint must still be painted, got \
+             {halo:?}"
         );
     }
 
@@ -6040,6 +6191,35 @@ mod layout_surface_tests {
         }
     }
 
+    fn n_column_grid(
+        w: f32,
+        h: f32,
+        n: usize,
+        first_color: &str,
+        layout_surface: Option<LayoutSurface>,
+    ) -> BoxNode {
+        let mut children = vec![colored_cell(first_color)];
+        for _ in 1..n {
+            children.push(colored_cell("#333333"));
+        }
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                display: Some(Display::Grid),
+                width: Some(CSize::Length(CLP::Px(w))),
+                height: Some(CSize::Length(CLP::Px(h))),
+                grid_template_columns: Some(vec![GridTrack::Fr(1.0); n]),
+                layout_surface,
+                ..Default::default()
+            },
+            children,
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
     fn root_with(child: BoxNode, w: f32, h: f32) -> BoxNode {
         BoxNode {
             id: 0,
@@ -6261,6 +6441,39 @@ mod layout_surface_tests {
         assert_eq!(
             dy, 0.0,
             "a cylinder only wraps its arc-x — a child's vertical position must be untouched"
+        );
+    }
+
+    #[test]
+    fn a_cylinder_edge_column_foreshortens_towards_the_expected_width_with_no_perspective_at_all() {
+        let mut root = root_with(
+            n_column_grid(
+                1800.0,
+                300.0,
+                9,
+                "#ff0000",
+                Some(LayoutSurface::Cylinder {
+                    radius: 900.0,
+                    arc_x: 120.0,
+                    perspective: None,
+                    rotate_x: None,
+                    rotate_y: None,
+                }),
+            ),
+            1800.0,
+            300.0,
+        );
+        let out = render_pixels(&mut root, 1800, 300, 0.0);
+        let (lo, hi) =
+            channel_extent(&out, 1800, 300, is_red).expect("the edge column must be visible");
+        let width = hi - lo + 1;
+        assert!(
+            (100..=140).contains(&width),
+            "a 200px-wide edge column ~53 degrees off-axis on a layout-surface cylinder must \
+             rotate to face the surface and foreshorten to roughly 120px even with no \
+             `perspective` set at all — measured {width}px, which is what an unrotated cell \
+             that is only translated and depth-shifted would still measure (no narrower than \
+             its flat 200px)"
         );
     }
 
