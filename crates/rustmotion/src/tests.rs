@@ -3671,3 +3671,102 @@ mod node_reference_resolution {
         ));
     }
 }
+
+#[cfg(test)]
+mod self_painting_background_animation_tests {
+    use crate::encode::video::{build_frame_tasks, render_frame_task, FrameTask};
+    use crate::loader::load_scenario_from_source;
+
+    const W: usize = 400;
+    const H: usize = 200;
+
+    fn scenario(component: &str) -> String {
+        format!(
+            r##"{{
+              "version": "1.0",
+              "video": {{ "width": {W}, "height": {H}, "fps": 30, "background": "#000000" }},
+              "scenes": [{{ "duration": 2.0, "children": [{component}] }}]
+            }}"##
+        )
+    }
+
+    fn centre_rgb(json: &str, time: f64) -> (u8, u8, u8) {
+        let scenario = load_scenario_from_source(None, Some(json)).expect("load");
+        let fps = scenario.video.fps as f64;
+        let wanted = (time * fps).round() as u32;
+        let tasks = build_frame_tasks(&scenario);
+        let task = tasks
+            .iter()
+            .find(|t| match t {
+                FrameTask::Normal { global_frame, .. } => *global_frame == wanted,
+                _ => false,
+            })
+            .expect("a normal frame at that instant");
+        let frame = render_frame_task(&scenario.video, &scenario, task).expect("render");
+        let i = ((H / 2) * W + W / 2) * 4;
+        (frame[i], frame[i + 1], frame[i + 2])
+    }
+
+    const BADGE: &str = r##"{
+        "type": "badge", "text": "AB",
+        "style": { "position": "absolute", "left": 100, "top": 70, "font-size": 40,
+                   "background": "#FF0000", "color": "#FFFFFF", "border-radius": 999,
+                   "transition": { "duration": 1.0, "easing": "linear" } },
+        "timeline": [{ "at": 0.5, "style": { "background": "#0000FF" } }] }"##;
+
+    const STAT: &str = r##"{
+        "type": "stat", "value": "42",
+        "style": { "position": "absolute", "left": 100, "top": 50, "width": 200, "height": 100,
+                   "background": "#FF0000", "color": "#FFFFFF",
+                   "transition": { "duration": 1.0, "easing": "linear" } },
+        "timeline": [{ "at": 0.5, "style": { "background": "#0000FF" } }] }"##;
+
+    #[test]
+    fn a_badge_follows_an_animated_background_instead_of_repainting_its_own() {
+        let json = scenario(BADGE);
+        assert_eq!(
+            centre_rgb(&json, 0.2),
+            (255, 0, 0),
+            "before the step the badge is the colour it declares"
+        );
+        let (r, g, b) = centre_rgb(&json, 1.0);
+        assert!(
+            r > 80 && r < 180 && g < 20 && b > 80 && b < 180,
+            "halfway through the transition the badge must be between its two colours, got \
+             ({r}, {g}, {b}) — repainting its own static background gives (255, 0, 0)"
+        );
+        assert_eq!(
+            centre_rgb(&json, 1.8),
+            (0, 0, 255),
+            "past the transition the badge is the colour the timeline asked for"
+        );
+    }
+
+    #[test]
+    fn a_stat_follows_it_too_although_the_cascade_never_clones_it() {
+        let json = scenario(STAT);
+        assert_eq!(centre_rgb(&json, 0.2), (255, 0, 0));
+        let (r, g, b) = centre_rgb(&json, 1.0);
+        assert!(
+            r > 80 && r < 180 && g < 20 && b > 80 && b < 180,
+            "stat is classified non-typographic, so with_cascaded_style returns None for it — \
+             the resolved background has to reach it by its own path, got ({r}, {g}, {b})"
+        );
+        assert_eq!(centre_rgb(&json, 1.8), (0, 0, 255));
+    }
+
+    #[test]
+    fn a_component_with_no_background_animation_is_untouched() {
+        let json = scenario(
+            r##"{ "type": "badge", "text": "AB",
+                  "style": { "position": "absolute", "left": 100, "top": 70, "font-size": 40,
+                             "background": "#FF0000", "color": "#FFFFFF", "border-radius": 999 } }"##,
+        );
+        assert_eq!(centre_rgb(&json, 0.2), (255, 0, 0));
+        assert_eq!(
+            centre_rgb(&json, 1.8),
+            (255, 0, 0),
+            "with nothing animating the background, the clone must not be taken at all"
+        );
+    }
+}
