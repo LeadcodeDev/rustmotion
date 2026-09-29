@@ -82,13 +82,13 @@ rustmotion info scenario.json
 
 ## Claude Code Skills
 
-rustmotion ships with built-in [Claude Code](https://claude.ai/claude-code) skills — 30 rules and best practices for generating video scenarios with AI. After installing rustmotion, run:
+rustmotion ships with built-in [Claude Code](https://claude.ai/claude-code) skills — 84 rules and best practices for generating video scenarios with AI. After installing rustmotion, run:
 
 ```bash
 # Install skills in your video project (recommended)
 cd my-video-project/
 rustmotion skills install
-# → .claude/skills/rustmotion/  (SKILL.md + 29 rules)
+# → .claude/skills/rustmotion/  (SKILL.md + 84 rules)
 # → CLAUDE.md                   (project instructions)
 
 # Or install globally (available in all projects)
