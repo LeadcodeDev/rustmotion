@@ -1,8 +1,30 @@
 # `draw_progress` : rien à 0, et un trait qui ne change pas d'apparence en finissant
 
-`draw_progress` (via l'animation `keyframes` sur la propriété du même nom, ou
-`draw: true` sur `svg`) révèle un trait progressivement. Deux pièges à
-connaître sur `line` et `svg` (`reveal: "stroke"`, celui par défaut).
+`draw_progress` révèle un trait progressivement. On le pilote par un preset
+`draw_in`/`stroke_reveal`, ou par des `keyframes` sur la propriété du même nom.
+Trois pièges à connaître sur `line` et `svg` (`reveal: "stroke"`, celui par
+défaut).
+
+## `svg` : `draw: true` n'est pas un pilote
+
+`draw: true` force le **chemin de rendu** « draw-on ». Il ne fait pas avancer
+`draw_progress`. Sans pilote, la propriété reste à sa valeur au repos, le
+peintre prend la branche « fini » (`progress >= 1.0`, qui délègue simplement à
+resvg) et la marque se rend **exactement comme avec `draw: false`** — vérifié
+octet pour octet sur deux PNG.
+
+Le validateur refuse donc `draw: true` sans pilote, plutôt que de laisser le
+drapeau avoir l'air de faire quelque chose :
+
+```
+draw: true but nothing animates draw_progress — the mark renders finished,
+pixel-identical to draw: false. Add a 'draw_in' or 'stroke_reveal' preset,
+or keyframes on 'draw_progress'.
+```
+
+En pratique on n'a d'ailleurs pas besoin de `draw: true` : un preset `draw_in`
+suffit à lui seul, puisque le peintre bascule dès que `draw_progress` est dans
+`[0, 1[`.
 
 ## `line` : `draw_progress: 0` ne doit rien peindre
 

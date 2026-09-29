@@ -41,7 +41,10 @@ pub struct Svg {
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]
     pub stagger: Option<f32>,
-    /// Force draw-on mode even when draw_progress is 1.0 (static draw trace view, no animation needed).
+    /// Take the draw-on path even outside an animation's own window. It needs a driver:
+    /// a `draw_in`/`stroke_reveal` preset or keyframes on `draw_progress`. On its own it
+    /// leaves `draw_progress` at rest, which paints the finished mark — `validate` rejects
+    /// that rather than let the flag look as though it did something.
     #[serde(default)]
     pub draw: bool,
     /// Stroke width used when tracing fill-only paths (no stroke in the SVG).
@@ -1047,6 +1050,43 @@ mod tests {
             "usvg::Options::default() carries an empty font database (the pre-fix behavior \
              behind issue #374): no <text> can resolve, which is exactly the condition that \
              must trigger the stderr warning"
+        );
+    }
+    #[test]
+    fn draw_with_nothing_driving_progress_is_pixel_identical_to_no_draw() {
+        fn render(draw: bool) -> Vec<u8> {
+            let mut svg = filled_square_svg();
+            svg.draw = draw;
+            let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).unwrap();
+            svg.paint_content(
+                surface.canvas(),
+                &test_layout(),
+                &AnimatedProperties::default(),
+                &test_ctx(),
+            );
+            let snapshot = surface.image_snapshot();
+            let info = skia_safe::ImageInfo::new(
+                (W, H),
+                skia_safe::ColorType::RGBA8888,
+                skia_safe::AlphaType::Unpremul,
+                None,
+            );
+            let mut buf = vec![0u8; (W * H * 4) as usize];
+            snapshot.read_pixels(
+                &info,
+                &mut buf,
+                (W * 4) as usize,
+                skia_safe::IPoint::new(0, 0),
+                skia_safe::image::CachingHint::Disallow,
+            );
+            buf
+        }
+
+        assert_eq!(
+            render(true),
+            render(false),
+            "with draw_progress at rest the draw branch short-circuits to the finished mark, \
+             so the flag changes nothing — which is why validate now refuses it"
         );
     }
 }

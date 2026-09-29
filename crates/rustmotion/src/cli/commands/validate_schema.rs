@@ -184,6 +184,14 @@ fn validate_children(
                         errors.push(format!("{}.src: file not found '{}'", p, src));
                     }
                 }
+                if svg.draw && !drives_draw_progress(&svg.style) {
+                    errors.push(format!(
+                        "{}: draw: true but nothing animates draw_progress — the mark renders \
+                         finished, pixel-identical to draw: false. Add a 'draw_in' or \
+                         'stroke_reveal' preset, or keyframes on 'draw_progress'.",
+                        p
+                    ));
+                }
             }
             Component::Icon(icon) => {
                 if let Some((prefix, name)) = icon.icon.split_once(':') {
@@ -236,6 +244,18 @@ fn validate_children(
             _ => {}
         }
     }
+}
+
+fn drives_draw_progress(style: &CssStyle) -> bool {
+    style.animation.iter().any(|effect| match effect {
+        AnimationEffect::DrawIn(_) | AnimationEffect::StrokeReveal(_) => true,
+        AnimationEffect::Keyframes(k) => k
+            .keyframes
+            .iter()
+            .any(|anim| anim.property == "draw_progress" || anim.property == "draw_start"),
+        AnimationEffect::Wiggle(w) => w.property == "draw_progress" || w.property == "draw_start",
+        _ => false,
+    })
 }
 
 fn check_style_colors(style: &CssStyle, path: &str, errors: &mut Vec<String>) {
@@ -1020,6 +1040,102 @@ mod style_warning_tests {
             errors.iter().all(|e| !e.contains("animation finishes")),
             "start_at must not be added to the completion budget: {errors:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod svg_draw_driver_tests {
+    use super::*;
+
+    const MARK: &str = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>\
+                        <circle cx='50' cy='50' r='40' fill='#FF3366'/></svg>";
+
+    fn errors_for(style: serde_json::Value) -> Vec<String> {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "svg",
+            "data": MARK,
+            "draw": true,
+            "style": style
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        errors
+    }
+
+    #[test]
+    fn draw_with_no_driver_is_rejected_rather_than_rendering_the_finished_mark() {
+        let errors = errors_for(serde_json::json!({ "width": 200, "height": 200 }));
+        assert!(
+            errors.iter().any(|e| e.contains("draw_progress")),
+            "an undriven draw is pixel-identical to draw: false, so it must be named: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn the_draw_in_preset_is_a_driver() {
+        let errors = errors_for(serde_json::json!({
+            "width": 200, "height": 200,
+            "animation": [{ "name": "draw_in", "delay": 0.1, "duration": 1.0 }]
+        }));
+        assert!(
+            errors.is_empty(),
+            "draw_in drives draw_progress: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn the_stroke_reveal_preset_is_a_driver() {
+        let errors = errors_for(serde_json::json!({
+            "width": 200, "height": 200,
+            "animation": [{ "name": "stroke_reveal", "duration": 1.0 }]
+        }));
+        assert!(
+            errors.is_empty(),
+            "stroke_reveal drives draw_progress too: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn keyframes_on_draw_progress_are_a_driver() {
+        let errors = errors_for(serde_json::json!({
+            "width": 200, "height": 200,
+            "animation": [{ "name": "keyframes", "duration": 1.0, "keyframes": [{
+                "property": "draw_progress",
+                "keyframes": [{ "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 1.0 }]
+            }]}]
+        }));
+        assert!(
+            errors.is_empty(),
+            "hand-written keyframes count as a driver: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_animation_on_some_other_property_is_not_a_driver() {
+        let errors = errors_for(serde_json::json!({
+            "width": 200, "height": 200,
+            "animation": [{ "name": "fade_in", "duration": 0.5 }]
+        }));
+        assert!(
+            errors.iter().any(|e| e.contains("draw_progress")),
+            "fade_in animates opacity, which leaves draw_progress at rest: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn draw_false_never_asks_for_a_driver() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "svg",
+            "data": MARK,
+            "style": { "width": 200, "height": 200 }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "a plain svg is not affected: {errors:?}");
     }
 }
 
