@@ -619,6 +619,41 @@ impl Component {
         }
     }
 
+    pub fn paints_its_own_background(&self) -> bool {
+        matches!(
+            self,
+            Component::Badge(_)
+                | Component::Callout(_)
+                | Component::Caption(_)
+                | Component::Kbd(_)
+                | Component::Stat(_)
+                | Component::Tooltip(_)
+        )
+    }
+
+    pub fn with_resolved_background(&self, resolved: &CssStyle) -> Option<Component> {
+        if !self.paints_its_own_background() {
+            return None;
+        }
+        let background = resolved.background.clone()?;
+        if self.as_styled().style_config().background.as_ref() == Some(&background) {
+            return None;
+        }
+        let value = serde_json::to_value(self).ok()?;
+        let mut clone: Component = serde_json::from_value(value).ok()?;
+        let style = match &mut clone {
+            Component::Badge(c) => c.style_config_mut(),
+            Component::Callout(c) => c.style_config_mut(),
+            Component::Caption(c) => c.style_config_mut(),
+            Component::Kbd(c) => c.style_config_mut(),
+            Component::Stat(c) => c.style_config_mut(),
+            Component::Tooltip(c) => c.style_config_mut(),
+            _ => unreachable!("classified by paints_its_own_background above"),
+        };
+        style.background = Some(background);
+        Some(clone)
+    }
+
     pub fn with_cascaded_style(&self, resolved: &CssStyle) -> Option<Component> {
         let is_typographic = match self {
             Component::Text(_)

@@ -81,7 +81,9 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
         }
 
         let cascaded_component = child.component.with_cascaded_style(css);
-        let effective_component = cascaded_component.as_ref().unwrap_or(&child.component);
+        let cascaded = cascaded_component.as_ref().unwrap_or(&child.component);
+        let repainted = cascaded.with_resolved_background(css);
+        let effective_component = repainted.as_ref().unwrap_or(cascaded);
         let Some(painter) = effective_component.as_painter() else {
             return;
         };
