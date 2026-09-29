@@ -9,7 +9,7 @@ Deux champs propres au composant `shape`, pas des propriétés `style.animation`
 ```json
 {
   "type": "shape",
-  "shape": { "type": "path", "data": "M0 80 C 20 40, 40 40, 50 10 C 60 40, 80 40, 90 80" },
+  "shape": { "path": { "data": "M0 80 C 20 40, 40 40, 50 10 C 60 40, 80 40, 90 80" } },
   "stroke": { "color": "#F68F2B", "width": 6 },
   "draw_start": 0.5,
   "style": {
@@ -23,10 +23,10 @@ Deux champs propres au composant `shape`, pas des propriétés `style.animation`
 }
 ```
 
-`draw_start` accepte un nombre littéral ou une expression `"= …"` (même grammaire que `stroke.dash_offset`), réévaluée chaque frame contre `t`/`t_abs`/`duration`/`width`/`height`/`fps`. Pour un segment qui « marche » le long du trait :
+`draw_start` accepte un nombre littéral ou une expression `"= …"` (même grammaire que `stroke.dash_offset`), réévaluée chaque frame contre `$t`/`$t_abs`/`$duration`/`$width`/`$height`/`$fps`. Pour un segment qui « marche » le long du trait :
 
 ```json
-"draw_start": "= max(0, (t - 0.9) / 0.5)"
+"draw_start": "= max(0, ($t - 0.9) / 0.5)"
 ```
 
 ### Ce n'est pas une propriété `keyframes` comme `draw_progress`
@@ -51,7 +51,7 @@ Un `draw_start >= draw_progress` (fenêtre vide ou inversée) ne peint rien — 
 ```json
 {
   "type": "shape",
-  "shape": { "type": "path", "data": "M10 80 C 20 40, 40 40, 50 10 C 60 40, 80 40, 90 80 Z" },
+  "shape": { "path": { "data": "M10 80 C 20 40, 40 40, 50 10 C 60 40, 80 40, 90 80 Z" } },
   "fill": "#8B5CF6",
   "path_morph": {
     "keyframes": [

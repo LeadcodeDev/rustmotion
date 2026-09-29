@@ -7,7 +7,7 @@
 ```json
 {
   "type": "icon",
-  "name": "zap",
+  "icon": "lucide:zap",
   "style": {
     "animation": [{
       "name": "chromatic_aberration",
