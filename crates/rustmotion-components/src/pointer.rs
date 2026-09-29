@@ -140,7 +140,11 @@ impl Pointer {
         if self.path.is_empty() {
             self.click_at.clone()
         } else {
-            self.path.iter().map(|w| w.time).collect()
+            self.path
+                .iter()
+                .filter(|w| w.click)
+                .map(|w| w.time)
+                .collect()
         }
     }
 
@@ -187,6 +191,24 @@ impl Pointer {
         path.close();
     }
 
+    fn add_smooth_contour(path: &mut PathBuilder, points: &[(f32, f32)], size: f32) {
+        let n = points.len();
+        if n < 3 {
+            Self::add_contour(path, points, size);
+            return;
+        }
+        let at = |i: usize| (points[i % n].0 * size, points[i % n].1 * size);
+        let midpoint = |a: (f32, f32), b: (f32, f32)| ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5);
+
+        path.move_to(midpoint(at(0), at(1)));
+        for i in 1..=n {
+            let control = at(i);
+            let end = midpoint(at(i), at(i + 1));
+            path.quad_to(control, end);
+        }
+        path.close();
+    }
+
     fn arrow_path(size: f32) -> Path {
         const OUTLINE: [(f32, f32); 7] = [
             (0.0, 0.0),
@@ -202,28 +224,52 @@ impl Pointer {
         path.detach()
     }
 
-    const HAND_FIST: [(f32, f32); 8] = [
-        (0.08, 0.38),
-        (0.30, 0.30),
-        (0.54, 0.36),
-        (0.62, 0.58),
-        (0.54, 0.82),
-        (0.30, 0.92),
-        (0.12, 0.82),
-        (0.04, 0.58),
+    const HAND_OUTLINE: [(f32, f32); 16] = [
+        (0.00, 0.00),
+        (0.22, 0.00),
+        (0.26, 0.34),
+        (0.38, 0.30),
+        (0.48, 0.36),
+        (0.58, 0.34),
+        (0.66, 0.46),
+        (0.68, 0.64),
+        (0.58, 0.86),
+        (0.36, 0.96),
+        (0.16, 0.90),
+        (0.06, 0.72),
+        (0.00, 0.58),
+        (0.03, 0.46),
+        (0.12, 0.42),
+        (0.04, 0.34),
+    ];
+
+    const FIST_OUTLINE: [(f32, f32); 15] = [
+        (0.18, 0.22),
+        (0.30, 0.12),
+        (0.40, 0.20),
+        (0.50, 0.14),
+        (0.60, 0.24),
+        (0.66, 0.38),
+        (0.66, 0.60),
+        (0.56, 0.80),
+        (0.38, 0.90),
+        (0.20, 0.84),
+        (0.10, 0.68),
+        (0.02, 0.58),
+        (0.04, 0.44),
+        (0.14, 0.40),
+        (0.12, 0.30),
     ];
 
     fn hand_path(size: f32) -> Path {
-        const FINGER: [(f32, f32); 3] = [(0.00, 0.00), (0.40, 0.06), (0.10, 0.30)];
         let mut path = PathBuilder::new();
-        Self::add_contour(&mut path, &FINGER, size);
-        Self::add_contour(&mut path, &Self::HAND_FIST, size);
+        Self::add_smooth_contour(&mut path, &Self::HAND_OUTLINE, size);
         path.detach()
     }
 
     fn grab_path(size: f32) -> Path {
         let mut path = PathBuilder::new();
-        Self::add_contour(&mut path, &Self::HAND_FIST, size);
+        Self::add_smooth_contour(&mut path, &Self::FIST_OUTLINE, size);
         path.detach()
     }
 
@@ -233,6 +279,17 @@ impl Pointer {
             PointerGlyph::Hand => Self::hand_path(size),
             PointerGlyph::Grab => Self::grab_path(size),
         }
+    }
+
+    fn unfilled_contrast_color(&self, outline: &str) -> Option<&'static str> {
+        if self.tone != PointerTone::Outline || self.outline_color.is_some() {
+            return None;
+        }
+        let (_, _, _, alpha) = parse_hex_color(outline);
+        if alpha == 0 {
+            return None;
+        }
+        Some("#111827")
     }
 
     fn active_glyph(&self, click: Option<f32>) -> PointerGlyph {
@@ -286,15 +343,25 @@ impl Painter for Pointer {
         }
 
         let path = Self::glyph_path(self.active_glyph(click), self.size);
+        let outline_width = (self.size * 0.07).max(1.0);
         let mut outline_paint = paint_from_hex(&outline);
         outline_paint.set_style(PaintStyle::Stroke);
-        outline_paint.set_stroke_width((self.size * 0.07).max(1.0));
+        outline_paint.set_stroke_width(outline_width);
         outline_paint.set_stroke_join(skia_safe::PaintJoin::Round);
         outline_paint.set_anti_alias(true);
 
         let mut fill_paint = paint_from_hex(&fill);
         fill_paint.set_style(PaintStyle::Fill);
         fill_paint.set_anti_alias(true);
+
+        if let Some(contrast) = self.unfilled_contrast_color(&outline) {
+            let mut contrast_paint = paint_from_hex(contrast);
+            contrast_paint.set_style(PaintStyle::Stroke);
+            contrast_paint.set_stroke_width(outline_width * 1.5);
+            contrast_paint.set_stroke_join(skia_safe::PaintJoin::Round);
+            contrast_paint.set_anti_alias(true);
+            canvas.draw_path(&path, &contrast_paint);
+        }
 
         canvas.draw_path(&path, &fill_paint);
         canvas.draw_path(&path, &outline_paint);
@@ -560,6 +627,85 @@ mod tests {
 
     fn finger_probe(size: f32) -> (f32, f32) {
         (0.08 * size, 0.05 * size)
+    }
+
+    #[test]
+    fn a_waypoint_can_be_passed_through_without_clicking() {
+        let p = pointer(serde_json::json!({
+            "size": 120,
+            "click_duration": 0.4,
+            "path": [
+                { "time": 0.0, "x": 0.0, "y": 0.0 },
+                { "time": 1.0, "x": 200.0, "y": 0.0, "click": false },
+                { "time": 2.0, "x": 200.0, "y": 200.0 }
+            ]
+        }));
+        assert_eq!(
+            p.click_times(),
+            vec![0.0, 2.0],
+            "a pointer must be able to travel through an intermediate point without clicking \
+             on arrival — it clicked at every waypoint, with no way to opt out"
+        );
+    }
+
+    #[test]
+    fn a_waypoint_clicks_by_default_so_an_existing_scenario_is_unchanged() {
+        let p = pointer(serde_json::json!({
+            "size": 120,
+            "path": [
+                { "time": 0.0, "x": 0.0, "y": 0.0 },
+                { "time": 1.0, "x": 200.0, "y": 0.0 }
+            ]
+        }));
+        assert_eq!(p.click_times(), vec![0.0, 1.0]);
+    }
+
+    #[test]
+    fn opting_every_waypoint_out_leaves_a_pointer_that_travels_and_never_clicks() {
+        let p = pointer(serde_json::json!({
+            "size": 120,
+            "click_at": [3.0],
+            "path": [
+                { "time": 0.0, "x": 0.0, "y": 0.0, "click": false },
+                { "time": 1.0, "x": 200.0, "y": 0.0, "click": false }
+            ]
+        }));
+        assert!(
+            p.click_times().is_empty(),
+            "click_at stays ignored while a path is present, which is what \
+             clicks_come_from_the_waypoints_when_a_path_is_given pins; a pointer that should \
+             click somewhere says so on the waypoint"
+        );
+    }
+
+    #[test]
+    fn an_outline_pointer_carries_a_dark_contour_so_it_reads_on_a_light_frame() {
+        let p = pointer(serde_json::json!({ "size": 200, "tone": "outline" }));
+        const W: i32 = 300;
+        const H: i32 = 300;
+        let mut frame = render(
+            &p,
+            W,
+            H,
+            0.0,
+            skia_safe::Color::from_argb(255, 255, 255, 255),
+        );
+
+        let mut darkest = 255u8;
+        for y in 0..H {
+            for x in 0..W {
+                let (r, g, b, a) = pixel(&mut frame, W, H, x as f32, y as f32);
+                if a > 200 {
+                    darkest = darkest.min(r.max(g).max(b));
+                }
+            }
+        }
+        assert!(
+            darkest < 100,
+            "tone: outline is a white stroke on a transparent fill, so on a white frame it was \
+             invisible while its own documentation promised it reads on any background; \
+             darkest painted channel was {darkest}"
+        );
     }
 
     #[test]

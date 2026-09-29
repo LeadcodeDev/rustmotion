@@ -12,12 +12,21 @@ use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 /// A cursor waypoint with position and time.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CursorWaypoint {
-    /// Time in seconds when the cursor reaches this point (and clicks).
+    /// Time in seconds when the cursor reaches this point.
     pub time: f64,
     /// X position relative to the cursor's origin.
     pub x: f32,
     /// Y position relative to the cursor's origin.
     pub y: f32,
+    /// Whether arriving here is a click. Defaults to `true`, which is what
+    /// every waypoint did before this field existed. Set it to `false` for a
+    /// point the pointer only travels through.
+    #[serde(default = "default_waypoint_click")]
+    pub click: bool,
+}
+
+fn default_waypoint_click() -> bool {
+    true
 }
 
 /// A blinking cursor component (vertical bar) with optional motion path and click events.
