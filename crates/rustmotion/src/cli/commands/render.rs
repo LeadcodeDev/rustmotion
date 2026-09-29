@@ -12,6 +12,7 @@ fn clear_all_media_caches() {
     engine::clear_asset_cache();
     engine::gif_cache().clear();
     engine::video_frame_cache().clear();
+    rustmotion_core::engine::renderer::invalidate_font_caches();
 }
 
 #[allow(clippy::too_many_arguments)]
