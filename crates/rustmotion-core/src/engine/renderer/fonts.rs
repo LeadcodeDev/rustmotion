@@ -479,6 +479,14 @@ mod cache_invalidation_reaches_every_thread_tests {
     use rayon::prelude::*;
     use std::sync::atomic::Ordering;
 
+    static GENERATION_IS_SHARED: Mutex<()> = Mutex::new(());
+
+    fn hold_the_generation_still() -> std::sync::MutexGuard<'static, ()> {
+        GENERATION_IS_SHARED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     fn a_face(marker: u8) -> Vec<u8> {
         let mut data = vec![
             0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x10, 0x00, 0x03, 0x00, 0x04,
@@ -496,6 +504,7 @@ mod cache_invalidation_reaches_every_thread_tests {
 
     #[test]
     fn a_rayon_worker_drops_its_own_copy_when_the_generation_moves() {
+        let _serialised = hold_the_generation_still();
         let before: Vec<usize> = (0..256)
             .into_par_iter()
             .map(|_| fill_this_threads_fallback_cache())
@@ -522,6 +531,7 @@ mod cache_invalidation_reaches_every_thread_tests {
 
     #[test]
     fn a_generation_cache_holds_its_entries_until_the_generation_moves() {
+        let _serialised = hold_the_generation_still();
         let mut cache: GenerationCache<u32, u32> = GenerationCache::new();
         cache.current().insert(1, 10);
         cache.current().insert(2, 20);
@@ -541,6 +551,7 @@ mod cache_invalidation_reaches_every_thread_tests {
 
     #[test]
     fn a_second_file_in_the_same_load_does_not_clobber_the_first() {
+        let _serialised = hold_the_generation_still();
         let family = "rm-test-same-load";
         invalidate_font_caches();
         register_custom_font_variant(family, a_face(1), 400, false);
@@ -555,6 +566,7 @@ mod cache_invalidation_reaches_every_thread_tests {
 
     #[test]
     fn the_next_load_supersedes_the_variant_the_previous_one_registered() {
+        let _serialised = hold_the_generation_still();
         let family = "rm-test-reload";
         invalidate_font_caches();
         register_custom_font_variant(family, a_face(1), 400, false);
@@ -571,6 +583,7 @@ mod cache_invalidation_reaches_every_thread_tests {
 
     #[test]
     fn loading_an_empty_font_list_does_not_throw_away_every_threads_cache() {
+        let _serialised = hold_the_generation_still();
         let generation = FONT_GENERATION.load(Ordering::Acquire);
         load_custom_fonts(&[]);
         assert_eq!(
