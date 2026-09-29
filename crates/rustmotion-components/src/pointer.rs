@@ -9,7 +9,7 @@ use rustmotion_core::engine::renderer::{paint_from_hex, parse_hex_color};
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
-use crate::cursor::{waypoint_offset, CursorPathEasing, CursorWaypoint};
+use crate::cursor::{CursorPathEasing, CursorWaypoint};
 
 /// Colour scheme of the pointer, so a scene picks one word instead of two
 /// hex values that have to stay in contrast with each other.
@@ -308,16 +308,10 @@ impl Painter for Pointer {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        let (dx, dy) = if self.path.is_empty() {
-            (0.0, 0.0)
-        } else {
-            waypoint_offset(&self.path, ctx.time, self.click_duration, self.path_easing)
-        };
         let click = self.click_progress(ctx.time);
         let (fill, outline) = self.colors();
 
         canvas.save();
-        canvas.translate((dx, dy));
 
         if let (Some(p), Some((stroke_f, travel_f))) = (click, self.click_ring.metrics()) {
             let ring_fallback = self.ring_fallback_color(&fill, &outline);
@@ -373,6 +367,7 @@ impl Painter for Pointer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cursor::waypoint_offset;
 
     fn pointer(json: serde_json::Value) -> Pointer {
         serde_json::from_value(json).expect("pointer fixture")
@@ -608,12 +603,23 @@ mod tests {
             "size": 120.0,
             "click_ring": "bold",
             "click_duration": 0.5,
-            "path": [{ "time": 0.0, "x": 150.0, "y": 150.0 }]
+            "click_at": [0.0]
         }));
         const W: i32 = 300;
         const H: i32 = 300;
         let background = skia_safe::Color::from_argb(255, 20, 20, 20);
-        let mut surface = render(&p, W, H, 0.15, background);
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            canvas.clear(background);
+            canvas.translate((150.0, 150.0));
+            p.paint_content(
+                canvas,
+                &BoxLayout::default(),
+                &AnimatedProperties::default(),
+                &paint_ctx(0.15, W as u32, H as u32),
+            );
+        }
 
         let radius = 0.3 * 1.25 * 120.0;
         let offset = radius * std::f32::consts::FRAC_1_SQRT_2;

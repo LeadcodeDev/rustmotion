@@ -1,43 +1,43 @@
-# Rule: Flou directionnel — `radius-x`/`radius-y`, `directional-blur`, `blur_x`/`blur_y`
+# Rule: Directional blur — `radius-x`/`radius-y`, `directional-blur`, `blur_x`/`blur_y`
 
-`filter: [{ "fn": "blur", "radius": N }]` est isotrope : à forte valeur, un mot qui traverse le cadre bave verticalement autant qu'horizontalement et perd sa forme. Trois briques couvrent le cas d'un élément étiré le long de son axe de déplacement — un aplat qui glisse, un mot qui whip, une étiquette qui tombe.
+`filter: [{ "fn": "blur", "radius": N }]` is isotropic: at a high value, a word crossing the frame bleeds as much vertically as horizontally and loses its shape. Three pieces cover an element stretched along its own axis of travel — a flat shape sliding, a word whipping past, a label dropping.
 
-## Flou statique par axe : `radius-x` / `radius-y`
+## Static per-axis blur: `radius-x` / `radius-y`
 
 ```json
 { "filter": [{ "fn": "blur", "radius-x": 40, "radius-y": 0 }] }
 ```
 
-`Blur` a maintenant trois champs, tous optionnels : `radius` (isotrope, comportement historique), `radius-x`, `radius-y`. Quand `radius-x`/`radius-y` sont donnés ils l'emportent sur `radius` **sur leur propre axe** ; l'axe omis retombe sur `radius` si présent, sinon vaut 0. `{ "radius-x": 40, "radius-y": 0 }` donne un flou strictement horizontal ; `{ "radius": 24 }` reste un flou isotrope classique — aucun scénario existant ne change de rendu.
+`Blur` has three fields, all optional: `radius` (isotropic, the historical behaviour), `radius-x`, `radius-y`. When `radius-x`/`radius-y` are given they win over `radius` **on their own axis**; the omitted axis falls back to `radius` if present, and is 0 otherwise. `{ "radius-x": 40, "radius-y": 0 }` gives a strictly horizontal blur; `{ "radius": 24 }` stays a plain isotropic blur — no existing scenario changes its render.
 
-> Piège de casing : ces deux champs sont en kebab-case (`radius-x`), comme tout le reste de `FilterFn` — cohérent avec `offset-x`/`offset-y` de `box-shadow` et `drop-shadow`. `blur_x`/`blur_y` (voir plus bas) sont en revanche en **snake_case**, parce qu'ils vivent dans l'espace de noms des propriétés animables (`translate_x`, `scale.x`, …), pas dans celui des champs de filtre — deux conventions différentes, chacune cohérente avec ses voisines immédiates.
+> Casing trap: both fields are kebab-case (`radius-x`), like everything else in `FilterFn` — consistent with `offset-x`/`offset-y` on `box-shadow` and `drop-shadow`. The snake_case spelling (`radius_x`, `radius_y`) is accepted as a parse alias — both spellings deserialise to the same field, but only `radius-x`/`radius-y` is re-emitted. `blur_x`/`blur_y` (below) are snake_case in their own right, because they live in the animatable-property namespace (`translate_x`, `scale.x`, …) rather than the filter-field one — two different conventions, each consistent with its immediate neighbours.
 
-## Flou statique en diagonale : `directional-blur`
+## Static diagonal blur: `directional-blur`
 
 ```json
 { "filter": [{ "fn": "directional-blur", "angle": 90, "radius": 40 }] }
 ```
 
-Pour un déplacement qui n'est ni horizontal ni vertical. `angle` est en degrés (`0` = along +x, `90` = along +y), `radius` la longueur du flou le long de cet axe. Rendu par rotation du contenu échantillonné autour du centre de la boîte, flou mono-axe, rotation inverse — pas une vraie convolution orientée, mais visuellement équivalent pour un flou raisonnable, et sans coût suffisant pour justifier un noyau dédié.
+For travel that is neither horizontal nor vertical. `angle` is in degrees (`0` = along +x, `90` = along +y), `radius` is the blur's length along that axis. Rendered by rotating the sampled content about the box centre, blurring on one axis, then rotating back — not a true oriented convolution, but visually equivalent for a reasonable blur, and not costly enough to justify a dedicated kernel.
 
-## Flou animé : `blur_x` / `blur_y`
+## Animated blur: `blur_x` / `blur_y`
 
 ```json
 { "property": "blur_x", "keyframes": [{ "time": 0, "value": 40 }, { "time": 0.3, "value": 0 }] }
 ```
 
-Deux nouvelles propriétés animables (`KNOWN_MOTION_PROPERTIES`), au même titre que `blur` (qui reste isotrope et inchangé). Elles se posent en filtre `Blur { radius-x, radius-y }` sur le nœud — se combinent avec un `radius`/`radius-x`/`radius-y` statique déclaré par ailleurs en s'ajoutant à la liste `filter`, pas en le remplaçant.
+Two animatable properties (`KNOWN_MOTION_PROPERTIES`), alongside `blur` (which stays isotropic and unchanged). They land as a `Blur { radius-x, radius-y }` filter on the node — they combine with a static `radius`/`radius-x`/`radius-y` declared elsewhere by being appended to the `filter` list, not by replacing it.
 
-## `motion_blur mode: "smear"` en tire parti automatiquement
+## `motion_blur mode: "smear"` uses this automatically
 
-Voir [rules/motion-blur-and-trail.md](motion-blur-and-trail.md) — le mode `smear` de `motion_blur` calcule lui-même un `radius-x`/`radius-y` à partir de la vitesse instantanée et pose ce même filtre `Blur`, sans que l'auteur du scénario ait à l'écrire à la main.
+See [rules/motion-blur-and-trail.md](motion-blur-and-trail.md) — `motion_blur`'s `smear` mode computes the component's instantaneous velocity and lays down a `{ "fn": "directional-blur", "angle", "radius" }` oriented along the actual displacement (`angle = atan2(dy, dx)`, `radius = hypot(dy, dx)`), with no need for the author to write it by hand. Diagonal travel therefore produces a streak at 45°, not the isotropic blob a `Blur { radius-x, radius-y }` pinned to the two screen axes would have given.
 
-## Ce qui n'est pas câblé : `blur_axis` par caractère
+## What is not wired: per-character `blur_axis`
 
-L'issue #360 proposait aussi un axe de flou **par unité** sur les presets `char_*` :
+Issue #360 also proposed a **per-unit** blur axis on the `char_*` presets:
 
 ```json
 { "name": "char_blur_in", "granularity": "word", "blur_axis": "motion", "stretch": 1.3 }
 ```
 
-Non implémenté : le rendu par-caractère (`char_*`) vit dans le composant `text` et son renderer, pas dans `animator.rs`/`box_builder.rs`. Ajouter `blur_axis`/`stretch` au schéma sans que le renderer les consomme produirait un champ accepté mais inerte — exactement ce que ce projet évite ailleurs (`text-autofit` sur un composant qui ne l'implémente pas). À traiter comme un chantier séparé, dans `text.rs`/`renderer/text.rs`.
+Not implemented: per-character rendering (`char_*`) lives in the `text` component and its renderer, not in `animator.rs`/`box_builder.rs`. Adding `blur_axis`/`stretch` to the schema without the renderer consuming them would produce a field that is accepted but inert — exactly what this project avoids elsewhere (`text-autofit` on a component that does not implement it). Treat it as a separate piece of work, in `text.rs`/`renderer/text.rs`.

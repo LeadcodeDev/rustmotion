@@ -113,6 +113,7 @@ static IDENTITY_CAMERA: Camera = Camera {
     rotate_x: 0.0,
     rotate_y: 0.0,
     perspective: 0.0,
+    motion_blur: None,
 };
 
 fn effective_camera(scene: &Scene) -> Option<&Camera> {
@@ -237,9 +238,129 @@ pub fn render_frame_v2_scaled(
     scale_factor: f32,
     prev_bg: Option<(&crate::schema::ResolvedBackground, f64)>,
 ) -> Result<Vec<u8>> {
+    if let Some(plan) = camera_motion_blur_plan(scene, frame_index, config.fps) {
+        return render_frame_v2_scaled_camera_blurred(
+            config,
+            scene,
+            frame_index,
+            scenario_time,
+            root_children,
+            scale_factor,
+            prev_bg,
+            plan,
+        );
+    }
+    let scene_time = SceneTime::for_frame(scene, frame_index, config.fps);
+    render_frame_v2_scaled_core(
+        config,
+        scene,
+        scene_time,
+        frame_index,
+        scenario_time,
+        root_children,
+        scale_factor,
+        prev_bg,
+    )
+}
+
+struct CameraMotionBlurPlan {
+    samples: u32,
+    shutter_seconds: f64,
+}
+
+fn camera_motion_blur_plan(
+    scene: &Scene,
+    frame_index: u32,
+    fps: u32,
+) -> Option<CameraMotionBlurPlan> {
+    let camera = effective_camera(scene)?;
+    let cfg = camera.motion_blur.as_ref()?;
+    let nominal = frame_index as f64 / fps.max(1) as f64;
+    let shutter_seconds = (cfg.shutter / fps.max(1) as f64).max(0.0);
+    if shutter_seconds <= 0.0 {
+        return None;
+    }
+    let pose_start = camera_pose_at(scene, camera, (nominal - shutter_seconds) as f32);
+    let pose_end = camera_pose_at(scene, camera, nominal as f32);
+    let moved = (pose_start.0 - pose_end.0).abs() > 0.01
+        || (pose_start.1 - pose_end.1).abs() > 0.01
+        || (pose_start.2 - pose_end.2).abs() > 0.0005
+        || (pose_start.3 - pose_end.3).abs() > 0.01;
+    if !moved {
+        return None;
+    }
+    Some(CameraMotionBlurPlan {
+        samples: cfg.samples.clamp(1, 16),
+        shutter_seconds,
+    })
+}
+
+fn camera_pose_at(scene: &Scene, camera: &Camera, time: f32) -> (f32, f32, f32, f32) {
+    let shake = scene_shake_offset(scene, time);
+    let x = interpolate_camera_property(camera, "x", time) + shake.x as f32;
+    let y = interpolate_camera_property(camera, "y", time) + shake.y as f32;
+    let zoom = interpolate_camera_property(camera, "zoom", time);
+    let rotation = interpolate_camera_property(camera, "rotation", time) + shake.rotation as f32;
+    (x, y, zoom, rotation)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_frame_v2_scaled_camera_blurred(
+    config: &VideoConfig,
+    scene: &Scene,
+    frame_index: u32,
+    scenario_time: f64,
+    root_children: &[ChildComponent],
+    scale_factor: f32,
+    prev_bg: Option<(&crate::schema::ResolvedBackground, f64)>,
+    plan: CameraMotionBlurPlan,
+) -> Result<Vec<u8>> {
+    let nominal = frame_index as f64 / config.fps.max(1) as f64;
+    let samples = plan.samples.max(1);
+    let mut accum: Option<Vec<u32>> = None;
+    for i in 0..samples {
+        let offset = (i as f64 + 0.5) * plan.shutter_seconds / samples as f64;
+        let sample_time = nominal - offset;
+        let scene_time = SceneTime::for_local_time(scene, sample_time);
+        let pixels = render_frame_v2_scaled_core(
+            config,
+            scene,
+            scene_time,
+            frame_index,
+            scenario_time,
+            root_children,
+            scale_factor,
+            prev_bg,
+        )?;
+        match accum.as_mut() {
+            Some(sum) => {
+                for (s, p) in sum.iter_mut().zip(pixels.iter()) {
+                    *s += *p as u32;
+                }
+            }
+            None => accum = Some(pixels.iter().map(|&p| p as u32).collect()),
+        }
+    }
+    let sum = accum.ok_or(RustmotionError::SurfaceCreation)?;
+    Ok(sum
+        .into_iter()
+        .map(|s| ((s + samples / 2) / samples) as u8)
+        .collect())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_frame_v2_scaled_core(
+    config: &VideoConfig,
+    scene: &Scene,
+    scene_time: SceneTime,
+    frame_index: u32,
+    scenario_time: f64,
+    root_children: &[ChildComponent],
+    scale_factor: f32,
+    prev_bg: Option<(&crate::schema::ResolvedBackground, f64)>,
+) -> Result<Vec<u8>> {
     let scaled_w = (config.width as f32 * scale_factor) as i32;
     let scaled_h = (config.height as f32 * scale_factor) as i32;
-    let scene_time = SceneTime::for_frame(scene, frame_index, config.fps);
     let time = scene_time.seconds();
 
     let info = ImageInfo::new(
@@ -613,7 +734,8 @@ fn render_with_new_pipeline_iter<'a, I>(
         }
     };
 
-    let layout = run_layout(&built.root, viewport, &conversion);
+    let mut layout = run_layout(&built.root, viewport, &conversion);
+    apply_ghost_layout_fixup(&built, &mut layout);
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
         light: scene_light(scene),
@@ -754,6 +876,50 @@ pub fn resolve_node_references(
     Ok(frame)
 }
 
+fn apply_ghost_layout_fixup(
+    built: &rustmotion_components::box_builder::BuiltScene<'_>,
+    layout: &mut rustmotion_core::engine::layout_pass::LayoutResult,
+) {
+    use rustmotion_core::engine::box_tree::NodeId;
+
+    if built.ghost_principal.is_empty() {
+        return;
+    }
+    let deltas: Vec<(NodeId, f32, f32)> = built
+        .ghost_principal
+        .iter()
+        .filter_map(|&(ghost_id, principal_id)| {
+            let ghost_box = layout.get(ghost_id)?;
+            let principal_box = layout.get(principal_id)?;
+            let dx = principal_box.x - ghost_box.x;
+            let dy = principal_box.y - ghost_box.y;
+            (dx != 0.0 || dy != 0.0).then_some((ghost_id, dx, dy))
+        })
+        .collect();
+
+    for (ghost_id, dx, dy) in deltas {
+        let Some(ghost_node) = built.root.find(ghost_id) else {
+            continue;
+        };
+        shift_subtree_layout(ghost_node, dx, dy, layout);
+    }
+}
+
+fn shift_subtree_layout(
+    node: &rustmotion_core::engine::box_tree::BoxNode,
+    dx: f32,
+    dy: f32,
+    layout: &mut rustmotion_core::engine::layout_pass::LayoutResult,
+) {
+    if let Some(box_layout) = layout.layouts.get_mut(&node.id) {
+        box_layout.x += dx;
+        box_layout.y += dy;
+    }
+    for child in &node.children {
+        shift_subtree_layout(child, dx, dy, layout);
+    }
+}
+
 struct ResolvingTextMetrics<'a> {
     components: &'a [Option<&'a rustmotion_components::ChildComponent>],
 }
@@ -886,11 +1052,12 @@ pub fn render_scene_hits(
         fps: config.fps,
     });
     let built = build_scene_from_refs(children.iter(), (vw, vh), root_css, anim);
-    let layout = run_layout(
+    let mut layout = run_layout(
         &built.root,
         (vw, vh),
         &ConversionContext::for_viewport(vw, vh),
     );
+    apply_ghost_layout_fixup(&built, &mut layout);
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
         light: scene_light(scene),
@@ -1468,11 +1635,7 @@ pub(super) fn apply_camera_transform(
     width: f32,
     height: f32,
 ) {
-    let shake = scene_shake_offset(scene, time);
-    let x = interpolate_camera_property(camera, "x", time) + shake.x as f32;
-    let y = interpolate_camera_property(camera, "y", time) + shake.y as f32;
-    let zoom = interpolate_camera_property(camera, "zoom", time);
-    let rotation = interpolate_camera_property(camera, "rotation", time) + shake.rotation as f32;
+    let (x, y, zoom, rotation) = camera_pose_at(scene, camera, time);
     let (cx, cy) = resolve_camera_origin(camera, time, width, height);
 
     canvas.save();
@@ -1650,6 +1813,220 @@ mod halo_transition_wiring_tests {
              50%-alpha copy still sitting at its original spot would mean the transition \
              cross-fades two static renders instead of interpolating one shape. measured \
              luma={luma_at_from_position}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod camera_motion_blur_tests {
+    use super::camera_motion_blur_plan;
+    use crate::encode::video::{build_frame_tasks, render_frame_task, FrameTask};
+
+    const W: usize = 400;
+    const H: usize = 200;
+
+    fn panning_camera_scenario(motion_blur_json: &str) -> crate::schema::ResolvedScenario {
+        let json = format!(
+            r##"{{
+              "version": "1.0",
+              "video": {{ "width": {W}, "height": {H}, "fps": 30, "background": "#000000" }},
+              "scenes": [{{
+                "duration": 1.0,
+                "camera": {{
+                  "keyframes": [{{ "property": "x", "easing": "linear", "values": [
+                    {{ "time": 0.0, "value": 0.0 }}, {{ "time": 0.45, "value": 0.0 }},
+                    {{ "time": 0.55, "value": 60.0 }}, {{ "time": 1.0, "value": 60.0 }}
+                  ] }}]{motion_blur_json}
+                }},
+                "children": [
+                  {{ "type": "shape", "shape": "rect", "fill": "#FFFFFF",
+                     "position": "absolute", "x": 200, "y": 0,
+                     "style": {{ "width": 400, "height": 200 }} }}
+                ]
+              }}]
+            }}"##
+        );
+        crate::loader::load_scenario_from_source(None, Some(&json)).expect("load")
+    }
+
+    fn frame_15(scenario: &crate::schema::ResolvedScenario) -> Vec<u8> {
+        let tasks = build_frame_tasks(scenario);
+        let task = tasks
+            .iter()
+            .find(|task| {
+                matches!(
+                    task,
+                    FrameTask::Normal {
+                        scene_idx: 0,
+                        frame_in_scene: 15,
+                        ..
+                    }
+                )
+            })
+            .expect("a frame task for scene 0 frame 15 must exist");
+        render_frame_task(&scenario.video, scenario, task).expect("render")
+    }
+
+    fn rgb_at(frame: &[u8], x: usize, y: usize) -> (u8, u8, u8) {
+        let i = (y * W + x) * 4;
+        (frame[i], frame[i + 1], frame[i + 2])
+    }
+
+    #[test]
+    fn a_fast_pan_with_motion_blur_softens_the_edge_a_crisp_render_would_keep_hard() {
+        let scenario =
+            panning_camera_scenario(r##", "motion_blur": { "samples": 8, "shutter": 1.0 }"##);
+        let frame = frame_15(&scenario);
+
+        let (r, g, b) = rgb_at(&frame, 180, 100);
+        assert!(
+            (60..=200).contains(&r) && (60..=200).contains(&g) && (60..=200).contains(&b),
+            "the camera pans 60px in the 0.1s straddling this frame, so the rectangle's left \
+             edge (nominally at screen x=170 at t=0.5) sweeps across x=180 for exactly half of \
+             the 8 sub-frame samples this shutter window covers — averaging them must leave an \
+             intermediate grey, not the hard black/white a single-sample render would give; \
+             got rgb=({r},{g},{b})"
+        );
+
+        let (wr, wg, wb) = rgb_at(&frame, 350, 100);
+        assert!(
+            wr > 240 && wg > 240 && wb > 240,
+            "well inside the rectangle for every sample in the window, the pixel must still \
+             read as solid white; got rgb=({wr},{wg},{wb})"
+        );
+
+        let (br, bg, bb) = rgb_at(&frame, 30, 100);
+        assert!(
+            br < 15 && bg < 15 && bb < 15,
+            "well outside the rectangle for every sample in the window, the pixel must still \
+             read as solid background; got rgb=({br},{bg},{bb})"
+        );
+    }
+
+    #[test]
+    fn no_motion_blur_config_keeps_the_same_pan_perfectly_crisp() {
+        let scenario = panning_camera_scenario("");
+        let frame = frame_15(&scenario);
+
+        let (r, g, b) = rgb_at(&frame, 180, 100);
+        assert!(
+            r > 240 && g > 240 && b > 240,
+            "without camera.motion_blur, x=180 at t=0.5 is strictly past the single-sample \
+             edge (screen x=170) and must read as solid white, not the blurred grey the other \
+             test expects at the same coordinate; got rgb=({r},{g},{b})"
+        );
+    }
+
+    #[test]
+    fn a_camera_that_is_not_moving_is_not_planned_for_sub_frame_sampling() {
+        let scenario = crate::loader::load_scenario_from_source(
+            None,
+            Some(&format!(
+                r##"{{
+                  "version": "1.0",
+                  "video": {{ "width": {W}, "height": {H}, "fps": 30, "background": "#000000" }},
+                  "scenes": [{{
+                    "duration": 1.0,
+                    "camera": {{ "zoom": 1.5,
+                      "motion_blur": {{ "samples": 8, "shutter": 1.0 }} }},
+                    "children": []
+                  }}]
+                }}"##
+            )),
+        )
+        .expect("load");
+        let scene = &scenario.views[0].scenes[0];
+
+        assert!(
+            camera_motion_blur_plan(scene, 15, 30).is_none(),
+            "a camera held at a fixed pose must not be scheduled for sub-frame sampling — \
+             there is nothing to average, only cost to pay"
+        );
+    }
+
+    #[test]
+    fn a_panning_camera_is_planned_for_sub_frame_sampling() {
+        let scenario =
+            panning_camera_scenario(r##", "motion_blur": { "samples": 8, "shutter": 1.0 }"##);
+        let scene = &scenario.views[0].scenes[0];
+
+        let plan = camera_motion_blur_plan(scene, 15, 30)
+            .expect("a moving camera with motion_blur configured must be planned");
+        assert_eq!(plan.samples, 8);
+        assert!((plan.shutter_seconds - 1.0 / 30.0).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod ghost_in_flow_placement_tests {
+    use crate::encode::video::{build_frame_tasks, render_frame_task, FrameTask};
+
+    const W: usize = 400;
+    const H: usize = 200;
+
+    fn row_scenario_with_motion_blur_on_second_child() -> crate::schema::ResolvedScenario {
+        let json = format!(
+            r##"{{
+              "version": "1.0",
+              "video": {{ "width": {W}, "height": {H}, "fps": 30, "background": "#000000" }},
+              "scenes": [{{
+                "duration": 1.0,
+                "children": [{{
+                  "type": "div",
+                  "style": {{ "display": "flex", "flex-direction": "row",
+                              "width": {W}, "height": {H} }},
+                  "children": [
+                    {{ "type": "shape", "shape": "rect", "fill": "#FF0000",
+                       "style": {{ "width": 100, "height": 100 }} }},
+                    {{ "type": "shape", "shape": "rect", "fill": "#0000FF",
+                       "style": {{ "width": 100, "height": 100,
+                         "animation": [
+                           {{ "name": "motion_blur", "samples": 8, "shutter": 1.0 }}
+                         ] }} }}
+                  ]
+                }}]
+              }}]
+            }}"##
+        );
+        crate::loader::load_scenario_from_source(None, Some(&json)).expect("load")
+    }
+
+    fn first_frame(scenario: &crate::schema::ResolvedScenario) -> Vec<u8> {
+        let tasks = build_frame_tasks(scenario);
+        let task = tasks
+            .iter()
+            .find(|task| {
+                matches!(
+                    task,
+                    FrameTask::Normal {
+                        scene_idx: 0,
+                        frame_in_scene: 0,
+                        ..
+                    }
+                )
+            })
+            .expect("a frame task for scene 0 frame 0 must exist");
+        render_frame_task(&scenario.video, scenario, task).expect("render")
+    }
+
+    #[test]
+    fn a_motion_blurred_flex_sibling_does_not_ghost_onto_the_previous_in_flow_item() {
+        let scenario = row_scenario_with_motion_blur_on_second_child();
+        let frame = first_frame(&scenario);
+
+        let i = (50 * W + 50) * 4;
+        let (r, g, b) = (frame[i] as i32, frame[i + 1] as i32, frame[i + 2] as i32);
+        assert!(
+            b < 20,
+            "the first flex item's own box (pure red, at x=50,y=50) must not carry a blue \
+             tint from its motion-blurred sibling's ghosts — an in-flow ghost with no inset \
+             lands wherever the container's default alignment puts an absolute child with no \
+             top/left, which for a row is the same spot as the first item; got rgb=({r},{g},{b})"
+        );
+        assert!(
+            r > 200,
+            "the first flex item must still read as solid red where no ghost should ever \
+             reach; got rgb=({r},{g},{b})"
         );
     }
 }

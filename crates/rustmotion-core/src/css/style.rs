@@ -1419,9 +1419,9 @@ pub enum FilterFn {
     Blur {
         #[serde(default)]
         radius: Option<Length>,
-        #[serde(default, rename = "radius-x")]
+        #[serde(default, rename = "radius-x", alias = "radius_x")]
         radius_x: Option<Length>,
-        #[serde(default, rename = "radius-y")]
+        #[serde(default, rename = "radius-y", alias = "radius_y")]
         radius_y: Option<Length>,
     },
     /// A single-axis blur held at `angle` degrees (0 = along +x, 90 = along
@@ -2136,6 +2136,33 @@ mod tests {
                 radius_y: None
             }
         ));
+    }
+
+    #[test]
+    fn blur_filter_accepts_snake_case_radius_x_and_radius_y_as_aliases() {
+        let json = r#"{ "filter": [{ "fn": "blur", "radius_x": 40, "radius_y": 12 }] }"#;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        let f = &s.filter.expect("filter set")[0];
+        match f {
+            FilterFn::Blur {
+                radius,
+                radius_x,
+                radius_y,
+            } => {
+                assert!(radius.is_none());
+                assert!(
+                    matches!(radius_x, Some(Length::Px(v)) if (*v - 40.0).abs() < 1e-6),
+                    "the snake_case spelling must be accepted exactly like radius-x, got {:?}",
+                    radius_x
+                );
+                assert!(
+                    matches!(radius_y, Some(Length::Px(v)) if (*v - 12.0).abs() < 1e-6),
+                    "the snake_case spelling must be accepted exactly like radius-y, got {:?}",
+                    radius_y
+                );
+            }
+            other => panic!("expected Blur, got {:?}", other),
+        }
     }
 
     #[test]

@@ -33,6 +33,7 @@ pub struct BuiltScene<'a> {
     pub components: Vec<Option<&'a ChildComponent>>,
     pub stagger_delays: Vec<f64>,
     pub time_params: Vec<(f64, f64)>,
+    pub ghost_principal: Vec<(NodeId, NodeId)>,
 }
 
 pub fn build_scene<'a>(children: &'a [ChildComponent], viewport: (f32, f32)) -> BuiltScene<'a> {
@@ -108,6 +109,7 @@ where
     let mut components: Vec<Option<&'a ChildComponent>> = vec![None];
     let mut stagger_delays: Vec<f64> = vec![0.0];
     let mut time_params: Vec<(f64, f64)> = vec![(1.0, 0.0)];
+    let mut ghost_principal: Vec<(NodeId, NodeId)> = Vec::new();
     let mut next_id: NodeId = 1;
 
     let mut child_boxes = Vec::new();
@@ -117,6 +119,7 @@ where
             &mut components,
             &mut stagger_delays,
             &mut time_params,
+            &mut ghost_principal,
             &mut next_id,
             anim,
             format!("/children/{i}"),
@@ -147,6 +150,7 @@ where
         components,
         stagger_delays,
         time_params,
+        ghost_principal,
     }
 }
 
@@ -264,6 +268,7 @@ fn ghost_css_for(
         carry_paint_pass_effects(&mut css, &ghost_effects);
         apply_directional_blur_props(&mut css, &props);
     }
+    apply_pointer_path_transform(&mut css, &child.component, ghost_time);
     let base_opacity = css.opacity.unwrap_or(1.0);
     css.opacity = Some((base_opacity * ghost_opacity_scale).clamp(0.0, 1.0));
     css
@@ -275,6 +280,7 @@ fn build_one_ghost<'a>(
     components: &mut Vec<Option<&'a ChildComponent>>,
     stagger_delays: &mut Vec<f64>,
     time_params: &mut Vec<(f64, f64)>,
+    ghost_principal: &mut Vec<(NodeId, NodeId)>,
     next_id: &mut NodeId,
     anim: Option<BuildAnimationCtx>,
     actx: BuildAnimationCtx,
@@ -312,6 +318,7 @@ fn build_one_ghost<'a>(
         components,
         stagger_delays,
         time_params,
+        ghost_principal,
         next_id,
         anim,
         path,
@@ -340,6 +347,7 @@ fn build_ghosts<'a>(
     components: &mut Vec<Option<&'a ChildComponent>>,
     stagger_delays: &mut Vec<f64>,
     time_params: &mut Vec<(f64, f64)>,
+    ghost_principal: &mut Vec<(NodeId, NodeId)>,
     next_id: &mut NodeId,
     anim: Option<BuildAnimationCtx>,
     actx: BuildAnimationCtx,
@@ -405,6 +413,7 @@ fn build_ghosts<'a>(
                     components,
                     stagger_delays,
                     time_params,
+                    ghost_principal,
                     next_id,
                     anim,
                     actx,
@@ -435,6 +444,7 @@ fn build_ghosts<'a>(
                     components,
                     stagger_delays,
                     time_params,
+                    ghost_principal,
                     next_id,
                     anim,
                     actx,
@@ -464,6 +474,7 @@ fn build_child<'a>(
     components: &mut Vec<Option<&'a ChildComponent>>,
     stagger_delays: &mut Vec<f64>,
     time_params: &mut Vec<(f64, f64)>,
+    ghost_principal: &mut Vec<(NodeId, NodeId)>,
     next_id: &mut NodeId,
     anim: Option<BuildAnimationCtx>,
     path: String,
@@ -499,6 +510,7 @@ fn build_child<'a>(
                 components,
                 stagger_delays,
                 time_params,
+                ghost_principal,
                 next_id,
                 anim,
                 actx,
@@ -520,6 +532,9 @@ fn build_child<'a>(
     components.push(Some(child));
     stagger_delays.push(anim_delay);
     time_params.push(time_remap);
+    for g in &ghosts {
+        ghost_principal.push((g.id, id));
+    }
 
     let mut css = component_css(&child.component);
 
@@ -571,6 +586,7 @@ fn build_child<'a>(
                 actx.fps,
             );
         }
+        apply_pointer_path_transform(&mut css, &child.component, actx.time);
         resolve_computed_style(
             &mut css,
             &path,
@@ -656,6 +672,7 @@ fn build_child<'a>(
         components,
         stagger_delays,
         time_params,
+        ghost_principal,
         next_id,
         anim,
         &path,
@@ -1075,6 +1092,25 @@ fn apply_glow_effect(css: &mut CssStyle, effects: &[rustmotion_core::schema::Ani
     css.filter.get_or_insert_with(Vec::new).push(shadow);
 }
 
+fn apply_pointer_path_transform(css: &mut CssStyle, component: &Component, time: f64) {
+    use rustmotion_core::css::style::TransformFn;
+    use rustmotion_core::css::units::LengthPercentage as CssLP;
+
+    let Component::Pointer(p) = component else {
+        return;
+    };
+    if p.path.is_empty() {
+        return;
+    }
+    let (dx, dy) = crate::cursor::waypoint_offset(&p.path, time, p.click_duration, p.path_easing);
+    css.transform
+        .get_or_insert_with(Vec::new)
+        .push(TransformFn::Translate {
+            x: CssLP::Px(dx),
+            y: CssLP::Px(dy),
+        });
+}
+
 fn apply_directional_blur_props(css: &mut CssStyle, props: &AnimatedProperties) {
     use rustmotion_core::css::style::FilterFn;
     use rustmotion_core::css::units::Length;
@@ -1125,17 +1161,18 @@ fn apply_motion_blur_smear(
     };
     let (x0, y0) = sample(t - shutter_window);
     let (x1, y1) = sample(t);
-    let radius_x = (x1 - x0).abs();
-    let radius_y = (y1 - y0).abs();
-    if radius_x < 0.5 && radius_y < 0.5 {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let magnitude = dx.hypot(dy);
+    if magnitude < 0.5 {
         return;
     }
+    let angle = dy.atan2(dx).to_degrees();
     css.filter
         .get_or_insert_with(Vec::new)
-        .push(FilterFn::Blur {
-            radius: None,
-            radius_x: Some(Length::Px(radius_x)),
-            radius_y: Some(Length::Px(radius_y)),
+        .push(FilterFn::DirectionalBlur {
+            angle,
+            radius: Length::Px(magnitude),
         });
 }
 
@@ -1177,6 +1214,7 @@ fn container_children<'a>(
     components: &mut Vec<Option<&'a ChildComponent>>,
     stagger_delays: &mut Vec<f64>,
     time_params: &mut Vec<(f64, f64)>,
+    ghost_principal: &mut Vec<(NodeId, NodeId)>,
     next_id: &mut NodeId,
     anim: Option<BuildAnimationCtx>,
     parent_path: &str,
@@ -1213,6 +1251,7 @@ fn container_children<'a>(
             components,
             stagger_delays,
             time_params,
+            ghost_principal,
             next_id,
             anim,
             format!("{parent_path}/children/{j}"),
@@ -3364,6 +3403,97 @@ mod tests {
     }
 
     #[test]
+    fn a_pointer_moved_by_path_actually_paints_ink_at_a_ghosts_own_position() {
+        let scene = vec![child_from_json(json!({
+            "type": "pointer",
+            "size": 220, "tone": "dark",
+            "path": [
+                { "time": 0.0, "x": 1900, "y": 1000 },
+                { "time": 0.6, "x": 900, "y": 500 }
+            ],
+            "path_easing": "linear",
+            "style": { "animation": [{ "name": "motion_blur", "samples": 12, "shutter": 3.0 }] }
+        }))];
+        let frame_time = 0.5;
+        let anim = BuildAnimationCtx {
+            time: frame_time,
+            scenario_time: frame_time,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let built = build_scene_at_time(
+            &scene,
+            (1920.0, 1080.0),
+            default_root_css((1920.0, 1080.0)),
+            anim,
+        );
+        let layout = run_layout(&built.root, (1920.0, 1080.0), &ConversionContext::default());
+        let mut surface = paint_scene_at(&built, &layout, 1920, 1080, frame_time);
+
+        let (path, click_duration, path_easing) = match &scene[0].component {
+            Component::Pointer(p) => (p.path.clone(), p.click_duration, p.path_easing),
+            _ => panic!("expected a pointer component"),
+        };
+        let (fx, fy) = (0.1946_f32, 0.4390_f32);
+        let size = 220.0_f32;
+        let probe_for = |offset: (f32, f32)| {
+            (
+                (offset.0 + fx * size).round() as i32,
+                (offset.1 + fy * size).round() as i32,
+            )
+        };
+
+        let live_offset =
+            crate::cursor::waypoint_offset(&path, frame_time, click_duration, path_easing);
+        let live_probe = probe_for(live_offset);
+        let live_alpha = read_pixel(&mut surface, live_probe.0, live_probe.1)[3];
+        assert!(
+            live_alpha > 200,
+            "sanity check: the live, un-ghosted pointer must paint its own glyph at the \
+             current path position; probed {:?}, alpha={live_alpha}",
+            live_probe
+        );
+
+        let ghost_id = built
+            .root
+            .children
+            .iter()
+            .filter(|n| matches!(n.kind, BoxKind::Ghost(_)))
+            .map(|n| n.id)
+            .min_by(|&a, &b| {
+                let ta = built.time_params[a as usize];
+                let tb = built.time_params[b as usize];
+                (frame_time * ta.0 + ta.1)
+                    .partial_cmp(&(frame_time * tb.0 + tb.1))
+                    .unwrap()
+            })
+            .expect("expected at least one ghost");
+        let (scale, shift) = built.time_params[ghost_id as usize];
+        let farthest_ghost_time = frame_time * scale + shift;
+        let ghost_offset =
+            crate::cursor::waypoint_offset(&path, farthest_ghost_time, click_duration, path_easing);
+        let ghost_probe = probe_for(ghost_offset);
+        let ghost_alpha = read_pixel(&mut surface, ghost_probe.0, ghost_probe.1)[3];
+        assert!(
+            ghost_alpha > 20,
+            "a pointer moved by `path` must be ghosted along its trajectory just like one \
+             moved by translate_x/y keyframes — the furthest motion_blur ghost (its own local \
+             time {farthest_ghost_time}, opacity 1/13 of the live pointer) must paint ink at \
+             its own point along the path ({ghost_offset:?}, live is {live_offset:?}), not \
+             stay pixel-identical (fully transparent there) to the same pointer without \
+             motion_blur; probed {:?}, alpha={ghost_alpha}",
+            ghost_probe
+        );
+
+        let empty_alpha = read_pixel(&mut surface, 100, 100)[3];
+        assert_eq!(
+            empty_alpha, 0,
+            "sanity check: a point far from every sampled instant of the path must stay \
+             untouched background"
+        );
+    }
+
+    #[test]
     fn animated_blur_x_becomes_a_directional_blur_filter() {
         use rustmotion_core::css::style::FilterFn;
         use rustmotion_core::css::units::Length;
@@ -3469,17 +3599,77 @@ mod tests {
             .expect("a smear filter was applied");
         let blur = filters
             .iter()
-            .find(|f| matches!(f, FilterFn::Blur { .. }))
-            .expect("a Blur filter");
+            .find(|f| matches!(f, FilterFn::DirectionalBlur { .. }))
+            .expect("a DirectionalBlur filter, not an axis-aligned Blur");
         match blur {
-            FilterFn::Blur { radius_x, .. } => {
+            FilterFn::DirectionalBlur { angle, radius } => {
                 assert!(
-                    matches!(radius_x, Some(Length::Px(v)) if (*v - 30.0).abs() < 3.0),
+                    angle.abs() < 1.0,
+                    "a pure horizontal move must orient the streak along 0 degrees, got {angle}"
+                );
+                assert!(
+                    matches!(radius, Length::Px(v) if (*v - 30.0).abs() < 3.0),
                     "900px/s over a 1/30s shutter window is a ~30px streak, got {:?}",
-                    radius_x
+                    radius
                 );
             }
-            other => panic!("expected Blur, got {:?}", other),
+            other => panic!("expected DirectionalBlur, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn a_diagonal_smear_orients_the_directional_blur_along_the_actual_velocity() {
+        use rustmotion_core::css::style::FilterFn;
+
+        let scene = vec![child_from_json(json!({
+            "type": "shape", "shape": "rect", "fill": "#FFFFFF",
+            "position": "absolute", "x": 0, "y": 0,
+            "style": {
+                "width": 100, "height": 60,
+                "animation": [
+                    { "name": "keyframes", "duration": 1.0, "keyframes": [
+                        { "property": "translate_x", "easing": "linear", "keyframes": [
+                            { "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 900.0 }
+                        ] },
+                        { "property": "translate_y", "easing": "linear", "keyframes": [
+                            { "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 900.0 }
+                        ] }
+                    ] },
+                    { "name": "motion_blur", "mode": "smear", "shutter": 1.0 }
+                ]
+            }
+        }))];
+        let anim = BuildAnimationCtx {
+            time: 0.5,
+            scenario_time: 0.5,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let built = build_scene_at_time(
+            &scene,
+            (1920.0, 1080.0),
+            default_root_css((1920.0, 1080.0)),
+            anim,
+        );
+
+        let filters = built.root.children[0]
+            .css
+            .filter
+            .clone()
+            .expect("a smear filter was applied");
+        let blur = filters
+            .iter()
+            .find(|f| matches!(f, FilterFn::DirectionalBlur { .. }))
+            .expect("a DirectionalBlur filter");
+        match blur {
+            FilterFn::DirectionalBlur { angle, .. } => {
+                assert!(
+                    (angle - 45.0).abs() < 1.0,
+                    "equal x and y velocity must orient the streak at 45 degrees, not the \
+                     0/90 axes a box blur would be limited to, got {angle}"
+                );
+            }
+            other => panic!("expected DirectionalBlur, got {:?}", other),
         }
     }
 
@@ -3568,6 +3758,75 @@ mod tests {
         };
         paint_tree(canvas, &built.root, layout, &frame, &dispatcher);
         surface
+    }
+
+    #[test]
+    fn a_diagonal_smear_paints_a_streak_only_along_the_velocity_not_across_it() {
+        const VIEWPORT: f32 = 900.0;
+        let mut principal = child_from_json(json!({
+            "type": "shape", "shape": "rect", "fill": "#FFFFFF",
+            "style": {
+                "width": 80, "height": 80,
+                "animation": [
+                    { "name": "keyframes", "duration": 1.0, "keyframes": [
+                        { "property": "translate_x", "easing": "linear", "keyframes": [
+                            { "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 900.0 }
+                        ] },
+                        { "property": "translate_y", "easing": "linear", "keyframes": [
+                            { "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 900.0 }
+                        ] }
+                    ] },
+                    { "name": "motion_blur", "mode": "smear", "shutter": 1.0 }
+                ]
+            }
+        }));
+        principal.position = Some(crate::PositionMode::Absolute { x: 60.0, y: 60.0 });
+        let scene = vec![principal];
+        let anim = BuildAnimationCtx {
+            time: 0.5,
+            scenario_time: 0.5,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let built = build_scene_at_time(
+            &scene,
+            (VIEWPORT, VIEWPORT),
+            default_root_css((VIEWPORT, VIEWPORT)),
+            anim,
+        );
+        let layout = run_layout(
+            &built.root,
+            (VIEWPORT, VIEWPORT),
+            &ConversionContext::default(),
+        );
+        let mut surface = paint_scene_at(&built, &layout, VIEWPORT as i32, VIEWPORT as i32, 0.5);
+
+        let center = (550.0_f32, 550.0_f32);
+        let half_diagonal = 40.0 * std::f32::consts::SQRT_2;
+        let reach = half_diagonal + 15.0;
+        let along = (
+            (center.0 + reach * std::f32::consts::FRAC_1_SQRT_2).round() as i32,
+            (center.1 + reach * std::f32::consts::FRAC_1_SQRT_2).round() as i32,
+        );
+        let perpendicular = (
+            (center.0 + reach * std::f32::consts::FRAC_1_SQRT_2).round() as i32,
+            (center.1 - reach * std::f32::consts::FRAC_1_SQRT_2).round() as i32,
+        );
+
+        let along_alpha = read_pixel(&mut surface, along.0, along.1)[3];
+        let perpendicular_alpha = read_pixel(&mut surface, perpendicular.0, perpendicular.1)[3];
+
+        assert!(
+            perpendicular_alpha < 10,
+            "a point the same distance from the box's corner but 90 degrees off the 45-degree \
+             motion must stay unlit — a directional blur has zero spread across its own axis; \
+             got alpha {perpendicular_alpha}"
+        );
+        assert!(
+            along_alpha > 25,
+            "the same distance along the actual 45-degree motion must carry the blur's tail, \
+             got alpha {along_alpha}"
+        );
     }
 
     #[test]

@@ -901,6 +901,38 @@ pub struct Camera {
     /// Keyframe animations for camera properties.
     #[serde(default)]
     pub keyframes: Vec<CameraKeyframe>,
+    /// Blurs the frame across a shutter window when the camera itself is
+    /// moving (pan, zoom, rotation or `shake`) — opt-in, since it renders
+    /// `samples` sub-frame exposures and averages them instead of one.
+    /// Absent (the default) renders exactly as before. Skipped on any frame
+    /// where the resolved camera pose does not change across the window, so
+    /// a static shot never pays the extra cost.
+    #[serde(default)]
+    pub motion_blur: Option<CameraMotionBlurConfig>,
+}
+
+/// Shutter-window camera motion blur, opt-in via `camera.motion_blur`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CameraMotionBlurConfig {
+    /// Sub-frame exposures averaged together. Each one is a full render, so
+    /// this is a direct cost multiplier — default `8`, clamped to `1..=16`.
+    #[serde(default = "default_camera_motion_blur_samples")]
+    pub samples: u32,
+    /// Exposure length as a multiple of one frame duration (`shutter / fps`
+    /// seconds), ending at the frame's own time. `0.5` (the default) covers
+    /// half a frame, the 180-degree shutter of a film camera; `1.0` leaves it
+    /// open for the whole frame and smears twice as far.
+    #[serde(default = "default_camera_motion_blur_shutter")]
+    pub shutter: f64,
+}
+
+fn default_camera_motion_blur_samples() -> u32 {
+    8
+}
+
+fn default_camera_motion_blur_shutter() -> f64 {
+    0.5
 }
 
 /// Where the light comes from, and how strong it is.

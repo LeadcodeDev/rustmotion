@@ -245,6 +245,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/dot-map-orthographic.md](rules/dot-map-orthographic.md) - `dot_map` as a globe: orthographic projection, far-hemisphere culling, great-circle arcs and limb shading
 - [rules/camera-3d.md](rules/camera-3d.md) - Tilt a whole shot with `camera.rotate_x`/`rotate_y`/`perspective`: one shared vanishing point, and rotation scaled by each plane's `style.depth`
 - [rules/depth-of-field.md](rules/depth-of-field.md) - Defocus by plane: `camera.focus`/`aperture` on the `style.depth` scale, rack focus by keyframe, and why nothing moves without distinct depths
+- [rules/camera-motion-blur.md](rules/camera-motion-blur.md) - Blur the shot itself on a fast pan/zoom: `camera.motion_blur: { samples, shutter }`, sub-frame accumulation, free on a still camera
 - [rules/char-animation-rich-and-gradient-text.md](rules/char-animation-rich-and-gradient-text.md) - `char_*` presets on `rich_text` and `gradient_text`: stagger across span boundaries, per-span `ink_from`, and why `ink_from` is inert on a gradient
 - [rules/text-morph.md](rules/text-morph.md) - `text.morph`: matched letters travel, unmatched ones fade or scramble — how it differs from `text.states` + `swap`
 - [rules/text-component-parity.md](rules/text-component-parity.md) - Where `text`, `rich_text` and `gradient_text` disagreed: colour alpha, literal whitespace and baseline, the CSS angle convention and explicit `stops`
@@ -1638,6 +1639,7 @@ Scenes support a virtual camera with animatable pan, zoom, and rotation.
 | `zoom`      | f32    | `1.0`   | Zoom factor (2.0 = 2x zoom in)       |
 | `rotation`  | f32    | `0.0`   | Rotation in degrees                   |
 | `keyframes` | array  | `[]`    | `[{ "property", "values": [{ "time", "value" }], "easing" }]` |
+| `motion_blur` | object | `null` | Sub-frame shutter accumulation when the camera itself moves — see [Virtual Camera motion blur](rules/camera-motion-blur.md) |
 
 **Animatable properties:** `x`, `y`, `zoom`, `rotation`
 

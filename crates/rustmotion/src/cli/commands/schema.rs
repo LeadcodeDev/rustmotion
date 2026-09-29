@@ -62,6 +62,8 @@ const SERDE_FIELD_ALIASES: &[(&str, &str, &[&str])] = &[
     ("BorderRadius", "bottom-right", &["bottom_right"]),
     ("BorderRadius", "bottom-left", &["bottom_left"]),
     ("GradientTextStop", "position", &["offset"]),
+    ("FilterFn", "radius-x", &["radius_x"]),
+    ("FilterFn", "radius-y", &["radius_y"]),
 ];
 
 fn widen_properties_with(value: &mut serde_json::Value, canonical: &str, aliases: &[&str]) {
@@ -270,7 +272,21 @@ mod serde_alias_exposure_tests {
         }
     }
 
-    fn aliases_declared_in_the_sources() -> Vec<(String, String)> {
+    struct DeclaredAlias {
+        file: String,
+        alias: String,
+        renamed_sibling: Option<String>,
+    }
+
+    fn quoted_value_after(attribute: &str, key: &str) -> Option<String> {
+        let needle = format!("{key} = \"");
+        let at = attribute.find(&needle)?;
+        let rest = &attribute[at + needle.len()..];
+        let close = rest.find('"')?;
+        Some(rest[..close].to_string())
+    }
+
+    fn aliases_declared_in_the_sources() -> Vec<DeclaredAlias> {
         let mut files = Vec::new();
         rust_sources(&workspace_root().join("crates"), &mut files);
         let mut found = Vec::new();
@@ -283,16 +299,43 @@ mod serde_alias_exposure_tests {
                 if !trimmed.starts_with("#[serde(") || !trimmed.contains("alias = \"") {
                     continue;
                 }
+                let renamed_sibling = quoted_value_after(trimmed, "rename");
                 let mut rest = trimmed;
                 while let Some(at) = rest.find("alias = \"") {
                     rest = &rest[at + "alias = \"".len()..];
                     let Some(close) = rest.find('"') else { break };
-                    found.push((file.display().to_string(), rest[..close].to_string()));
+                    found.push(DeclaredAlias {
+                        file: file.display().to_string(),
+                        alias: rest[..close].to_string(),
+                        renamed_sibling: renamed_sibling.clone(),
+                    });
                     rest = &rest[close..];
                 }
             }
         }
         found
+    }
+
+    fn some_properties_object_carries_both(
+        value: &serde_json::Value,
+        canonical: &str,
+        alias: &str,
+    ) -> bool {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::Object(properties)) = map.get("properties") {
+                    if properties.contains_key(canonical) && properties.contains_key(alias) {
+                        return true;
+                    }
+                }
+                map.values()
+                    .any(|child| some_properties_object_carries_both(child, canonical, alias))
+            }
+            serde_json::Value::Array(items) => items
+                .iter()
+                .any(|item| some_properties_object_carries_both(item, canonical, alias)),
+            _ => false,
+        }
     }
 
     #[test]
@@ -304,11 +347,23 @@ mod serde_alias_exposure_tests {
             declared.len()
         );
 
-        let schema = serde_json::to_string(&build_schema()).expect("schema serializes");
+        let schema = build_schema();
+        let flat = serde_json::to_string(&schema).expect("schema serializes");
         let missing: Vec<String> = declared
             .iter()
-            .filter(|(_, alias)| !schema.contains(&format!("\"{alias}\"")))
-            .map(|(file, alias)| format!("{alias} (declared in {file})"))
+            .filter(|d| match &d.renamed_sibling {
+                Some(canonical) => {
+                    !some_properties_object_carries_both(&schema, canonical, &d.alias)
+                }
+                None => !flat.contains(&format!("\"{}\"", d.alias)),
+            })
+            .map(|d| match &d.renamed_sibling {
+                Some(canonical) => format!(
+                    "{} (declared in {}, expected beside {canonical})",
+                    d.alias, d.file
+                ),
+                None => format!("{} (declared in {})", d.alias, d.file),
+            })
             .collect();
 
         assert!(
