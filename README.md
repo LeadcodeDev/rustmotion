@@ -2181,4 +2181,4 @@ The `rustmotion` crate is where both binaries live — a crate with only a `[lib
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
