@@ -294,6 +294,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 ### Design quality (nouvelles règles)
 
 - [rules/animation-completion-budget.md](rules/animation-completion-budget.md) - **CRITICAL:** Animation budget formula — every animation must complete within its scene duration
+- [rules/animations-compose.md](rules/animations-compose.md) - Two effects on one property combine — a product for `opacity`/`scale`, a sum for `translate`/`rotation`, last-written for the rest — and why a resting value of `-1` is what tells `not animated` apart from `animated to zero`
 - [rules/typography-readability.md](rules/typography-readability.md) - **CRITICAL:** Minimum font sizes per device/role, line-height rules, contrast hard rules
 - [rules/scene-pacing.md](rules/scene-pacing.md) - Scene duration formula (reading time + animation budget), density limits, dense/breathing alternation
 - [rules/color-palettes.md](rules/color-palettes.md) - 4 ready-to-use palettes (Dark Tech / Corporate / Playful / Minimal), consistency rules

@@ -660,11 +660,11 @@ impl Default for AnimatedProperties {
             scale_x: 1.0,
             scale_y: 1.0,
             rotation: 0.0,
-            blur: 0.0,
-            blur_x: 0.0,
+            blur: -1.0,
+            blur_x: -1.0,
             letter_spacing: f32::NAN,
             draw_start: -1.0,
-            blur_y: 0.0,
+            blur_y: -1.0,
             visible_chars: -1,
             visible_chars_progress: -1.0,
             color: None,
@@ -709,10 +709,10 @@ impl AnimatedProperties {
         if other.rotation.abs() > 0.01 {
             self.rotation += other.rotation;
         }
-        if other.blur > 0.001 {
+        if other.blur >= 0.0 {
             self.blur = other.blur;
         }
-        if other.blur_x > 0.001 {
+        if other.blur_x >= 0.0 {
             self.blur_x = other.blur_x;
         }
 
@@ -722,7 +722,7 @@ impl AnimatedProperties {
         if other.draw_start >= 0.0 {
             self.draw_start = other.draw_start;
         }
-        if other.blur_y > 0.001 {
+        if other.blur_y >= 0.0 {
             self.blur_y = other.blur_y;
         }
         if other.visible_chars >= 0 {
@@ -3353,5 +3353,105 @@ mod burst_progress_tests {
         assert_eq!(tail, head, "a phased stroke has not started at p=0.3");
         let (tail, head) = burst_stroke_span(1.0, 0.4);
         assert_eq!(tail, head, "a phased stroke still ends with the window");
+    }
+}
+
+#[cfg(test)]
+mod merge_contract_tests {
+    use super::*;
+
+    fn bucket() -> AnimatedProperties {
+        AnimatedProperties::default()
+    }
+
+    #[test]
+    fn opacity_and_scale_multiply_across_buckets() {
+        let mut props = bucket();
+        props.opacity = 0.5;
+        props.scale_x = 2.0;
+        props.scale_y = 2.0;
+
+        let mut other = bucket();
+        other.opacity = 0.8;
+        other.scale_x = 1.5;
+        other.scale_y = 1.5;
+        props.merge(&other);
+
+        assert!((props.opacity - 0.4).abs() < 1e-6, "got {}", props.opacity);
+        assert!((props.scale_x - 3.0).abs() < 1e-6, "got {}", props.scale_x);
+        assert!((props.scale_y - 3.0).abs() < 1e-6, "got {}", props.scale_y);
+    }
+
+    #[test]
+    fn translation_and_rotation_add_across_buckets() {
+        let mut props = bucket();
+        props.translate_x = 10.0;
+        props.translate_y = -4.0;
+        props.rotation = 30.0;
+
+        let mut other = bucket();
+        other.translate_x = 5.0;
+        other.translate_y = 4.0;
+        other.rotation = 15.0;
+        props.merge(&other);
+
+        assert!((props.translate_x - 15.0).abs() < 1e-6);
+        assert!((props.translate_y - 0.0).abs() < 1e-6);
+        assert!((props.rotation - 45.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_neutral_value_in_a_composing_property_is_a_no_op_by_arithmetic() {
+        let mut props = bucket();
+        props.opacity = 0.5;
+        props.scale_x = 2.0;
+        props.translate_x = 10.0;
+
+        let mut other = bucket();
+        other.opacity = 1.0;
+        other.scale_x = 1.0;
+        other.translate_x = 0.0;
+        props.merge(&other);
+
+        assert!(
+            (props.opacity - 0.5).abs() < 1e-6
+                && (props.scale_x - 2.0).abs() < 1e-6
+                && (props.translate_x - 10.0).abs() < 1e-6,
+            "1 is the identity for a product and 0 for a sum, so skipping a neutral value and \
+             applying it are the same answer — the guard here is an optimisation, not a rule"
+        );
+    }
+
+    #[test]
+    fn a_later_bucket_can_take_blur_back_to_zero() {
+        let mut props = bucket();
+        props.blur = 5.0;
+
+        let mut other = bucket();
+        other.blur = 0.0;
+        props.merge(&other);
+
+        assert_eq!(
+            props.blur, 0.0,
+            "blur is last-wins, not a product, so zero is a value and not an absence — guarding \
+             on `> 0.001` left an element blurred for the rest of the scene"
+        );
+    }
+
+    #[test]
+    fn a_bucket_that_never_touched_blur_leaves_an_earlier_one_alone() {
+        let mut props = bucket();
+        props.blur = 5.0;
+        props.blur_x = 3.0;
+        props.blur_y = 2.0;
+
+        props.merge(&bucket());
+
+        assert_eq!(
+            (props.blur, props.blur_x, props.blur_y),
+            (5.0, 3.0, 2.0),
+            "the resting value is negative precisely so that `not animated` and `animated to \
+             zero` are two different things"
+        );
     }
 }
