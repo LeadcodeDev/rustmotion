@@ -672,8 +672,10 @@ fn newly_cascaded_components_inherit_unset_typography_from_the_parent() {
     for (name, json) in cases {
         let component: Component =
             serde_json::from_value(json.clone()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let mut resolved = component.as_styled().style_config().clone();
+        rustmotion_core::css::cascade::inherit_from(&parent, &mut resolved);
         let cascaded = component
-            .with_cascaded_style(&parent)
+            .with_cascaded_style(&resolved)
             .unwrap_or_else(|| panic!("{name} must be classified as typographic"));
         let style = cascaded.as_styled().style_config();
         assert_eq!(
@@ -703,8 +705,11 @@ fn table_own_color_wins_over_cascaded_card_color() {
         "style": { "color": "#00ff00" }
     }))
     .expect("deserialize table");
+    let mut resolved = component.as_styled().style_config().clone();
+    rustmotion_core::css::cascade::inherit_from(&parent, &mut resolved);
+
     let cascaded = component
-        .with_cascaded_style(&parent)
+        .with_cascaded_style(&resolved)
         .expect("table is typographic");
     assert_eq!(
         cascaded.as_styled().style_config().color,
