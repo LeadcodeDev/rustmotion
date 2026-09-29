@@ -646,6 +646,7 @@ pub struct AnimatedProperties {
     pub rotate_y: f32,
     pub perspective: f32,
     pub draw_progress: f32,
+    pub draw_offset: f32,
     pub motion_progress: f32,
     pub clip_path_progress: f32,
     pub char_animation: Option<ResolvedCharAnimation>,
@@ -682,6 +683,7 @@ impl Default for AnimatedProperties {
             rotate_y: 0.0,
             perspective: -1.0,
             draw_progress: -1.0,
+            draw_offset: 0.0,
             motion_progress: -1.0,
             clip_path_progress: -1.0,
             char_animation: None,
@@ -775,6 +777,9 @@ impl AnimatedProperties {
         }
         if other.draw_progress >= 0.0 {
             self.draw_progress = other.draw_progress;
+        }
+        if other.draw_offset.abs() > 0.0005 {
+            self.draw_offset += other.draw_offset;
         }
         if other.motion_progress >= 0.0 {
             self.motion_progress = other.motion_progress;
@@ -1049,6 +1054,7 @@ fn apply_property(props: &mut AnimatedProperties, property: &str, value: f64) {
         "rotate_y" => props.rotate_y = value as f32,
         "perspective" => props.perspective = value as f32,
         "draw_progress" => props.draw_progress = value as f32,
+        "draw_offset" => props.draw_offset = value as f32,
         "motion_progress" => props.motion_progress = value as f32,
         "clip_path_progress" => props.clip_path_progress = value as f32,
         _ => {}
@@ -1280,6 +1286,7 @@ fn get_property_value(props: &AnimatedProperties, property: &str) -> f64 {
         "rotate_y" => props.rotate_y as f64,
         "perspective" => props.perspective as f64,
         "draw_progress" => props.draw_progress as f64,
+        "draw_offset" => props.draw_offset as f64,
         "motion_progress" => props.motion_progress as f64,
         "clip_path_progress" => props.clip_path_progress as f64,
         _ => 0.0,
@@ -3397,6 +3404,22 @@ mod merge_contract_tests {
         assert!((props.translate_x - 15.0).abs() < 1e-6);
         assert!((props.translate_y - 0.0).abs() < 1e-6);
         assert!((props.rotation - 45.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn draw_offset_adds_across_buckets_like_translation() {
+        let mut props = bucket();
+        props.draw_offset = 0.2;
+
+        let mut other = bucket();
+        other.draw_offset = 0.1;
+        props.merge(&other);
+
+        assert!(
+            (props.draw_offset - 0.3).abs() < 1e-6,
+            "got {}",
+            props.draw_offset
+        );
     }
 
     #[test]

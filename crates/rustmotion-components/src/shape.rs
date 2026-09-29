@@ -343,7 +343,13 @@ impl Painter for Shape {
             paint.set_stroke_cap(skia_line_cap(stroke.line_cap));
             paint.set_stroke_join(skia_line_join(stroke.line_join));
 
-            let draw_start = resolve_draw_start(&self.draw_start, &clock);
+            let expr_draw_start = resolve_draw_start(&self.draw_start, &clock);
+            let draw_start = if props.draw_start >= 0.0 {
+                props.draw_start.clamp(0.0, 1.0)
+            } else {
+                expr_draw_start
+            };
+            let draw_offset = props.draw_offset;
             let mut trimmed_path = None;
 
             if let Some(intervals) = stroke.dashed.as_ref().filter(|v| v.len() >= 2) {
@@ -351,27 +357,25 @@ impl Painter for Shape {
                 if let Some(dash) = skia_safe::PathEffect::dash(intervals, phase) {
                     paint.set_path_effect(dash);
                 }
-            } else if draw_start > 0.0 {
-                let end = if props.draw_progress >= 0.0 {
-                    props.draw_progress.clamp(0.0, 1.0)
-                } else {
-                    1.0
-                };
-                let base = morphed_path
-                    .clone()
-                    .or_else(|| build_shape_path(shape, 0.0, 0.0, w, h, corner_radius));
-                if let Some(path) = base {
-                    trimmed_path = Some(trim_path_between(&path, draw_start, end));
-                }
-            } else if props.draw_progress >= 0.0 && props.draw_progress < 1.0 {
-                if let Some(path) = build_shape_path(shape, 0.0, 0.0, w, h, corner_radius) {
-                    let mut measure = skia_safe::PathMeasure::new(&path, false, None);
-                    let path_len = measure.length();
-                    if path_len > 0.0 {
-                        let draw_len = path_len * props.draw_progress.clamp(0.0, 1.0);
-                        let intervals = [draw_len, path_len - draw_len + 0.01];
-                        if let Some(dash) = skia_safe::PathEffect::dash(&intervals, 0.0) {
-                            paint.set_path_effect(dash);
+            } else {
+                let drawing = props.draw_progress >= 0.0 && props.draw_progress < 1.0;
+                let trimming = draw_start > 0.0 || draw_offset.abs() > 0.0005;
+                if drawing || trimming {
+                    let end = if props.draw_progress >= 0.0 {
+                        props.draw_progress.clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
+                    let trim_start = (draw_start + draw_offset).clamp(0.0, 1.0);
+                    let trim_end = (end + draw_offset).clamp(0.0, 1.0);
+                    if trim_end <= trim_start {
+                        trimmed_path = Some(skia_safe::PathBuilder::new().detach());
+                    } else {
+                        let base = morphed_path
+                            .clone()
+                            .or_else(|| build_shape_path(shape, 0.0, 0.0, w, h, corner_radius));
+                        if let Some(path) = base {
+                            trimmed_path = Some(trim_path_between(&path, trim_start, trim_end));
                         }
                     }
                 }
@@ -622,6 +626,64 @@ mod tests {
         assert!(
             is_red(pixel(&out, 180, H / 2)),
             "the tail (up to the implicit end of 1.0) must remain lit"
+        );
+    }
+
+    #[test]
+    fn a_keyframe_driven_draw_start_is_honored_even_with_no_static_draw_start_field() {
+        let shape = straight_line("#FF0000");
+        let props = AnimatedProperties {
+            draw_start: 0.5,
+            draw_progress: 1.0,
+            ..AnimatedProperties::default()
+        };
+        let out = render(&shape, &props);
+
+        for x in [5, 40, 90] {
+            assert!(
+                !is_red(pixel(&out, x, H / 2)),
+                "x={x} is before a keyframe-driven draw_start=0.5 and must have no ink — \
+                 keyframes on draw_start must not be a no-op on shape"
+            );
+        }
+        for x in [110, 150, 195] {
+            assert!(
+                is_red(pixel(&out, x, H / 2)),
+                "x={x} is after the keyframe-driven draw_start=0.5 and must be lit"
+            );
+        }
+    }
+
+    #[test]
+    fn draw_offset_marches_the_drawn_window_along_the_path() {
+        let shape = straight_line("#FF0000");
+        let no_offset = render(
+            &shape,
+            &AnimatedProperties {
+                draw_progress: 0.3,
+                ..AnimatedProperties::default()
+            },
+        );
+        let offset = render(
+            &shape,
+            &AnimatedProperties {
+                draw_progress: 0.3,
+                draw_offset: 0.5,
+                ..AnimatedProperties::default()
+            },
+        );
+
+        assert!(
+            is_red(pixel(&no_offset, 20, H / 2)),
+            "with no offset the window starts at the path's own beginning"
+        );
+        assert!(
+            !is_red(pixel(&offset, 20, H / 2)),
+            "draw_offset=0.5 must march the window forward, leaving the path's start empty"
+        );
+        assert!(
+            is_red(pixel(&offset, 140, H / 2)),
+            "and paint further along the path instead"
         );
     }
 
