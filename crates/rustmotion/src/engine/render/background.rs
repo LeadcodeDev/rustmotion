@@ -435,8 +435,8 @@ fn draw_bg_pixel_grid(
     let cols = (width / spacing).ceil() as i32 + 1;
     let rows = (height / spacing).ceil() as i32 + 1;
 
-    for row in 0..rows {
-        for col in 0..cols {
+    for row in -1..rows {
+        for col in -1..cols {
             let x = col as f32 * spacing;
             let y = row as f32 * spacing;
 
@@ -766,7 +766,22 @@ fn period_floor(period: f32, floor: f32) -> f32 {
     }
 }
 
+fn scrolls_under_translation(preset: &BackgroundPreset) -> bool {
+    match preset {
+        BackgroundPreset::GridDots(_)
+        | BackgroundPreset::GridLines(_)
+        | BackgroundPreset::PixelGrid(_)
+        | BackgroundPreset::Heropattern(_) => true,
+        BackgroundPreset::GradientShift(_)
+        | BackgroundPreset::ConcentricCircles(_)
+        | BackgroundPreset::Halo(_) => false,
+    }
+}
+
 pub(super) fn compute_scroll_offset(bg: &AnimatedBackground, time: f32) -> (f32, f32) {
+    if !scrolls_under_translation(&bg.preset) {
+        return (0.0, 0.0);
+    }
     let (raw_x, raw_y) = raw_scroll_offset(bg, time);
     let (spacing_x, spacing_y) = tile_spacing(&bg.preset);
     (raw_x % spacing_x, raw_y % spacing_y)
@@ -1055,6 +1070,167 @@ mod halo_zone_transition_interpolation_tests {
             }
             other => panic!("expected Halo, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod non_periodic_presets_do_not_scroll_tests {
+    use super::*;
+    use crate::encode::video::{build_frame_tasks, render_frame_task, FrameTask};
+    use crate::loader::load_scenario_from_source;
+
+    const W: usize = 240;
+    const H: usize = 160;
+
+    const GRADIENT_SHIFT: &str =
+        r##""preset": "gradient_shift", "gradient_shift": { "colors": ["#2B1E5C", "#1E3A8A"] }"##;
+    const CONCENTRIC: &str = r##""preset": "concentric_circles", "concentric_circles": { "color": "#3DA5FF", "spacing": 40 }"##;
+    const HALO: &str = r##""preset": "halo", "halo": { "zones": [
+        { "color": "#7C6BFF", "x": 0.5, "y": 0.5, "radius": 0.9, "opacity": 1.0 }] }"##;
+    const GRID_DOTS: &str =
+        r##""preset": "grid_dots", "grid_dots": { "color": "#ffffff", "spacing": 40 }"##;
+    const GRID_LINES: &str =
+        r##""preset": "grid_lines", "grid_lines": { "color": "#ffffff", "cell": 40 }"##;
+    const PIXEL_GRID: &str = r##""preset": "pixel_grid", "pixel_grid": {
+        "colors": ["#ffffff"], "spacing": 24, "size": 10, "density": 1.0 }"##;
+    const PIXEL_GRID_OPAQUE: &str = r##""preset": "pixel_grid", "pixel_grid": {
+        "colors": ["#ffffff"], "spacing": 24, "size": 24, "density": 1.0 }"##;
+    const HEROPATTERN: &str =
+        r##""preset": "heropattern", "heropattern": { "pattern": "aztec", "color": "#ffffff" }"##;
+
+    fn scenario_with(preset: &str, scene_background: &str, direction: Option<&str>) -> String {
+        let direction = direction
+            .map(|d| format!(r#", "direction": "{d}""#))
+            .unwrap_or_default();
+        format!(
+            r##"{{
+              "version": "1.0",
+              "video": {{ "width": {W}, "height": {H}, "fps": 30, "background": "{scene_background}" }},
+              "scenes": [{{
+                "duration": 2.0,
+                "animated-background": {{ {preset}, "speed": 120{direction} }},
+                "children": []
+              }}]
+            }}"##
+        )
+    }
+
+    fn background_of(preset: &str) -> AnimatedBackground {
+        let json = scenario_with(preset, "#000000", Some("right"));
+        let scenario = load_scenario_from_source(None, Some(&json)).expect("load");
+        scenario.views[0].scenes[0]
+            .animated_background
+            .first()
+            .cloned()
+            .expect("background")
+    }
+
+    #[test]
+    fn a_preset_that_is_not_periodic_under_translation_is_never_translated() {
+        for (preset, label) in [
+            (
+                GRADIENT_SHIFT,
+                "gradient_shift draws over the frame rect with no margin",
+            ),
+            (
+                CONCENTRIC,
+                "concentric_circles already offsets itself, and translating a radial \
+                          pattern moves its centre",
+            ),
+            (HALO, "halo animates its own zones"),
+        ] {
+            let bg = background_of(preset);
+            for t in [0.0f32, 0.3, 1.1, 1.9] {
+                assert_eq!(
+                    compute_scroll_offset(&bg, t),
+                    (0.0, 0.0),
+                    "t={t}: {label}, so the outer scroll must be switched off for it entirely"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_preset_with_no_motion_of_its_own_still_scrolls() {
+        for (preset, label) in [
+            (GRID_DOTS, "grid_dots"),
+            (GRID_LINES, "grid_lines"),
+            (PIXEL_GRID, "pixel_grid"),
+            (HEROPATTERN, "heropattern"),
+        ] {
+            let bg = background_of(preset);
+            let (dx, _) = compute_scroll_offset(&bg, 0.25);
+            assert!(
+                dx.abs() > 1.0,
+                "{label} has no motion of its own and tiles with a full period of margin, so \
+                 the outer scroll is the only thing that can move it (dx={dx})"
+            );
+        }
+    }
+
+    fn frames_of(preset: &str, direction: Option<&str>) -> Vec<Vec<u8>> {
+        let json = scenario_with(preset, "#FF00FF", direction);
+        let scenario = load_scenario_from_source(None, Some(&json)).expect("load");
+        let tasks = build_frame_tasks(&scenario);
+        tasks
+            .iter()
+            .filter(|t| matches!(t, FrameTask::Normal { .. }))
+            .step_by(5)
+            .map(|task| render_frame_task(&scenario.video, &scenario, task).expect("render"))
+            .collect()
+    }
+
+    #[test]
+    fn direction_is_inert_on_a_preset_that_cannot_be_translated() {
+        for (preset, label) in [
+            (GRADIENT_SHIFT, "gradient_shift"),
+            (CONCENTRIC, "concentric_circles"),
+            (HALO, "halo"),
+        ] {
+            assert_eq!(
+                frames_of(preset, Some("right")),
+                frames_of(preset, None),
+                "{label} renders its own motion from speed; declaring a direction must now be \
+                 pixel-inert rather than dragging it off the frame"
+            );
+        }
+    }
+
+    #[test]
+    fn direction_still_moves_a_preset_that_has_no_motion_of_its_own() {
+        for (preset, label) in [
+            (GRID_DOTS, "grid_dots"),
+            (GRID_LINES, "grid_lines"),
+            (PIXEL_GRID, "pixel_grid"),
+            (HEROPATTERN, "heropattern"),
+        ] {
+            assert_ne!(
+                frames_of(preset, Some("right")),
+                frames_of(preset, None),
+                "{label} depends on the outer scroll for all of its motion — switching it off \
+                 with the others would leave it frozen"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scrolled_tile_never_uncovers_the_band_it_is_dragged_away_from() {
+        let leaked: usize = frames_of(PIXEL_GRID_OPAQUE, Some("right"))
+            .iter()
+            .map(|frame| {
+                (0..H)
+                    .flat_map(|y| (0..60).map(move |x| (y * W + x) * 4))
+                    .filter(|&i| frame[i] > 240 && frame[i + 1] < 15 && frame[i + 2] > 240)
+                    .count()
+            })
+            .sum();
+        assert_eq!(
+            leaked, 0,
+            "pixel_grid scrolls right, so it must also be drawn one period beyond the left \
+             edge — {leaked} magenta pixels of the scene's own background came through. \
+             heropattern and concentric_circles are not checked this way: both leave \
+             transparent gaps by design, so the scene colour showing through is not a defect"
+        );
     }
 }
 
