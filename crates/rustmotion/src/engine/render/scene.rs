@@ -470,6 +470,13 @@ fn render_frame_v2_scaled_core(
         camera: plane_cam,
     };
 
+    let clip_guard = super::CanvasGuard::new(canvas);
+    canvas.clip_rect(
+        Rect::from_wh(config.width as f32, config.height as f32),
+        ClipOp::Intersect,
+        true,
+    );
+
     let camera_guard = match effective_camera(scene) {
         Some(camera) if plane_cam.is_none() => {
             let g = super::CanvasGuard::new(canvas);
@@ -486,13 +493,6 @@ fn render_frame_v2_scaled_core(
         _ => None,
     };
 
-    let clip_guard = super::CanvasGuard::new(canvas);
-    canvas.clip_rect(
-        Rect::from_wh(config.width as f32, config.height as f32),
-        ClipOp::Intersect,
-        true,
-    );
-
     render_with_new_pipeline(
         canvas,
         root_children,
@@ -503,8 +503,8 @@ fn render_frame_v2_scaled_core(
         scene,
     );
 
-    drop(clip_guard);
     drop(camera_guard);
+    drop(clip_guard);
 
     let row_bytes = scaled_w as usize * 4;
     let mut pixels = vec![0u8; row_bytes * scaled_h as usize];
@@ -1502,6 +1502,13 @@ pub fn render_scene_fg_scaled(
         camera: plane_cam,
     };
 
+    canvas.save();
+    canvas.clip_rect(
+        Rect::from_wh(config.width as f32, config.height as f32),
+        ClipOp::Intersect,
+        true,
+    );
+
     let has_camera = effective_camera(scene).is_some() && plane_cam.is_none();
     if let (Some(camera), None) = (effective_camera(scene), plane_cam) {
         apply_camera_transform(
@@ -1514,12 +1521,6 @@ pub fn render_scene_fg_scaled(
         );
     }
 
-    canvas.save();
-    canvas.clip_rect(
-        Rect::from_wh(config.width as f32, config.height as f32),
-        ClipOp::Intersect,
-        true,
-    );
     render_with_new_pipeline(
         canvas,
         &children,
@@ -1529,11 +1530,11 @@ pub fn render_scene_fg_scaled(
         &ctx,
         scene,
     );
-    canvas.restore();
 
     if has_camera {
         canvas.restore();
     }
+    canvas.restore();
 
     let row_bytes = scaled_w as usize * 4;
     let mut pixels = vec![0u8; row_bytes * scaled_h as usize];
@@ -1551,55 +1552,7 @@ pub fn render_scene_fg_scaled(
 }
 
 pub(super) fn interpolate_camera_property(camera: &Camera, property: &str, time: f32) -> f32 {
-    use crate::engine::animator::ease;
-
-    let track = camera.keyframes.iter().find(|k| k.property == property);
-    let track = match track {
-        Some(t) if !t.values.is_empty() => t,
-        _ => {
-            return match property {
-                "x" => camera.x,
-                "y" => camera.y,
-                "zoom" => camera.zoom,
-                "rotation" => camera.rotation,
-                "focus" => camera.focus,
-                "aperture" => camera.aperture,
-                "rotate_x" => camera.rotate_x,
-                "rotate_y" => camera.rotate_y,
-                "perspective" => camera.perspective,
-                "origin.x" => camera.origin.as_ref().map(|o| o.x).unwrap_or(0.0),
-                "origin.y" => camera.origin.as_ref().map(|o| o.y).unwrap_or(0.0),
-                _ => 0.0,
-            };
-        }
-    };
-
-    let points = &track.values;
-    let t = time as f64;
-
-    if t <= points[0].time {
-        return points[0].value;
-    }
-
-    if t >= points[points.len() - 1].time {
-        return points[points.len() - 1].value;
-    }
-
-    for i in 0..points.len() - 1 {
-        let p0 = &points[i];
-        let p1 = &points[i + 1];
-        if t >= p0.time && t <= p1.time {
-            let segment_t = if (p1.time - p0.time).abs() < 1e-9 {
-                1.0
-            } else {
-                (t - p0.time) / (p1.time - p0.time)
-            };
-            let eased = ease(segment_t, &track.easing) as f32;
-            return p0.value + (p1.value - p0.value) * eased;
-        }
-    }
-
-    points[points.len() - 1].value
+    camera.resolve_property(property, time as f64)
 }
 
 pub(super) fn resolve_camera_origin(
@@ -2027,6 +1980,193 @@ mod ghost_in_flow_placement_tests {
             r > 200,
             "the first flex item must still read as solid red where no ghost should ever \
              reach; got rgb=({r},{g},{b})"
+        );
+    }
+}
+
+#[cfg(test)]
+mod camera_wide_world_tests {
+    use crate::encode::video::{build_frame_tasks, render_frame_task, FrameTask};
+
+    const W: usize = 1920;
+    const H: usize = 1080;
+
+    fn far_element_scenario() -> crate::schema::ResolvedScenario {
+        let json = format!(
+            r##"{{
+              "version": "1.0",
+              "video": {{ "width": {W}, "height": {H}, "fps": 30, "background": "#101018" }},
+              "scenes": [{{
+                "duration": 2,
+                "camera": {{
+                  "keyframes": [{{ "property": "x", "easing": "linear", "values": [
+                    {{ "time": 0, "value": 0 }}, {{ "time": 2, "value": 2100 }}
+                  ] }}]
+                }},
+                "children": [
+                  {{ "type": "div", "position": "absolute", "x": 3000, "y": 440,
+                     "style": {{ "width": 200, "height": 200, "background": "#FF3366" }} }}
+                ]
+              }}]
+            }}"##
+        );
+        crate::loader::load_scenario_from_source(None, Some(&json)).expect("load")
+    }
+
+    fn frame_at(scenario: &crate::schema::ResolvedScenario, frame_in_scene: u32) -> Vec<u8> {
+        let tasks = build_frame_tasks(scenario);
+        let task = tasks
+            .iter()
+            .find(|task| {
+                matches!(
+                    task,
+                    FrameTask::Normal {
+                        scene_idx: 0,
+                        frame_in_scene: f,
+                        ..
+                    } if *f == frame_in_scene
+                )
+            })
+            .unwrap_or_else(|| {
+                panic!("a frame task for scene 0 frame {frame_in_scene} must exist")
+            });
+        render_frame_task(&scenario.video, scenario, task).expect("render")
+    }
+
+    fn rgb_at(frame: &[u8], x: usize, y: usize) -> (u8, u8, u8) {
+        let i = (y * W + x) * 4;
+        (frame[i], frame[i + 1], frame[i + 2])
+    }
+
+    #[test]
+    fn a_camera_pan_across_a_world_wider_than_the_frame_brings_a_distant_element_into_view() {
+        let scenario = far_element_scenario();
+
+        let at_start = frame_at(&scenario, 0);
+        let (r0, g0, b0) = rgb_at(&at_start, 1000, 540);
+        assert!(
+            r0 < 60 && g0 < 60 && b0 < 60,
+            "before the pan the element (local x=3000) is nowhere near a camera at x=0 on a \
+             1920-wide frame — the probe point must read as plain background, got \
+             rgb=({r0},{g0},{b0})"
+        );
+
+        let at_end = frame_at(&scenario, 59);
+        let (r1, g1, b1) = rgb_at(&at_end, 1000, 540);
+        assert!(
+            r1 > 200 && g1 < 100 && b1 > 60 && b1 < 160,
+            "once the camera has panned to x≈2100, the element (local x=3000) lands on \
+             screen at x≈900..1100 — the probe point at (1000,540) must read the element's \
+             own #FF3366, not background; got rgb=({r1},{g1},{b1})"
+        );
+    }
+}
+
+#[cfg(test)]
+mod handheld_shake_composes_with_camera_tests {
+    use crate::encode::video::{build_frame_tasks, render_frame_task, FrameTask};
+
+    const W: usize = 1920;
+    const H: usize = 1080;
+
+    fn scenario_with(camera_json: &str) -> crate::schema::ResolvedScenario {
+        let json = format!(
+            r##"{{
+              "version": "1.0",
+              "video": {{ "width": {W}, "height": {H}, "fps": 30, "background": "#101018" }},
+              "scenes": [{{
+                "duration": 1.0{camera_json},
+                "shake": {{
+                  "impacts": [{{ "at": 0.5, "amplitude": 40.0 }}],
+                  "decay": 5.0,
+                  "frequency": 8.0
+                }},
+                "children": [
+                  {{ "type": "div", "position": "absolute", "x": 860, "y": 440,
+                     "style": {{ "width": 200, "height": 200, "background": "#33CCFF" }} }}
+                ]
+              }}]
+            }}"##
+        );
+        crate::loader::load_scenario_from_source(None, Some(&json)).expect("load")
+    }
+
+    fn frame_at(scenario: &crate::schema::ResolvedScenario, frame_in_scene: u32) -> Vec<u8> {
+        let tasks = build_frame_tasks(scenario);
+        let task = tasks
+            .iter()
+            .find(|task| {
+                matches!(
+                    task,
+                    FrameTask::Normal {
+                        scene_idx: 0,
+                        frame_in_scene: f,
+                        ..
+                    } if *f == frame_in_scene
+                )
+            })
+            .unwrap_or_else(|| {
+                panic!("a frame task for scene 0 frame {frame_in_scene} must exist")
+            });
+        render_frame_task(&scenario.video, scenario, task).expect("render")
+    }
+
+    fn rgb_at(frame: &[u8], x: usize, y: usize) -> (u8, u8, u8) {
+        let i = (y * W + x) * 4;
+        (frame[i], frame[i + 1], frame[i + 2])
+    }
+
+    fn is_background(rgb: (u8, u8, u8)) -> bool {
+        rgb.0 < 40 && rgb.1 < 40 && rgb.2 < 50
+    }
+
+    #[test]
+    fn scene_shake_alone_moves_content_with_no_camera_block_declared() {
+        let scenario = scenario_with("");
+
+        let before_impact = frame_at(&scenario, 0);
+        let probe_before = rgb_at(&before_impact, 1040, 540);
+        assert!(
+            !is_background(probe_before),
+            "at t=0 (well before the impact at t=0.5) the element must sit at its own \
+             undisturbed position, covering the probe point; got rgb={probe_before:?}"
+        );
+
+        let at_impact = frame_at(&scenario, 15);
+        let probe_at_impact = rgb_at(&at_impact, 1040, 540);
+        assert!(
+            is_background(probe_at_impact),
+            "`scene.shake` alone, with no `camera` block at all, must still move the \
+             content — at the impact's own peak (t=0.5) the element has shifted left by its \
+             40px amplitude and must have uncovered this probe point; got \
+             rgb={probe_at_impact:?}"
+        );
+    }
+
+    #[test]
+    fn scene_shake_adds_to_an_existing_camera_pan_instead_of_being_ignored() {
+        let scenario = scenario_with(
+            r##", "camera": { "keyframes": [{ "property": "x", "easing": "linear", "values": [
+                { "time": 0, "value": 0 }, { "time": 1, "value": 300 }
+            ] }] }"##,
+        );
+
+        let just_before_impact = frame_at(&scenario, 14);
+        let probe_before = rgb_at(&just_before_impact, 900, 540);
+        assert!(
+            !is_background(probe_before),
+            "one frame before the impact, only the pan has moved the element — the probe \
+             point at the pan-only edge must still be covered; got rgb={probe_before:?}"
+        );
+
+        let at_impact = frame_at(&scenario, 15);
+        let probe_at_impact = rgb_at(&at_impact, 900, 540);
+        assert!(
+            is_background(probe_at_impact),
+            "one frame later, the shake's own impact lands on top of the ongoing pan — the \
+             sudden extra 40px must uncover a point that the pan alone was still covering, \
+             proving shake adds to the camera pan rather than being overridden by it; got \
+             rgb={probe_at_impact:?}"
         );
     }
 }

@@ -1638,7 +1638,7 @@ Scenes support a virtual camera with animatable pan, zoom, and rotation.
 | `y`         | f32    | `0.0`   | Camera center Y offset (pixels)       |
 | `zoom`      | f32    | `1.0`   | Zoom factor (2.0 = 2x zoom in)       |
 | `rotation`  | f32    | `0.0`   | Rotation in degrees                   |
-| `keyframes` | array  | `[]`    | `[{ "property", "values": [{ "time", "value" }], "easing" }]` |
+| `keyframes` | array  | `[]`    | `[{ "property", "values": [{ "time", "value", "easing"? }], "easing" }]` — a point's own `easing` governs the segment starting at it, see [camera-3d.md](rules/camera-3d.md) |
 | `motion_blur` | object | `null` | Sub-frame shutter accumulation when the camera itself moves — see [Virtual Camera motion blur](rules/camera-motion-blur.md) |
 
 **Animatable properties:** `x`, `y`, `zoom`, `rotation`

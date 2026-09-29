@@ -66,6 +66,30 @@ rustmotion validate scenario.json --lenient             # warnings only
 
 Position/size clamping (`viewport_overflow`) is never auto-applied — fix those by hand too.
 
+## A camera makes "outside the viewport" a question about time
+
+An element placed outside `0..width` / `0..height` is not automatically an overflow when the scene has a `camera`. The validator resolves the camera's own `keyframes` — not just its static `x`/`y`/`zoom` — and samples them across the scene, stopping at `scene.freeze_at`. The element is reported only if **no** sampled instant of that motion brings it fully into frame.
+
+```json
+{
+  "version": "1.0",
+  "video": { "width": 1920, "height": 1080, "fps": 30, "background": "#101018" },
+  "scenes": [{
+    "duration": 2,
+    "camera": { "keyframes": [{ "property": "x", "easing": "linear",
+      "values": [{ "time": 0, "value": 0 }, { "time": 2, "value": 2100 }] }] },
+    "children": [{
+      "type": "div", "position": "absolute", "x": 3000, "y": 440,
+      "style": { "width": 200, "height": 200, "background": "#FF3366" }
+    }]
+  }]
+}
+```
+
+This passes: the element is never inside `0..1920` on its own, but at `t = 2` the camera has panned to `x = 2100` and the element is centred. A camera that only ever reaches `x = 500`, with the element at `x = 9000`, is still reported — a camera on the scene is not a blanket exemption.
+
+Two limits worth knowing. The check asks whether the element is in frame at *some* instant, not at every instant: an element that leaves the frame mid-pan is not reported by the default pass, and `--strict-anim` is what samples per frame. And the camera fold accounts for `x`, `y` and `zoom` only — `rotation` and an animated `origin` are not folded in, so an element brought into view purely by a camera rotation is still reported.
+
 ## When to use what
 
 | Symptom | Fix |

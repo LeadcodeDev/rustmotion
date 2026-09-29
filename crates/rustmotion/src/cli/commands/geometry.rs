@@ -100,6 +100,9 @@ pub fn validate_geometry(scenario: &ResolvedScenario) -> Vec<GeometryViolation> 
                 .map(|(_, _, w, h)| (w, h));
 
             let path_root = format!("views[{}].scenes[{}]", vi, si);
+            let sample_until = scene
+                .freeze_at
+                .map_or(scene.duration, |f| f.clamp(0.0, scene.duration));
             walk(
                 &children,
                 &built.root.children,
@@ -111,6 +114,7 @@ pub fn validate_geometry(scenario: &ResolvedScenario) -> Vec<GeometryViolation> 
                 Some(&raw_indices),
                 false,
                 camera,
+                sample_until,
                 root_bound,
                 &mut violations,
             );
@@ -150,6 +154,7 @@ fn walk(
     path_indices: Option<&[usize]>,
     parent_clips: bool,
     camera: Option<&Camera>,
+    sample_until: f64,
     container_bound: Option<(f32, f32)>,
     out: &mut Vec<GeometryViolation>,
 ) {
@@ -170,11 +175,12 @@ fn walk(
 
         if !is_exempted(&child.component) {
             if !parent_clips && !bleeds(child) {
-                let mut vbbox = apply_static_node_transform(&raw_bbox, &box_node.css, viewport_f);
-                if let Some(cam) = camera {
-                    vbbox = fold_static_camera(&vbbox, cam, viewport_f);
+                let vbbox = apply_static_node_transform(&raw_bbox, &box_node.css, viewport_f);
+                let (vbbox, in_view) =
+                    camera_fold_over_scene(&vbbox, camera, viewport_f, sample_until);
+                if !in_view {
+                    check_viewport(&child.component, &child_path, &vbbox, viewport, vi, si, out);
                 }
-                check_viewport(&child.component, &child_path, &vbbox, viewport, vi, si, out);
             }
             if !parent_clips && !container_clips(&child.component) {
                 check_unwrappable_text(
@@ -214,6 +220,7 @@ fn walk(
                 None,
                 parent_clips || container_clips(&child.component),
                 camera,
+                sample_until,
                 Some((cw, ch)),
                 out,
             );
@@ -506,21 +513,51 @@ fn apply_transform_chain(
     (x, y)
 }
 
-fn fold_static_camera(bbox: &BBox, camera: &Camera, viewport: (f32, f32)) -> BBox {
-    let zoom = camera.zoom;
+fn fold_camera_at(bbox: &BBox, camera: &Camera, viewport: (f32, f32), time: f64) -> BBox {
+    let zoom = camera.resolve_property("zoom", time);
+    let cam_x = camera.resolve_property("x", time);
+    let cam_y = camera.resolve_property("y", time);
     let (cx, cy) = camera
         .origin
         .as_ref()
         .map(|o| (o.x, o.y))
         .unwrap_or((viewport.0 / 2.0, viewport.1 / 2.0));
-    let new_x = zoom * bbox.x + (1.0 - zoom) * cx - zoom * camera.x;
-    let new_y = zoom * bbox.y + (1.0 - zoom) * cy - zoom * camera.y;
+    let new_x = zoom * bbox.x + (1.0 - zoom) * cx - zoom * cam_x;
+    let new_y = zoom * bbox.y + (1.0 - zoom) * cy - zoom * cam_y;
     BBox {
         x: new_x,
         y: new_y,
         w: bbox.w * zoom,
         h: bbox.h * zoom,
     }
+}
+
+fn bbox_overflows(bbox: &BBox, viewport: (f32, f32)) -> bool {
+    let eps = 0.5;
+    bbox.x < -eps
+        || bbox.y < -eps
+        || bbox.x + bbox.w > viewport.0 + eps
+        || bbox.y + bbox.h > viewport.1 + eps
+}
+
+fn camera_fold_over_scene(
+    bbox: &BBox,
+    camera: Option<&Camera>,
+    viewport: (f32, f32),
+    sample_until: f64,
+) -> (BBox, bool) {
+    let Some(camera) = camera else {
+        return (*bbox, !bbox_overflows(bbox, viewport));
+    };
+    let mut closest_miss = fold_camera_at(bbox, camera, viewport, 0.0);
+    for time in anim_sample_times(sample_until) {
+        let folded = fold_camera_at(bbox, camera, viewport, time);
+        if !bbox_overflows(&folded, viewport) {
+            return (folded, true);
+        }
+        closest_miss = folded;
+    }
+    (closest_miss, false)
 }
 
 fn check_viewport(
@@ -1085,7 +1122,7 @@ fn walk_anim(
                 transformed = scale_bbox_from_own_center(&transformed, 1.0 + overshoot);
             }
             if let Some(cam) = camera {
-                transformed = fold_static_camera(&transformed, cam, viewport_f);
+                transformed = fold_camera_at(&transformed, cam, viewport_f, time);
             }
             let vw = viewport.0 as f32;
             let vh = viewport.1 as f32;
@@ -2075,6 +2112,68 @@ mod tests {
         assert!(
             violations.iter().all(|v| v.component != "shape"),
             "camera must not be folded in per-plane depth mode: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn a_camera_pan_that_reaches_an_out_of_frame_element_is_not_reported() {
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 2.0,
+                "camera": {
+                    "keyframes": [{ "property": "x", "easing": "linear", "values": [
+                        { "time": 0, "value": 0 }, { "time": 2, "value": 2100 }
+                    ] }]
+                },
+                "children": [{
+                    "type": "div",
+                    "position": "absolute",
+                    "x": 3000, "y": 440,
+                    "style": { "width": 200, "height": 200, "background": "#FF3366" }
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations.iter().all(|v| v.component != "div"),
+            "the camera reaches x=2100 by t=2, which puts a local x=3000 element on screen \
+             at x≈900..1100 — a viewport-overflow report at any sampled camera time is wrong \
+             here since the element is in frame at the pan's own endpoint: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn a_camera_pan_that_never_reaches_an_out_of_frame_element_still_reports_it() {
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 2.0,
+                "camera": {
+                    "keyframes": [{ "property": "x", "easing": "linear", "values": [
+                        { "time": 0, "value": 0 }, { "time": 2, "value": 500 }
+                    ] }]
+                },
+                "children": [{
+                    "type": "div",
+                    "position": "absolute",
+                    "x": 9000, "y": 440,
+                    "style": { "width": 200, "height": 200, "background": "#FF3366" }
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.component == "div" && v.kind == ViolationKind::ViewportOverflow),
+            "the camera only ever reaches x=500, which never brings a local x=9000 element \
+             into a 1920-wide frame at any sampled instant — this must still be reported, not \
+             silently waved through just because a camera exists on the scene: {:?}",
             violations
         );
     }
