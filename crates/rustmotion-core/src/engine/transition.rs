@@ -848,7 +848,7 @@ fn iris_transition(
     blend_fade(&filled, frame_b, t)
 }
 
-fn mask_shape_to_local_path(shape: &MaskShape) -> Option<skia_safe::Path> {
+pub fn mask_shape_to_local_path(shape: &MaskShape) -> Option<skia_safe::Path> {
     match shape {
         MaskShape::Polygon { points } => {
             if points.len() < 3 {
