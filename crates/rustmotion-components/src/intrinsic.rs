@@ -796,7 +796,7 @@ pub fn apply_text_anim_preset(
     }
     if let Some(from_deg) = cfg.rotate_from {
         if !matches!(preset, CharAnimPreset::RotateIn) {
-            let angle = from_deg as f32 * (1.0 - t.clamp(0.0, 1.0));
+            let angle = from_deg * (1.0 - t.clamp(0.0, 1.0));
             let (px, py) = match cfg.rotate_origin {
                 RotateOrigin::Center => (center_x, center_y),
                 RotateOrigin::Edge => (cursor_x, center_y),
@@ -1053,14 +1053,13 @@ fn paint_reflowing_word_line(
     let effective_width: f32 = toks
         .iter()
         .map(|tok| {
-            let width = if tok.is_space {
+            if tok.is_space {
                 tok.full_width
             } else {
                 let idx = base_idx + word_counter;
                 word_counter += 1;
                 reflowed_word_width(tok, idx, char_anim, time)
-            };
-            width
+            }
         })
         .sum();
 
