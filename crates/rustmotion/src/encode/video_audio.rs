@@ -29,21 +29,13 @@ pub fn timeline_offsets(scenario: &ResolvedScenario) -> TimelineOffsets {
 
         match view.view_type {
             ViewType::Slide => {
-                let mut scene_offsets: Vec<f64> = Vec::with_capacity(view.scenes.len());
-                let mut scene_cursor = cursor;
+                let spans = crate::encode::video::slide_scene_spans(view, scenario.video.fps);
+                let scene_offsets: Vec<f64> = spans
+                    .iter()
+                    .map(|span| cursor + span.start as f64 / fps)
+                    .collect();
 
-                for (i, scene) in view.scenes.iter().enumerate() {
-                    if i > 0 {
-                        let incoming = scene.transition.as_ref().map(|t| t.duration).unwrap_or(0.0);
-                        scene_cursor -= incoming;
-                    }
-                    scene_offsets.push(scene_cursor);
-
-                    let scene_frames = (scene.duration * fps).round() / fps;
-                    scene_cursor += scene_frames;
-                }
-
-                cursor = scene_cursor;
+                cursor += spans.last().map(|s| s.end as f64 / fps).unwrap_or(0.0);
                 view_ends.push(cursor);
                 result.push(scene_offsets);
             }

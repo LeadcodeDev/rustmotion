@@ -4,16 +4,12 @@ use std::path::{Path, PathBuf};
 
 use super::validate::{fixable_source, refuse_fix};
 
-fn transition_frames_into_next(next_scene: &Value, scene_frames: u32, fps: u32) -> u32 {
-    let Some(duration) = next_scene
+fn incoming_transition_seconds(scene: &Value) -> f64 {
+    scene
         .get("transition")
         .and_then(|t| t.get("duration"))
         .and_then(Value::as_f64)
-    else {
-        return 0;
-    };
-    let raw = (duration * fps as f64).round().max(0.0) as u32;
-    raw.min(scene_frames)
+        .unwrap_or(0.0)
 }
 
 fn scenario_fps(root: &Value) -> u32 {
@@ -26,38 +22,31 @@ fn scenario_fps(root: &Value) -> u32 {
 }
 
 fn migrate_scenes_array(scenes: &mut [Value], fps: u32, label: &str) -> Result<()> {
-    let scene_frames: Vec<u32> = scenes
+    let durations: Vec<f64> = scenes
         .iter()
         .map(|s| {
-            s.get("duration")
-                .and_then(Value::as_f64)
-                .map(|d| (d * fps as f64).round().max(0.0) as u32)
-                .ok_or_else(|| {
-                    RustmotionError::Generic(format!(
-                        "migrate: a scene in '{label}' has no numeric `duration` — refusing to \
-                         guess a compensated value for it"
-                    ))
-                })
+            s.get("duration").and_then(Value::as_f64).ok_or_else(|| {
+                RustmotionError::Generic(format!(
+                    "migrate: a scene in '{label}' has no numeric `duration` — refusing to \
+                     guess a compensated value for it"
+                ))
+            })
         })
         .collect::<Result<_>>()?;
+    let incoming: Vec<f64> = scenes.iter().map(incoming_transition_seconds).collect();
+
+    let spans = rustmotion::encode::video::quantised_spans(&durations, &incoming, fps);
 
     let n = scenes.len();
-    let mut new_duration_frames = scene_frames.clone();
+    let at_frames: Vec<u32> = spans.iter().map(|s| s.start).collect();
+    let mut new_duration_frames: Vec<u32> = spans.iter().map(|s| s.frames()).collect();
     let mut has_outgoing_transition = vec![false; n];
-    for i in 0..n {
-        if i + 1 >= n {
-            continue;
-        }
-        let into_next = transition_frames_into_next(&scenes[i + 1], scene_frames[i], fps);
-        if into_next > 0 {
-            new_duration_frames[i] = scene_frames[i] - into_next;
+    for i in 0..n.saturating_sub(1) {
+        let cut = spans[i + 1].start;
+        if cut < spans[i].end {
+            new_duration_frames[i] = cut - spans[i].start;
             has_outgoing_transition[i] = true;
         }
-    }
-
-    let mut at_frames = vec![0u32; n];
-    for i in 1..n {
-        at_frames[i] = at_frames[i - 1] + new_duration_frames[i - 1];
     }
 
     for (i, scene) in scenes.iter_mut().enumerate() {
@@ -262,10 +251,21 @@ mod tests {
         let scenario = rustmotion::loader::load_scenario_from_source(None, Some(&snapped))
             .expect("snapped scenario loads");
         let frames = rustmotion::encode::build_frame_tasks(&scenario).len();
-        let duration = frames as f64 / 30.0;
-        assert!(
-            (duration - 15.0).abs() < 1e-6,
-            "expected snap:\"beat\" on the migrated file to render exactly 15.0s, got {duration}s"
+
+        let migrated_frames = 405;
+        let beat_grid_pushes_the_last_cut_to = 379;
+        let last_scene_frames = 72;
+        assert_eq!(
+            frames,
+            beat_grid_pushes_the_last_cut_to + last_scene_frames,
+            "with bpm 11 the six cuts snap onto three beats (0s, 5.4545s, 10.9091s); three \
+             of them land inside the previous scene and are pushed forward, leaving the last \
+             scene starting at frame {beat_grid_pushes_the_last_cut_to}"
+        );
+        assert_ne!(
+            frames, migrated_frames,
+            "the point of the test is that snapping moves cuts, so it must not leave the \
+             migrated duration untouched"
         );
     }
 

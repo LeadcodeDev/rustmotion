@@ -51,12 +51,19 @@ pub fn cmd_info(input: &PathBuf) -> Result<()> {
             vtype,
             view.scenes.len()
         );
+        let spans = match view.view_type {
+            schema::ViewType::Slide => rustmotion::encode::video::slide_scene_spans(view, fps),
+            schema::ViewType::World => Vec::new(),
+        };
         for (si, scene) in view.scenes.iter().enumerate() {
-            let scene_frames = (scene.duration * fps as f64).round() as u32;
+            let scene_frames = spans
+                .get(si)
+                .map(|span| span.frames())
+                .unwrap_or_else(|| (scene.duration * fps as f64).round() as u32);
             println!(
-                "    Scene {}: {:.1}s ({} frames, {} layers{})",
+                "    Scene {}: {:.2}s ({} frames, {} layers{})",
                 si + 1,
-                scene.duration,
+                scene_frames as f64 / fps as f64,
                 scene_frames,
                 scene.children.len(),
                 scene
