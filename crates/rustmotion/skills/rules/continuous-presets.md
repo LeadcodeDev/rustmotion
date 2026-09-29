@@ -14,23 +14,17 @@ The presets `pulse`, `float`, `shake`, and `spin` are continuous animations. Wit
 
 Continuous presets: `pulse`, `float`, `shake`, `spin`.
 
-## `speed` + `direction` : seuls quatre fonds se laissent faire défiler
+## `speed` + `direction`: only four backgrounds accept being scrolled
 
-`direction` translate la texture du fond. Ça n'a de sens que pour un motif
-**périodique sous translation**, qui n'a par ailleurs aucun mouvement propre :
+`direction` translates the background's texture. That only makes sense for a pattern that is **periodic under translation** and has no motion of its own:
 
-| Preset | `direction` | Pourquoi |
+| Preset | `direction` | Why |
 |---|---|---|
-| `grid_dots`, `grid_lines`, `pixel_grid`, `heropattern` | **actif** | Motifs pavés, dessinés avec une période entière de marge de chaque côté. Le défilement extérieur est leur seul mouvement. |
-| `gradient_shift` | **inerte** | `speed` pilote déjà le sens de rotation du dégradé (`direction` vaut `cw`/`ccw` ici), et le shader est peint sur le rectangle du cadre **sans marge** : toute translation laissait une bande découverte. |
-| `concentric_circles` | **inerte** | Calcule déjà son propre `offset = (time * speed) % spacing`. Translater un motif radial déplace son centre — c'était une double animation. |
-| `halo` | **inerte** | Anime ses zones lui-même. |
+| `grid_dots`, `grid_lines`, `pixel_grid`, `heropattern` | **active** | Tiled patterns, drawn with a whole period of margin on each side. The outer scroll is their only motion. |
+| `gradient_shift` | **inert** | `speed` already drives the gradient's rotation sense (`direction` means `cw`/`ccw` here), and the shader is painted over the frame rect with **no margin**: any translation left an uncovered band. |
+| `concentric_circles` | **inert** | It already computes its own `offset = (time * speed) % spacing`. Translating a radial pattern moves its centre — that was a double animation. |
+| `halo` | **inert** | It animates its zones itself. |
 
-Sur les trois derniers, déclarer une `direction` ne produit plus **rien du tout**
-(vérifié frame par frame, pixel pour pixel). C'est un changement de rendu visible
-pour un scénario existant qui en déclarait une — mais le mouvement supprimé est
-celui qui faisait sortir le fond du cadre, pas un effet qu'on perd.
+On those last three, declaring a `direction` now produces **nothing at all** (verified frame by frame, pixel for pixel). This is a visible rendering change for an existing scenario that declares one — but the motion being removed is the motion that dragged the background off the frame, not an effect worth keeping.
 
-> `pixel_grid` a son propre champ `motion` (`twinkle`, `sweep`), qui ne translate
-> rien : il compose avec le défilement au lieu de le doubler. Son défaut,
-> `motion: none`, en fait une texture immobile — exactement le cas de `grid_dots`.
+> `pixel_grid` has its own `motion` field (`twinkle`, `sweep`), which translates nothing: it composes with the scroll rather than doubling it. Its default, `motion: none`, makes it a still texture — exactly `grid_dots`'s case.

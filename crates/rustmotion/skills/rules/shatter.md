@@ -1,8 +1,8 @@
-# Rule: `shatter` — fragments de Voronoi qui s'envolent (ou s'assemblent)
+# Rule: `shatter` — Voronoi fragments that fly apart (or assemble)
 
-`shatter` (`style.animation`) découpe le rendu déjà peint d'un nœud — fond, bordure, enfants, tout son sous-arbre — en cellules polygonales déterministes (partition de Voronoi) et envoie chaque morceau voler loin d'un point d'origine, avec sa propre rotation et son propre fondu. C'est la brique pour une carte, une miniature ou une vitre qui explose en éclats et révèle ce qu'il y a derrière — voir issue #378.
+`shatter` (`style.animation`) cuts a node's already-painted render — background, border, children, its whole subtree — into deterministic polygonal cells (a Voronoi partition) and sends each piece flying away from an origin point, with its own rotation and its own fade. It is the building block for a card, a thumbnail or a pane of glass that shatters and reveals what is behind it — see issue #378.
 
-## La forme
+## The shape
 
 ```json
 {
@@ -27,46 +27,46 @@
 }
 ```
 
-| Champ | Rôle | Défaut |
+| Field | Role | Default |
 |---|---|---|
-| `delay` | Attente avant que les éclats commencent à bouger (s) | `0` |
-| `duration` | Durée de la dispersion (ou de l'assemblage en `mode: "in"`) (s) | `0.6` |
-| `mode` | `"out"` / `"in"` / `"hold"` — voir plus bas | `"out"` |
-| `pieces` | Nombre de cellules de Voronoi (borné en interne à `1..=64`) | `24` |
-| `seed` | Graine de la partition et du jitter par éclat (direction, spin, depth) | `0` |
-| `origin` | Point dont les éclats s'éloignent (ou vers lequel ils convergent en `"in"`), fraction `0..1` de la boîte du nœud — pas des px | `{ "x": 0.5, "y": 0.5 }` |
-| `spread` | Multiplicateur du trajet radial à dispersion complète, relatif à la diagonale du nœud | `1.0` |
-| `spin` | Rotation max en degrés à dispersion complète ; signe et amplitude tirés par éclat depuis `seed` | `90` |
-| `depth` | Modulation d'échelle par éclat à dispersion complète — même sémantique « 0 = aucune » que `OrbitConfig.depth` (certains éclats grossissent, d'autres rétrécissent) | `0.4` |
-| `fade` | Fait tomber l'opacité de chaque éclat à zéro à pleine dispersion (et l'inverse en `mode: "in"`) | `true` |
+| `delay` | Wait before the shards start moving (s) | `0` |
+| `duration` | How long the dispersal (or the assembly, in `mode: "in"`) takes (s) | `0.6` |
+| `mode` | `"out"` / `"in"` / `"hold"` — see below | `"out"` |
+| `pieces` | Number of Voronoi cells (clamped internally to `1..=64`) | `24` |
+| `seed` | Seed for the partition and for every shard's jitter (direction, spin, depth) | `0` |
+| `origin` | The point shards fly away from (or converge toward in `"in"`), as a fraction `0..1` of the node's own box — not pixels | `{ "x": 0.5, "y": 0.5 }` |
+| `spread` | Radial travel multiplier at full dispersal, relative to the node's own diagonal | `1.0` |
+| `spin` | Maximum rotation in degrees at full dispersal; each shard's sign and magnitude are drawn from `seed` | `90` |
+| `depth` | Per-shard scale modulation at full dispersal — the same "0 = none" semantics as `OrbitConfig.depth` (some shards grow, others shrink) | `0.4` |
+| `fade` | Drop each shard's opacity to zero at full dispersal (and the reverse in `mode: "in"`) | `true` |
 
-## `mode` décide quelle extrémité est le nœud intact
+## `mode` decides which end is the intact node
 
-- **`"out"`** (défaut) : assemblé à `delay`, dispersé à `delay + duration`. **En dehors de cette fenêtre, l'effet ne contribue rigoureusement rien** — le nœud est pixel pour pixel identique à un nœud sans `shatter` dans sa liste `animation`. C'est le même court-circuit dur que `chromatic_aberration` et `zoom_blur` (voir [chromatic-aberration.md](chromatic-aberration.md)) plutôt qu'un fondu qui ne fait que s'approcher de zéro.
-- **`"in"`** est le miroir : dispersé à `delay`, assemblé à `delay + duration` — et, comme `"out"`, en dehors de sa fenêtre le nœud se rend comme si l'effet était absent. La différence entre les deux modes n'est donc **pas** l'état aux bornes (les deux sont « pas d'effet » avant `delay` et après `delay + duration`) mais le sens dans lequel `progress` parcourt la fenêtre : `0` (assemblé) → `1` (dispersé) en `"out"`, l'inverse en `"in"`.
-- **`"hold"`** joue la même dispersion que `"out"` mais se **fige** à pleine dispersion une fois `delay + duration` atteint, au lieu de revenir au nœud plein — il ne reconverge jamais. C'est le seul des trois modes dont l'état final diffère d'un nœud sans l'effet.
+- **`"out"`** (default): assembled at `delay`, dispersed at `delay + duration`. **Outside that window the effect contributes strictly nothing** — the node is pixel for pixel identical to one with no `shatter` in its `animation` list. That is the same hard short-circuit `chromatic_aberration` and `zoom_blur` use (see [chromatic-aberration.md](chromatic-aberration.md)) rather than a fade that merely approaches zero.
+- **`"in"`** is the mirror: dispersed at `delay`, assembled at `delay + duration` — and, like `"out"`, outside its window the node renders as if the effect were absent. The difference between the two modes is therefore **not** the state at the boundaries (both are "no effect" before `delay` and after `delay + duration`) but the direction `progress` runs through the window: `0` (assembled) → `1` (dispersed) in `"out"`, the reverse in `"in"`.
+- **`"hold"`** plays the same dispersal as `"out"` but **freezes** at full dispersal once `delay + duration` is reached, instead of returning to the whole node — it never reconverges. It is the only one of the three whose final state differs from a node without the effect.
 
-Piège à ne pas reproduire ailleurs : ne pas confondre « en dehors de la fenêtre » avec `progress` proche de 0 ou 1. `active_shatter` (`paint_pass.rs`) renvoie `None` — pas `Some(0.0)` ou `Some(1.0)` — hors fenêtre ; c'est un branchement de code différent (`paint_node_visual` direct, sans aucune rasterisation ni découpe), pas la même fonction évaluée à une borne.
+A trap not to reproduce elsewhere: do not confuse "outside the window" with `progress` near 0 or 1. `active_shatter` (`paint_pass.rs`) returns `None` — not `Some(0.0)` or `Some(1.0)` — outside the window; that is a different code branch (`paint_node_visual` directly, with no rasterisation and no clipping), not the same function evaluated at a boundary.
 
-## Comment c'est peint
+## The animation budget applies
 
-Le sous-arbre du nœud est peint une seule fois dans une surface raster **dédiée**, à la taille de sa propre boîte (`box_layout.width × height`, coordonnées locales — même geste que `paint_inflated_material`/`silhouette_alpha_field` pour rasteriser puis relire des pixels). Cette capture désactive la hit-map (`PaintContext.hits: None`) : pendant que le nœud est fragmenté, ses enfants ne sont pas des cibles de clic cohérentes — seul le nœud lui-même reste cliquable, à son rectangle d'origine, exactement comme s'il n'était pas en train de se briser.
+`shatter` counts toward [animation-completion-budget.md](animation-completion-budget.md) like any entrance: `start_at + delay + duration ≤ scene_duration`. It is **not** an exempt exit preset — even in `mode: "out"` or `"hold"`, where the effect reads like an exit. A shatter meant to land on the cut must therefore fall exactly on the end of the scene rather than overrun it: `delay + duration == scene_duration`. Otherwise the validator raises the usual budget error.
 
-La partition de Voronoi vient d'un semis de points sur une grille approximative (`√pieces` colonnes), chacun perturbé par un hash déterministe de `(seed, index)` — pas un point uniformément aléatoire, pour éviter les esquilles dégénérées d'un Poisson pur. Chaque cellule est calculée par découpe successive du rectangle englobant contre le plan médiateur de chaque autre point (Sutherland-Hodgman, `O(pieces²)` — négligeable jusqu'à 64 pièces). Direction, magnitude du trajet, signe/magnitude du spin et valeur de profondeur par éclat sont tous des hashs de `(seed, index, salt)` distincts — deux rendus du même fichier au même instant sont donc octet pour octet identiques.
+## Trap: `origin` is a fraction, not pixels
 
-Pour chaque éclat, l'ordre des opérations canvas compte : **translation/rotation/échelle d'abord, découpe (`clip_path`) ensuite**, dans ce sens précis. Si la découpe est posée avant la transformation, le masque reste à sa position d'origine pendant que l'image sous-jacente se déplace dessous — l'éclat ne bouge jamais visuellement, seul son contenu glisse sous un trou fixe. C'est un bug qui a été observé et corrigé pendant l'implémentation ; un test dédié (`shatter_paints_ink_outside_the_nodes_own_box_where_an_intact_node_does_not`) l'aurait détecté en le repassant au rouge.
+Unlike `TransformOrigin` (CSS, `LengthPercentage`), `shatter.origin` is a pair of floats `0..1` relative to the node's box — `{ "x": 0.5, "y": 0.5 }` is the centre, `{ "x": 0.0, "y": 0.0 }` the top-left corner. Passing pixels is not a schema error (the field accepts any float) but an origin point outside the box, so every shard leaves in nearly the same direction instead of radiating.
 
-## Le budget d'animation s'applique
+## How it is painted
 
-`shatter` entre dans le calcul de [animation-completion-budget.md](animation-completion-budget.md) comme n'importe quelle entrée : `start_at + delay + duration ≤ scene_duration`. Ce n'est **pas** un preset de sortie exempté — même en `mode: "out"` ou `"hold"`, où l'effet se lit pourtant comme une sortie. Un éclatement destiné à finir sur la coupe doit donc tomber pile à la fin de la scène, pas la déborder : `delay + duration == scene_duration`. Sinon le validateur émet l'erreur de budget habituelle.
+The node's subtree is painted once into a **dedicated** raster surface the size of its own box (`box_layout.width × height`, local coordinates — the same move `paint_inflated_material`/`silhouette_alpha_field` make to rasterise and read pixels back). That capture disables the hit map (`PaintContext.hits: None`): while the node is fragmented, its children are not coherent click targets — only the node itself stays clickable, at its original rectangle, exactly as if it were not breaking.
 
-## Piège : `origin` est une fraction, pas des px
+The Voronoi partition comes from seed points on an approximate grid (`√pieces` columns), each perturbed by a deterministic hash of `(seed, index)` — not a uniformly random point, which would produce degenerate slivers. Each cell is computed by successively clipping the bounding rectangle against the perpendicular bisector of every other point (Sutherland-Hodgman, `O(pieces²)` — negligible up to 64 pieces). Direction, travel magnitude, spin sign and magnitude, and per-shard depth are all hashes of distinct `(seed, index, salt)` triples — so two renders of the same file at the same instant are byte-identical.
 
-Contrairement à `TransformOrigin` (CSS, `LengthPercentage`), `shatter.origin` est une paire de flottants `0..1` relative à la boîte du nœud — `{ "x": 0.5, "y": 0.5 }` est le centre, `{ "x": 0.0, "y": 0.0 }` le coin haut-gauche. Donner des pixels ici ne produit pas d'erreur de schéma (le champ accepte n'importe quel flottant) mais un point d'origine hors de la boîte, donc une dispersion qui tire tous les éclats dans une direction quasi uniforme au lieu de rayonner.
+For each shard the order of canvas operations matters: **translate/rotate/scale first, clip (`clip_path`) second**, in that exact order. Clip before transform and the mask stays at its original position while the image underneath slides: the shard never visually moves, only its content shifts inside a static hole. That bug was observed and fixed during implementation; a dedicated test (`shatter_paints_ink_outside_the_nodes_own_box_where_an_intact_node_does_not`) turns red on the revert.
 
-## Cas dégénérés
+## Degenerate cases
 
-- `pieces: 0` ou `1` est traité comme `1` (borné en interne) : toute la boîte forme un seul éclat, qui se contente de translater/tourner/rétrécir comme un bloc — pas d'erreur, juste un « shatter » dégénéré en simple sortie.
-- `spread: 0` immobilise les éclats sur place : seuls le spin, la profondeur et le fondu restent visibles, une variante « dislocation sans envol ».
-- `duration: 0` (ou négative) désactive l'effet à chaque frame, comme `chromatic_aberration`.
-- `fade: false` laisse les éclats à pleine opacité même totalement dispersés — utile avec `mode: "hold"` pour une composition éclatée qui doit rester lisible.
+- `pieces: 0` or `1` is treated as `1` (clamped internally): the whole box is one shard, which simply translates, rotates and scales as a block — no error, just a "shatter" degenerated into a plain exit.
+- `spread: 0` pins the shards in place: only spin, depth and fade remain visible, a "dislocation without flight" variant.
+- `duration: 0` (or negative) disables the effect on every frame, like `chromatic_aberration`.
+- `fade: false` leaves shards at full opacity even when fully dispersed — useful with `mode: "hold"` for a shattered composition that has to stay legible.

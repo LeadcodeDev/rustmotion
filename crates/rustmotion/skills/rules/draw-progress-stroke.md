@@ -1,20 +1,12 @@
-# `draw_progress` : rien à 0, et un trait qui ne change pas d'apparence en finissant
+# Rule: `draw_progress` — nothing at 0, and a stroke that does not change appearance as it finishes
 
-`draw_progress` révèle un trait progressivement. On le pilote par un preset
-`draw_in`/`stroke_reveal`, ou par des `keyframes` sur la propriété du même nom.
-Trois pièges à connaître sur `line` et `svg` (`reveal: "stroke"`, celui par
-défaut).
+`draw_progress` reveals a stroke progressively. It is driven by a `draw_in`/`stroke_reveal` preset, or by `keyframes` on the property of the same name. Three traps to know about on `line` and `svg` (`reveal: "stroke"`, the default).
 
-## `svg` : `draw: true` n'est pas un pilote
+## `svg`: `draw: true` is not a driver
 
-`draw: true` force le **chemin de rendu** « draw-on ». Il ne fait pas avancer
-`draw_progress`. Sans pilote, la propriété reste à sa valeur au repos, le
-peintre prend la branche « fini » (`progress >= 1.0`, qui délègue simplement à
-resvg) et la marque se rend **exactement comme avec `draw: false`** — vérifié
-octet pour octet sur deux PNG.
+`draw: true` forces the draw-on **render path**. It does not advance `draw_progress`. With no driver the property stays at its resting value, the painter takes the "finished" branch (`progress >= 1.0`, which simply delegates to resvg) and the mark renders **exactly as it would with `draw: false`** — verified byte for byte on two PNGs.
 
-Le validateur refuse donc `draw: true` sans pilote, plutôt que de laisser le
-drapeau avoir l'air de faire quelque chose :
+The validator therefore rejects `draw: true` without a driver, rather than letting the flag look as though it did something:
 
 ```
 draw: true but nothing animates draw_progress — the mark renders finished,
@@ -22,44 +14,19 @@ pixel-identical to draw: false. Add a 'draw_in' or 'stroke_reveal' preset,
 or keyframes on 'draw_progress'.
 ```
 
-En pratique on n'a d'ailleurs pas besoin de `draw: true` : un preset `draw_in`
-suffit à lui seul, puisque le peintre bascule dès que `draw_progress` est dans
-`[0, 1[`.
+In practice `draw: true` is not needed at all: a `draw_in` preset is enough on its own, since the painter switches as soon as `draw_progress` is inside `[0, 1)`.
 
-## `line` : `draw_progress: 0` ne doit rien peindre
+## `line`: `draw_progress: 0` must paint nothing
 
-`Line::paint` force un cap arrondi (`PaintCap::Round`) et construit un
-pointillé `[longueur_dessinée, reste]` pour révéler le trait. À
-`draw_progress: 0`, `longueur_dessinée` vaut `0` — un pointillé de longueur
-nulle avec un cap arrondi se peint quand même : Skia dessine un point plein
-d'un diamètre égal à `width`, exactement au point de départ. Le composant
-retourne maintenant sans rien peindre dès que `draw_progress <= 0` (dans la
-fenêtre `[0, 1[` — `draw_progress` absent ou `>= 1` reste le trait complet,
-inchangé).
+`Line::paint` forces a round cap (`PaintCap::Round`) and builds a dash pattern `[drawn_length, remainder]` to reveal the stroke. At `draw_progress: 0`, `drawn_length` is `0` — and a zero-length dash with a round cap still paints: Skia draws a solid dot of diameter `width`, exactly at the start point. The component now returns without painting anything as soon as `draw_progress <= 0` (within the `[0, 1)` window — an absent `draw_progress`, or one `>= 1`, still means the whole stroke, unchanged).
 
-## `svg` en train de se dessiner doit ressembler au trait fini
+## An `svg` in the middle of drawing itself must look like the finished stroke
 
-Pendant le tracé (`paint_draw_on`, `draw_progress` dans `]0, 1[`), le trait
-doit avoir la **même** épaisseur, le même `stroke-linecap` et le même
-`stroke-linejoin` que le rendu final (`progress >= 1`, peint par `resvg`) —
-sinon la dernière frame du tracé et la première frame « finie » ne se
-raccordent pas visuellement (saut d'épaisseur, apparition brusque d'un cap).
+While tracing (`paint_draw_on`, `draw_progress` in `(0, 1)`), the stroke must have the **same** width, the same `stroke-linecap` and the same `stroke-linejoin` as the final render (`progress >= 1`, painted by resvg) — otherwise the last frame of the trace and the first "finished" frame do not join up visually (a jump in width, a cap appearing out of nowhere).
 
-Concrètement :
+Concretely:
 
-- Le canevas est déjà mis à l'échelle du `viewBox` vers la taille du nœud
-  (`canvas.scale((scale_x, scale_y))`) avant de peindre chaque segment : le
-  `stroke-width` du SVG source doit être posé tel quel sur le `Paint`, sans
-  compensation supplémentaire. Diviser par le facteur d'échelle annule cette
-  mise à l'échelle et fige le trait à sa largeur SVG brute, quelle que soit
-  la taille du nœud — le bug qu'un remaniement futur ne doit pas
-  réintroduire.
-- `stroke-linecap`/`stroke-linejoin` du `<path>` source (lus sur
-  `usvg::Stroke`) doivent être posés sur le `Paint` de chaque segment, pas
-  seulement utilisés pour le rendu final. Un cap `round` sur le trait fini
-  mais `butt` (le défaut de Skia) pendant le tracé fait apparaître le cap
-  d'un coup à `draw_progress = 1`, avec une extension visible du trait
-  (le rayon du cap).
+- The canvas is already scaled from the `viewBox` to the node's size (`canvas.scale((scale_x, scale_y))`) before each segment is painted: the source SVG's `stroke-width` must be set on the `Paint` as-is, with no further compensation. Dividing by the scale factor undoes that scaling and pins the stroke to its raw SVG width whatever the node's size — the bug a future rework must not reintroduce.
+- The source `<path>`'s `stroke-linecap`/`stroke-linejoin` (read from `usvg::Stroke`) must be set on each segment's `Paint`, not merely used for the final render. A `round` cap on the finished stroke but `butt` (Skia's default) during the trace makes the cap appear all at once at `draw_progress = 1`, with a visible extension of the stroke (the cap's radius).
 
-`marquee` et `cursor` restent hors sujet ici : ce ne sont pas des traits
-révélés par `draw_progress`.
+`marquee` and `cursor` are out of scope here: they are not strokes revealed by `draw_progress`.
