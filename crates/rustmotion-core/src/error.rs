@@ -52,7 +52,8 @@ pub enum RustmotionError {
     #[error(
         "{count} icon(s) could not be loaded — checked the disk cache at {cache_dir} and the \
          network, both failed:\n  - {details}\nA render must not silently omit an icon: fix \
-         the identifier(s), or connect once so they are downloaded and cached for offline use."
+         the identifier(s), or run `rustmotion icons prefetch -f <scenario>` once to fill the \
+         cache for offline use."
     )]
     IconsUnresolved {
         count: usize,
@@ -104,6 +105,18 @@ pub enum RustmotionError {
     RemoteFontDenied {
         family: String,
         weights: String,
+        url: String,
+        cache_hint: String,
+    },
+
+    #[error(
+        "Icons: '{icon}' is not in the icon cache, and fetching it would reach {url} — a \
+         scenario chooses that target, so it is denied by default.\n\
+         Run `rustmotion icons prefetch -f <scenario>` once to fill the cache, pass \
+         --allow-remote-icons to opt in for this run, or place the SVG at:\n  {cache_hint}"
+    )]
+    RemoteIconDenied {
+        icon: String,
         url: String,
         cache_hint: String,
     },

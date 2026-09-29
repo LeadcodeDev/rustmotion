@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::Read;
 use std::sync::Arc;
 
@@ -51,9 +52,7 @@ pub fn preload_scenario_assets(scenario: &ResolvedScenario) -> crate::error::Res
     Ok(())
 }
 
-pub fn prefetch_icons(scenes: &[Scene]) -> crate::error::Result<()> {
-    use std::collections::HashSet;
-
+pub fn collect_icon_requests(scenes: &[Scene]) -> HashSet<(String, String, u32, u32)> {
     let mut seen = HashSet::new();
 
     fn collect_from_component(
@@ -98,6 +97,24 @@ pub fn prefetch_icons(scenes: &[Scene]) -> crate::error::Result<()> {
             collect_from_component(child, &mut seen);
         }
     }
+
+    seen
+}
+
+pub fn scenario_icon_names(scenario: &ResolvedScenario) -> Vec<String> {
+    let mut names: Vec<String> = scenario
+        .views
+        .iter()
+        .flat_map(|view| collect_icon_requests(&view.scenes))
+        .map(|(icon, _, _, _)| icon)
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+pub fn prefetch_icons(scenes: &[Scene]) -> crate::error::Result<()> {
+    let seen = collect_icon_requests(scenes);
 
     let cache = asset_cache();
     let mut unresolved: Vec<String> = Vec::new();

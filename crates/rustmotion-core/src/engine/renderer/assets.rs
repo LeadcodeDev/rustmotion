@@ -71,6 +71,35 @@ pub fn icon_source_cache_file(cache_dir: &Path, icon: &str) -> PathBuf {
     cache_dir.join(format!("{}.svg", icon.replace(':', "_")))
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RemoteIconPolicy {
+    #[default]
+    Deny,
+    Allow,
+}
+
+static REMOTE_ICON_POLICY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_remote_icon_policy(policy: RemoteIconPolicy) {
+    REMOTE_ICON_POLICY.store(
+        policy == RemoteIconPolicy::Allow,
+        std::sync::atomic::Ordering::Release,
+    );
+}
+
+pub fn remote_icon_policy() -> RemoteIconPolicy {
+    if REMOTE_ICON_POLICY.load(std::sync::atomic::Ordering::Acquire) {
+        RemoteIconPolicy::Allow
+    } else {
+        RemoteIconPolicy::Deny
+    }
+}
+
+pub fn icon_source_url(prefix: &str, name: &str) -> String {
+    format!("https://api.iconify.design/{prefix}/{name}.svg")
+}
+
 fn set_root_attribute(svg: &str, attribute: &str, value: &str) -> String {
     let Some(tag_start) = svg.find("<svg") else {
         return svg.to_string();
@@ -155,7 +184,7 @@ fn status_is_worth_retrying(error: &ureq::Error) -> bool {
 }
 
 fn fetch_icon_source(icon: &str, prefix: &str, name: &str) -> Result<Vec<u8>> {
-    let url = format!("https://api.iconify.design/{prefix}/{name}.svg");
+    let url = icon_source_url(prefix, name);
     let mut backoff = Duration::from_millis(250);
     let mut last_reason = String::new();
 
@@ -219,6 +248,13 @@ pub fn fetch_icon_svg_in(
                 migrated
             }
             None => {
+                if remote_icon_policy() != RemoteIconPolicy::Allow {
+                    return Err(RustmotionError::RemoteIconDenied {
+                        icon: icon.to_string(),
+                        url: icon_source_url(prefix, name),
+                        cache_hint: source_file.display().to_string(),
+                    });
+                }
                 let fetched = fetch_icon_source(icon, prefix, name)?;
                 if std::fs::create_dir_all(cache_dir).is_ok() {
                     let _ = std::fs::write(&source_file, &fetched);
@@ -926,5 +962,104 @@ mod icon_source_cache_tests {
             "a missing icon is not going to appear on the fourth try — retrying it would just \
              make a typo take four times as long to report"
         );
+    }
+}
+
+#[cfg(test)]
+mod remote_icon_policy_tests {
+    use super::*;
+
+    struct Restore(RemoteIconPolicy);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_remote_icon_policy(self.0);
+        }
+    }
+
+    fn a_cache_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "rm_icon_policy_{}_{}_{name}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("cache dir");
+        dir
+    }
+
+    const A_SQUARE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+             <rect x="2" y="2" width="20" height="20" fill="currentColor"/>
+           </svg>"#;
+
+    #[test]
+    fn the_default_is_deny() {
+        assert_eq!(
+            RemoteIconPolicy::default(),
+            RemoteIconPolicy::Deny,
+            "a scenario chooses which icon is fetched, so it chooses the target of the \
+             request — the same reason fonts are denied by default"
+        );
+    }
+
+    #[test]
+    fn an_icon_that_is_not_cached_is_refused_by_name_without_touching_the_network() {
+        let _restore = Restore(remote_icon_policy());
+        set_remote_icon_policy(RemoteIconPolicy::Deny);
+        let dir = a_cache_dir("denied");
+
+        let message = fetch_icon_svg_in("lucide:sparkles", "#FFFFFF", 24, 24, &dir)
+            .expect_err("an icon absent from the cache would have to be fetched")
+            .to_string();
+
+        assert!(
+            message.contains("lucide:sparkles"),
+            "the refusal has to name the icon: {message}"
+        );
+        assert!(
+            message.contains("api.iconify.design"),
+            "and the target it declined to reach: {message}"
+        );
+        assert!(
+            message.contains("rustmotion icons prefetch")
+                && message.contains("--allow-remote-icons"),
+            "and both ways out — fill the cache once, or opt in for this run: {message}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_icon_already_in_the_cache_needs_no_flag() {
+        let _restore = Restore(remote_icon_policy());
+        set_remote_icon_policy(RemoteIconPolicy::Deny);
+        let dir = a_cache_dir("cached");
+        std::fs::write(icon_source_cache_file(&dir, "lucide:check"), A_SQUARE).expect("seed");
+
+        let svg = fetch_icon_svg_in("lucide:check", "#FF3366", 24, 24, &dir)
+            .expect("nothing has to be fetched, so nothing is denied");
+        assert!(
+            String::from_utf8_lossy(&svg).contains("ff3366"),
+            "the cached source must still be recoloured and returned under a deny policy"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_cache_left_by_the_old_naming_is_migrated_without_the_flag() {
+        let _restore = Restore(remote_icon_policy());
+        set_remote_icon_policy(RemoteIconPolicy::Deny);
+        let dir = a_cache_dir("legacy");
+        let baked = A_SQUARE.replace("currentColor", "#ffffff");
+        std::fs::write(dir.join("lucide_home-ffffff-24x24.svg"), baked).expect("seed");
+
+        let svg = fetch_icon_svg_in("lucide:home", "#33CCFF", 24, 24, &dir)
+            .expect("the legacy entry is on disk, so the deny gate must never be reached");
+        assert!(
+            String::from_utf8_lossy(&svg).contains("33ccff"),
+            "an offline render that already has its icons under the pre-#425 naming must keep \
+             working: the gate belongs after the migration, not before it"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
