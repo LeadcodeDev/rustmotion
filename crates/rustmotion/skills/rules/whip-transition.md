@@ -11,7 +11,7 @@ L'effet : un `slide` classique le long d'un axe, dont le déplacement porte un f
     "direction": "left",
     "strength": 1.5,
     "duration": 0.35,
-    "easing": "ease_in_out_cubic"
+    "easing": "ease_in_out"
   }
 }
 ```

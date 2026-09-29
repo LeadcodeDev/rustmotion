@@ -35,7 +35,7 @@ Or use a named template with `$ref` for reuse across scenes:
 ```json
 {
   "backgrounds": {
-    "dark_radial": { "colors": ["#0f172a", "#1e1b4b", "#0f172a"], "speed": 20, "gradient_type": "radial" }
+    "dark_radial": { "preset": "gradient_shift", "colors": ["#0f172a", "#1e1b4b", "#0f172a"], "speed": 20, "gradient_type": "radial" }
   },
   "scenes": [
     { "duration": 5, "background": { "$ref": "dark_radial" } }

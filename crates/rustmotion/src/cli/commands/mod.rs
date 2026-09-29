@@ -9,8 +9,8 @@ mod schema;
 mod sheet;
 mod still;
 mod validate;
-mod validate_attrs;
-mod validate_schema;
+pub mod validate_attrs;
+pub mod validate_schema;
 pub mod validation;
 
 pub use batch::cmd_batch;

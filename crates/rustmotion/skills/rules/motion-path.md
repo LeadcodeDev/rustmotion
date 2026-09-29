@@ -30,7 +30,7 @@ Pour faire suivre une trajectoire à un composant — une courbe, un arc, un tra
 
 | Champ | Rôle |
 |---|---|
-| `path` | Données de chemin SVG (`M`/`L`/`H`/`V`/`C`/`S`/`Q`/`T`/`A`/`Z`) — **la même syntaxe** que `shape: { "type": "path", "data": ... }` |
+| `path` | Données de chemin SVG (`M`/`L`/`H`/`V`/`C`/`S`/`Q`/`T`/`A`/`Z`) — **la même syntaxe** que `shape: { "path": { "data": … } }` |
 | `delay`, `duration` | Fenêtre temporelle, comme tout autre effet |
 | `loop` | Reprend au début à la fin du parcours |
 | `orient` | Oriente le composant selon la tangente |

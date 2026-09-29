@@ -42,7 +42,7 @@ CSS-like semantics: `visible` (default) lets children bleed; `hidden` clips at t
 
 ## What the validator catches
 
-`rustmotion validate scenario.json` reports four geometry violation kinds:
+`rustmotion validate -f scenario.json` reports four geometry violation kinds:
 
 - `viewport_overflow` — absolute bbox crosses the device edge
 - `unwrappable_text_overflow` — `white-space: "nowrap"`/`"pre"` but natural width > available width
@@ -54,10 +54,10 @@ CSS-like semantics: `visible` (default) lets children bleed; `hidden` clips at t
 ## CLI usage
 
 ```bash
-rustmotion validate scenario.json                       # human-readable
-rustmotion validate scenario.json --report report.json  # JSON report
-rustmotion validate scenario.json --fix                 # safe auto-fixes
-rustmotion validate scenario.json --strict-anim         # per-frame check, adds animated_text_overflow
+rustmotion validate -f scenario.json                       # human-readable
+rustmotion validate -f scenario.json --report report.json  # JSON report
+rustmotion validate -f scenario.json --fix                 # safe auto-fixes
+rustmotion validate -f scenario.json --strict-anim         # per-frame check, adds animated_text_overflow
 rustmotion validate scenario.json --lenient             # warnings only
 ```
 

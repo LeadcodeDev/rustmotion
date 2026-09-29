@@ -117,7 +117,7 @@ Each element gets a different `seed`. Because seeds produce different noise curv
     "border-radius": 28,
     "box-shadow": [{ "color": "#00000060", "offset-y": 40, "blur": 80 }],
     "animation": [
-      { "name": "scale_in", "duration": 0.7, "easing": "ease_out" },
+      { "name": "scale_in", "duration": 0.7 },
       { "name": "float_3d", "loop": true }
     ]
   }

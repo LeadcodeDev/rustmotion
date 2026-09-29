@@ -207,7 +207,7 @@ For each scene in the validated plan:
 
 1. Assemble the complete JSON with all scenes
 2. Run final `rustmotion validate`
-3. Render with `rustmotion render -o output.mp4 --quiet`
+3. Render with `rustmotion render -f scenario.json -o output.mp4 --quiet`
 4. Suggest `--codec prores` for videos with dark gradients
 
 ### Design guidelines
@@ -1523,9 +1523,22 @@ Text with animated gradient fill.
 }
 ```
 
-**Root fields:** `content` (required), `colors` (array of hex, default ["#3B82F6", "#8B5CF6"]), `angle` (90 — gradient angle in degrees), `animate_angle` (false — rotate gradient over time), `speed` (0.5 — rotations/sec when animate_angle), `size`
+**Root fields:** `content` (required), `colors` (array of hex, default ["#3B82F6", "#8B5CF6"]), `stops`, `angle` (90), `animate_angle` (false — rotate gradient over time), `speed` (0.5 — rotations/sec when animate_angle), `size`
 
 Style: `font-size`, `font-weight`, `font-family`
+
+`angle` follows the CSS convention: `0` points up, `90` points right, growing clockwise.
+
+`stops` places each colour explicitly instead of spreading `colors` evenly along the gradient line. The position key is **`position`**, not the `offset` a background's stops use — the two vocabularies differ, and the validator refuses the wrong one:
+
+```json
+{ "type": "gradient_text", "content": "Rustmotion", "angle": 90,
+  "stops": [
+    { "color": "#7C3AED", "position": 0 },
+    { "color": "#EC4899", "position": 0.7 },
+    { "color": "#F59E0B", "position": 1 }
+  ] }
+```
 
 ### `treemap`
 

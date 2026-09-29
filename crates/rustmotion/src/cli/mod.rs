@@ -1,5 +1,8 @@
 mod claude_md;
 mod commands;
+
+pub use commands::validate_attrs::check_component_attrs;
+pub use commands::validate_schema::validate_scenario;
 mod skills;
 mod tui;
 
