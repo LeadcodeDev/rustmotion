@@ -224,13 +224,7 @@ pub fn cmd_sheet(
         ));
     }
 
-    if !scenario.fonts.is_empty() {
-        engine::renderer::load_custom_fonts(&scenario.fonts);
-    }
-
-    for view in &scenario.views {
-        engine::prefetch_icons(&view.scenes)?;
-    }
+    engine::preload::preload_scenario_assets(&scenario)?;
 
     let start_time = std::time::Instant::now();
     let config = &scenario.video;
