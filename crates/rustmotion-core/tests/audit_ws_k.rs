@@ -236,3 +236,40 @@ fn every_public_schema_field_is_read_somewhere_or_allowlisted() {
          KNOWN_INERT_FIELDS above with a reason and the finding that tracks closing it."
     );
 }
+
+#[test]
+fn the_license_badge_points_at_a_file_that_exists_and_names_a_holder() {
+    let root = workspace_root();
+    let license = std::fs::read_to_string(root.join("LICENSE"))
+        .expect("README's MIT badge links to LICENSE at the root, so the file has to be there");
+
+    assert!(
+        license.starts_with("MIT License"),
+        "the manifests declare license = \"MIT\", so the file has to be the MIT text"
+    );
+    let holder = license
+        .lines()
+        .find_map(|l| l.strip_prefix("Copyright (c) "))
+        .expect("a licence with no copyright holder tells a human nothing");
+    assert!(
+        holder.split_whitespace().count() >= 2,
+        "the holder line must name someone, got {holder:?}"
+    );
+
+    for crate_name in [
+        "rustmotion",
+        "rustmotion-core",
+        "rustmotion-components",
+        "rustmotion-html",
+    ] {
+        let packaged = root.join("crates").join(crate_name).join("LICENSE");
+        assert_eq!(
+            std::fs::read_to_string(&packaged).ok().as_deref(),
+            Some(license.as_str()),
+            "{crate_name} is published to crates.io, and a .crate with no LICENSE file is the \
+             gap the SPDX string in the manifest does not close — {} must resolve to the same \
+             text as the root one",
+            packaged.display()
+        );
+    }
+}
