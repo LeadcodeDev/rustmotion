@@ -576,13 +576,87 @@ pub fn build_frame_tasks_range(
     Ok((tasks[start as usize..=end as usize].to_vec(), total))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SceneSpan {
+    pub start: u32,
+    pub end: u32,
+}
+
+impl SceneSpan {
+    pub fn frames(&self) -> u32 {
+        self.end.saturating_sub(self.start)
+    }
+}
+
+fn quantise(spans: &mut Vec<SceneSpan>, start_seconds: f64, duration: f64, fps: u32) {
+    let f = fps as f64;
+    let start = (start_seconds * f).round().max(0.0) as u32;
+    let end = ((start_seconds + duration.max(0.0)) * f).round().max(0.0) as u32;
+    spans.push(SceneSpan {
+        start,
+        end: end.max(start),
+    });
+}
+
+pub fn quantised_spans(durations: &[f64], incoming: &[f64], fps: u32) -> Vec<SceneSpan> {
+    let mut spans = Vec::with_capacity(durations.len());
+    let mut cursor_seconds = 0.0_f64;
+    for (i, &duration) in durations.iter().enumerate() {
+        let overlap = if i == 0 {
+            0.0
+        } else {
+            incoming
+                .get(i)
+                .copied()
+                .unwrap_or(0.0)
+                .clamp(0.0, durations[i - 1].max(0.0))
+        };
+        let start_seconds = (cursor_seconds - overlap).max(0.0);
+        quantise(&mut spans, start_seconds, duration, fps);
+        cursor_seconds = start_seconds + duration.max(0.0);
+    }
+    spans
+}
+
+pub fn slide_scene_spans(view: &ResolvedView, fps: u32) -> Vec<SceneSpan> {
+    match view_timing(view) {
+        TimingMode::V1 => v1_scene_spans(&view.scenes, fps),
+        TimingMode::V2 => v2_placement(&view.scenes, fps).spans,
+    }
+}
+
+fn v1_scene_spans(scenes: &[Scene], fps: u32) -> Vec<SceneSpan> {
+    let durations: Vec<f64> = scenes.iter().map(|s| s.duration).collect();
+    let incoming: Vec<f64> = scenes
+        .iter()
+        .map(|s| s.transition.as_ref().map(|t| t.duration).unwrap_or(0.0))
+        .collect();
+    quantised_spans(&durations, &incoming, fps)
+}
+
+fn incoming_frames(spans: &[SceneSpan], i: usize) -> u32 {
+    if i == 0 {
+        return 0;
+    }
+    spans[i - 1].end.saturating_sub(spans[i].start)
+}
+
+fn outgoing_frames(spans: &[SceneSpan], i: usize) -> u32 {
+    match spans.get(i + 1) {
+        Some(next) => spans[i].end.saturating_sub(next.start),
+        None => 0,
+    }
+}
+
 fn actual_outgoing_transition(scenes: &[Scene], i: usize, fps: u32) -> (u32, f64) {
-    let Some(transition) = scenes.get(i + 1).and_then(|s| s.transition.as_ref()) else {
+    if scenes
+        .get(i + 1)
+        .and_then(|s| s.transition.as_ref())
+        .is_none()
+    {
         return (0, 0.0);
-    };
-    let raw_frames = (transition.duration * fps as f64).round() as u32;
-    let scene_frames = (scenes[i].duration * fps as f64).round() as u32;
-    let frames = raw_frames.min(scene_frames);
+    }
+    let frames = outgoing_frames(&v1_scene_spans(scenes, fps), i);
     (frames, frames as f64 / fps as f64)
 }
 
@@ -593,18 +667,18 @@ fn build_slide_view_tasks(
     fps: u32,
 ) {
     let scenes = &view.scenes;
+    let spans = v1_scene_spans(scenes, fps);
 
-    for (i, scene) in scenes.iter().enumerate() {
-        let scene_frames = (scene.duration * fps as f64).round() as u32;
+    for i in 0..scenes.len() {
+        let scene_frames = spans[i].frames();
         let next_transition = scenes.get(i + 1).and_then(|s| s.transition.as_ref());
-        let (outgoing_transition_frames, outgoing_effective_duration) =
-            actual_outgoing_transition(scenes, i, fps);
-
-        let incoming_transition_frames = if i > 0 {
-            actual_outgoing_transition(scenes, i - 1, fps).0
+        let outgoing_transition_frames = if next_transition.is_some() {
+            outgoing_frames(&spans, i)
         } else {
             0
         };
+        let outgoing_effective_duration = outgoing_transition_frames as f64 / fps as f64;
+        let incoming_transition_frames = incoming_frames(&spans, i);
 
         let normal_start = incoming_transition_frames;
         let normal_end = scene_frames.saturating_sub(outgoing_transition_frames);
@@ -620,7 +694,7 @@ fn build_slide_view_tasks(
         }
 
         if let Some(transition) = next_transition {
-            let scene_b_frames = (scenes[i + 1].duration * fps as f64).round() as u32;
+            let scene_b_frames = spans[i + 1].frames();
             let easing = transition.easing.clone();
             for f in 0..outgoing_transition_frames {
                 tasks.push(FrameTask::SlideTransition {
@@ -664,13 +738,12 @@ fn snap_seconds_to_beat(seconds: f64, beat_offset: f64, bpm: f64) -> f64 {
     beat_offset + n * beat_len
 }
 
-fn v2_resolve_at_frames(
+fn v2_resolve_at_seconds(
     scene: &Scene,
     scene_idx: usize,
-    fps: u32,
-    fallback: u32,
+    fallback: f64,
     snap: SnapDuringPlacement,
-) -> u32 {
+) -> f64 {
     let SceneStart::At(ref tp) = scene.at else {
         return fallback;
     };
@@ -691,7 +764,18 @@ fn v2_resolve_at_frames(
         },
         _ => seconds,
     };
-    (seconds * fps as f64).round().max(0.0) as u32
+    seconds.max(0.0)
+}
+
+fn v2_scene_spans(scenes: &[Scene], fps: u32, snap: SnapDuringPlacement) -> Vec<SceneSpan> {
+    let mut spans = Vec::with_capacity(scenes.len());
+    let mut cursor_seconds = 0.0_f64;
+    for (i, scene) in scenes.iter().enumerate() {
+        let start_seconds = v2_resolve_at_seconds(scene, i, cursor_seconds, snap);
+        quantise(&mut spans, start_seconds, scene.duration, fps);
+        cursor_seconds = start_seconds + scene.duration.max(0.0);
+    }
+    spans
 }
 
 fn hold_scene_frame(
@@ -724,10 +808,35 @@ fn build_slide_view_tasks_v2(
         return;
     }
 
-    let duration_frames: Vec<u32> = scenes
-        .iter()
-        .map(|s| (s.duration * fps as f64).round() as u32)
-        .collect();
+    let placement = v2_placement(scenes, fps);
+    let duration_frames: Vec<u32> = placement.spans.iter().map(SceneSpan::frames).collect();
+    let starts: Vec<u32> = placement.spans.iter().map(|s| s.start).collect();
+
+    let build = if placement.author_overlaps {
+        v2_build_composited
+    } else {
+        v2_build_sequential
+    };
+    build(
+        tasks,
+        view_idx,
+        scenes,
+        &duration_frames,
+        &placement.transition_frames,
+        &starts,
+        fps,
+    );
+}
+
+struct V2Placement {
+    spans: Vec<SceneSpan>,
+    transition_frames: Vec<u32>,
+    author_overlaps: bool,
+}
+
+fn v2_placement(scenes: &[Scene], fps: u32) -> V2Placement {
+    let snapped = v2_scene_spans(scenes, fps, SnapDuringPlacement::Apply);
+    let durations: Vec<u32> = snapped.iter().map(SceneSpan::frames).collect();
 
     let transition_frames: Vec<u32> = scenes
         .iter()
@@ -736,64 +845,45 @@ fn build_slide_view_tasks_v2(
             if k == 0 {
                 0
             } else {
-                v2_incoming_transition_frames(s, duration_frames[k], fps)
+                v2_incoming_transition_frames(s, durations[k], fps)
             }
         })
         .collect();
 
-    let as_written = v2_scene_starts(scenes, &duration_frames, fps, SnapDuringPlacement::Ignore);
-    let author_overlaps = v2_has_overlap(&as_written, &duration_frames, &transition_frames);
-
-    let starts = v2_scene_starts(scenes, &duration_frames, fps, SnapDuringPlacement::Apply);
-
-    if author_overlaps {
-        v2_build_composited(
-            tasks,
-            view_idx,
-            scenes,
-            &duration_frames,
-            &transition_frames,
-            &starts,
-            fps,
-        );
-        return;
-    }
-
-    let starts = v2_clamp_forward(&starts, &duration_frames);
-    v2_build_sequential(
-        tasks,
-        view_idx,
-        scenes,
-        &duration_frames,
+    let as_written = v2_scene_spans(scenes, fps, SnapDuringPlacement::Ignore);
+    let author_overlaps = v2_has_overlap(
+        &as_written.iter().map(|s| s.start).collect::<Vec<_>>(),
+        &as_written.iter().map(SceneSpan::frames).collect::<Vec<_>>(),
         &transition_frames,
-        &starts,
-        fps,
     );
+
+    let spans = if author_overlaps {
+        snapped
+    } else {
+        v2_clamp_forward(
+            &snapped.iter().map(|s| s.start).collect::<Vec<_>>(),
+            &durations,
+        )
+        .into_iter()
+        .zip(&durations)
+        .map(|(start, frames)| SceneSpan {
+            start,
+            end: start + frames,
+        })
+        .collect()
+    };
+
+    V2Placement {
+        spans,
+        transition_frames,
+        author_overlaps,
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum SnapDuringPlacement {
     Apply,
     Ignore,
-}
-
-fn v2_scene_starts(
-    scenes: &[Scene],
-    duration_frames: &[u32],
-    fps: u32,
-    snap: SnapDuringPlacement,
-) -> Vec<u32> {
-    let mut starts = Vec::with_capacity(scenes.len());
-    let mut cursor: u32 = 0;
-    for (i, scene) in scenes.iter().enumerate() {
-        let start = match scene.at {
-            SceneStart::Auto(_) => cursor,
-            SceneStart::At(_) => v2_resolve_at_frames(scene, i, fps, cursor, snap),
-        };
-        starts.push(start);
-        cursor = start + duration_frames[i];
-    }
-    starts
 }
 
 fn v2_has_overlap(starts: &[u32], duration_frames: &[u32], transition_frames: &[u32]) -> bool {
@@ -1341,6 +1431,146 @@ mod transition_progress_tests {
     fn single_frame_transition_does_not_panic() {
         let p = transition_progress(0, 1.0 / 60.0, 30);
         assert!(p.is_finite());
+    }
+}
+
+#[cfg(test)]
+mod cumulative_rounding_tests {
+    use super::*;
+
+    fn frames(json: &str) -> usize {
+        let scenario = crate::loader::load_scenario_from_source(None, Some(json)).unwrap();
+        build_frame_tasks(&scenario).len()
+    }
+
+    #[test]
+    fn a_half_frame_duration_is_absorbed_once_not_once_per_scene() {
+        let json = r#"{
+            "video": { "width": 160, "height": 90, "fps": 30 },
+            "scenes": [
+                { "duration": 1.05, "children": [] },
+                { "duration": 1.05, "children": [] }
+            ]
+        }"#;
+        assert_eq!(
+            frames(json),
+            63,
+            "2.1s at 30fps is 63 frames; rounding each 1.05s scene on its own gives 32 + 32"
+        );
+    }
+
+    #[test]
+    fn twenty_half_frame_beats_do_not_drift_ten_frames_past_the_soundtrack() {
+        let scenes: Vec<String> = (0..20)
+            .map(|_| r#"{ "duration": 0.35, "children": [] }"#.to_string())
+            .collect();
+        let json = format!(
+            r#"{{ "video": {{ "width": 160, "height": 90, "fps": 30 }}, "scenes": [{}] }}"#,
+            scenes.join(",")
+        );
+        assert_eq!(
+            frames(&json),
+            210,
+            "20 beats of 0.35s is 7.0s exactly; rounding 10.5 up twenty times ends 10 frames late"
+        );
+    }
+
+    #[test]
+    fn the_same_correction_applies_under_v2_absolute_placement() {
+        let json = r#"{
+            "version": "1.0",
+            "timing": "v2",
+            "video": { "width": 160, "height": 90, "fps": 30 },
+            "composition": [{ "type": "slide", "scenes": [
+                { "at": 0, "duration": 1.05, "children": [] },
+                { "duration": 1.05, "children": [] }
+            ]}]
+        }"#;
+        assert_eq!(
+            frames(json),
+            63,
+            "v2's auto placement carries the cursor in seconds, so it quantises once too"
+        );
+    }
+
+    #[test]
+    fn a_scene_absorbing_the_half_frame_keeps_the_neighbour_whole() {
+        let json = r#"{
+            "video": { "width": 160, "height": 90, "fps": 30 },
+            "scenes": [
+                { "duration": 1.05, "children": [] },
+                { "duration": 1.05, "children": [] }
+            ]
+        }"#;
+        let scenario = crate::loader::load_scenario_from_source(None, Some(json)).unwrap();
+        let spans = slide_scene_spans(&scenario.views[0], 30);
+        assert_eq!(
+            (spans[0].frames(), spans[1].frames()),
+            (32, 31),
+            "the half frame is paid once, by whichever scene the boundary rounds toward — \
+             it is never paid twice"
+        );
+        assert_eq!(
+            spans[0].end, spans[1].start,
+            "consecutive scenes with no transition must share a boundary exactly, or a frame \
+             is dropped or rendered twice"
+        );
+    }
+
+    #[test]
+    fn transitions_still_overlap_by_their_own_rounded_length() {
+        let json = r#"{
+            "video": { "width": 160, "height": 90, "fps": 30 },
+            "scenes": [
+                { "duration": 1.0, "children": [] },
+                { "duration": 1.0, "children": [],
+                  "transition": { "type": "iris", "duration": 0.6 } }
+            ]
+        }"#;
+        assert_eq!(
+            frames(json),
+            42,
+            "1.0 + 1.0 - 0.6 is 1.4s, which is 42 frames — the figure the issue's table \
+             reports as actually rendered"
+        );
+        let scenario = crate::loader::load_scenario_from_source(None, Some(json)).unwrap();
+        let spans = slide_scene_spans(&scenario.views[0], 30);
+        assert_eq!(
+            spans[0].end - spans[1].start,
+            18,
+            "the overlap is the transition, and it must still be 0.6s worth of frames"
+        );
+    }
+
+    #[test]
+    fn the_audio_timeline_lands_on_the_same_boundaries_as_the_frames() {
+        let json = r#"{
+            "video": { "width": 160, "height": 90, "fps": 30 },
+            "scenes": [
+                { "duration": 1.05, "children": [] },
+                { "duration": 1.05, "children": [] },
+                { "duration": 1.05, "children": [] }
+            ]
+        }"#;
+        let scenario = crate::loader::load_scenario_from_source(None, Some(json)).unwrap();
+        let starts = crate::encode::video_audio::scene_start_offsets(&scenario);
+        let spans = slide_scene_spans(&scenario.views[0], 30);
+        for (i, span) in spans.iter().enumerate() {
+            assert!(
+                (starts[0][i] - span.start as f64 / 30.0).abs() < 1e-9,
+                "scene {i}'s audio slice starts at {}s but its first frame is {} — an embedded \
+                 video's sound would drift from its own picture",
+                starts[0][i],
+                span.start
+            );
+        }
+        let announced = crate::encode::video_audio::resolved_scenario_duration(&scenario);
+        let rendered = build_frame_tasks(&scenario).len() as f64 / 30.0;
+        assert!(
+            (announced - rendered).abs() < 1e-9,
+            "the announced duration ({announced}s) must be the rendered frame count \
+             ({rendered}s), not a sum of rounded scene lengths"
+        );
     }
 }
 
