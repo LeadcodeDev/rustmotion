@@ -48,6 +48,7 @@ Practical consequence: do not combine a fast `camera.motion_blur` with a compone
 
 - **`style.animation: [{ "name": "motion_blur" }]`** — per component, ghost copies or a `smear` filter. Does nothing for a camera move.
 - **the `whip` / `zoom_blur` transitions** — those composite two already-rendered frame buffers between scenes; they never re-render anything. See [rules/whip-transition.md](whip-transition.md).
+- **`scene.shake`** — a declarative, beat-synced handheld or impact wobble, added to the camera pose on top of `camera.keyframes` (`camera_pose_at`). It works with no `camera` block at all. Reach for it for a shaky-cam feel; `camera.motion_blur` only blurs motion that is already happening, pan or shake, and creates none of its own.
 - **`camera.focus`/`aperture`** — defocus by depth plane, a static property of the shot rather than a function of its movement. See [rules/depth-of-field.md](depth-of-field.md).
 
 ## Where it lives

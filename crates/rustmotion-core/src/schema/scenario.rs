@@ -911,6 +911,60 @@ pub struct Camera {
     pub motion_blur: Option<CameraMotionBlurConfig>,
 }
 
+impl Camera {
+    pub fn resolve_property(&self, property: &str, time: f64) -> f32 {
+        let track = self
+            .keyframes
+            .iter()
+            .find(|k| k.property == property)
+            .filter(|t| !t.values.is_empty());
+        let Some(track) = track else {
+            return self.static_property(property);
+        };
+
+        let points = &track.values;
+        if time <= points[0].time {
+            return points[0].value;
+        }
+        if time >= points[points.len() - 1].time {
+            return points[points.len() - 1].value;
+        }
+        for i in 0..points.len() - 1 {
+            let p0 = &points[i];
+            let p1 = &points[i + 1];
+            if time >= p0.time && time <= p1.time {
+                let segment_duration = p1.time - p0.time;
+                let segment_t = if segment_duration.abs() < 1e-9 {
+                    1.0
+                } else {
+                    (time - p0.time) / segment_duration
+                };
+                let segment_easing = p0.easing.as_ref().unwrap_or(&track.easing);
+                let eased = crate::engine::animator::ease(segment_t, segment_easing) as f32;
+                return p0.value + (p1.value - p0.value) * eased;
+            }
+        }
+        points[points.len() - 1].value
+    }
+
+    fn static_property(&self, property: &str) -> f32 {
+        match property {
+            "x" => self.x,
+            "y" => self.y,
+            "zoom" => self.zoom,
+            "rotation" => self.rotation,
+            "focus" => self.focus,
+            "aperture" => self.aperture,
+            "rotate_x" => self.rotate_x,
+            "rotate_y" => self.rotate_y,
+            "perspective" => self.perspective,
+            "origin.x" => self.origin.as_ref().map(|o| o.x).unwrap_or(0.0),
+            "origin.y" => self.origin.as_ref().map(|o| o.y).unwrap_or(0.0),
+            _ => 0.0,
+        }
+    }
+}
+
 /// Shutter-window camera motion blur, opt-in via `camera.motion_blur`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1059,6 +1113,11 @@ pub struct CameraKeyframePoint {
     pub time: f64,
     /// Value at this time.
     pub value: f32,
+    /// Easing for the segment starting at this keyframe, overriding the
+    /// track-level `easing` for that segment only — same convention as a
+    /// component `Keyframe`.
+    #[serde(default)]
+    pub easing: Option<EasingType>,
 }
 
 fn default_camera_focus() -> f32 {
@@ -2125,5 +2184,73 @@ mod scene_shake_and_flash_tests {
         assert_eq!(scene.effects.len(), 2);
         assert!(matches!(scene.effects[0], PostEffect::Flash { .. }));
         assert!(matches!(scene.effects[1], PostEffect::Grain { .. }));
+    }
+}
+
+#[cfg(test)]
+mod camera_keyframe_easing_tests {
+    use super::*;
+
+    fn camera_with_x_track(easing_on_first_point: Option<EasingType>) -> Camera {
+        let json = serde_json::json!({
+            "keyframes": [{
+                "property": "x",
+                "easing": "linear",
+                "values": [
+                    { "time": 0.0, "value": 0.0, "easing": easing_on_first_point },
+                    { "time": 1.0, "value": 100.0 }
+                ]
+            }]
+        });
+        serde_json::from_value(json).expect("camera with one x track deserializes")
+    }
+
+    #[test]
+    fn a_keyframes_own_easing_overrides_the_track_easing_for_its_segment() {
+        let linear = camera_with_x_track(None);
+        let linear_mid = linear.resolve_property("x", 0.5);
+        assert!(
+            (linear_mid - 50.0).abs() < 1e-4,
+            "with no per-keyframe easing the track's own linear easing must still apply, \
+             got {linear_mid}"
+        );
+
+        let eased = camera_with_x_track(Some(EasingType::EaseIn));
+        let eased_mid = eased.resolve_property("x", 0.5);
+        assert!(
+            (eased_mid - 12.5).abs() < 1e-4,
+            "a per-keyframe `ease_in` on the segment's starting point must override the \
+             track's `linear` for that segment only (ease_in_cubic(0.5) = 0.125, so \
+             0 + 100 * 0.125 = 12.5), got {eased_mid}"
+        );
+    }
+
+    #[test]
+    fn per_keyframe_easing_only_affects_the_segment_it_starts() {
+        let json = serde_json::json!({
+            "keyframes": [{
+                "property": "x",
+                "easing": "linear",
+                "values": [
+                    { "time": 0.0, "value": 0.0, "easing": "ease_in" },
+                    { "time": 1.0, "value": 100.0 },
+                    { "time": 2.0, "value": 200.0 }
+                ]
+            }]
+        });
+        let camera: Camera = serde_json::from_value(json).expect("camera deserializes");
+
+        let first_segment_mid = camera.resolve_property("x", 0.5);
+        assert!(
+            (first_segment_mid - 12.5).abs() < 1e-4,
+            "the first segment must still use its own ease_in, got {first_segment_mid}"
+        );
+
+        let second_segment_mid = camera.resolve_property("x", 1.5);
+        assert!(
+            (second_segment_mid - 150.0).abs() < 1e-4,
+            "the second segment has no easing of its own and must fall back to the track's \
+             linear easing, not inherit ease_in from the first segment, got {second_segment_mid}"
+        );
     }
 }
