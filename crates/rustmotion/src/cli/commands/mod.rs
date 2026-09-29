@@ -2,6 +2,7 @@ mod audio_report;
 mod batch;
 mod captions;
 mod geometry;
+mod icons;
 mod info;
 mod migrate;
 mod render;
@@ -15,6 +16,7 @@ pub mod validation;
 
 pub use batch::cmd_batch;
 pub use captions::cmd_captions;
+pub use icons::{cmd_icons_check, cmd_icons_prefetch};
 pub use info::cmd_info;
 pub use migrate::cmd_migrate;
 pub use render::{cmd_render, cmd_watch};

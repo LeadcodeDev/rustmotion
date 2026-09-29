@@ -210,6 +210,23 @@ Shows information about a scenario (duration, scene count, dimensions, ...).
 rustmotion info scenario.json
 ```
 
+### `rustmotion icons`
+
+Fills the icon cache so a later render needs no network. `icon` resolves names
+like `lucide:home` through `api.iconify.design`, and a scenario chooses that
+name, so an icon missing from the cache is refused by default — the same rule as
+Google Fonts.
+
+```bash
+rustmotion icons check -f scenario.json      # list what is missing, fetch nothing
+rustmotion icons prefetch -f scenario.json   # download them once
+rustmotion render -f scenario.json           # renders offline from here on
+```
+
+Running `prefetch` is itself the opt-in, so it needs no flag. For a one-shot
+render where filling the cache first is not worth a second command, pass
+`--allow-remote-icons`.
+
 ### `rustmotion skills`
 
 Manages the built-in Claude Code skills — `install [--global]`, `uninstall [--global]`, `list`, `show <name>`. See [Claude Code Skills](#claude-code-skills).

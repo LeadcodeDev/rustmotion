@@ -7,7 +7,9 @@ mod skills;
 mod tui;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use rustmotion::engine::renderer::{set_remote_font_policy, RemoteFontPolicy};
+use rustmotion::engine::renderer::{
+    set_remote_font_policy, set_remote_icon_policy, RemoteFontPolicy, RemoteIconPolicy,
+};
 use rustmotion::error::{Result, RustmotionError};
 use rustmotion::schema::ResolvedScenario;
 use std::collections::HashMap;
@@ -36,6 +38,12 @@ struct Cli {
     /// chooses the target of that request, so it is denied by default.
     #[arg(long, global = true)]
     allow_remote_fonts: bool,
+
+    /// Allow fetching an icon that is not already in the icon cache. A scenario chooses
+    /// the target of that request, so it is denied by default. `rustmotion icons prefetch`
+    /// fills the cache once instead of opting in on every run.
+    #[arg(long, global = true)]
+    allow_remote_icons: bool,
 }
 
 #[derive(Subcommand)]
@@ -381,6 +389,12 @@ enum Commands {
         file: PathBuf,
     },
 
+    /// Fill the icon cache so a later render needs no network
+    Icons {
+        #[command(subcommand)]
+        action: IconsAction,
+    },
+
     /// Manage Claude Code skills for rustmotion
     Skills {
         #[command(subcommand)]
@@ -407,6 +421,24 @@ Examples:
   #   \"config\": { \"words\": { \"type\": \"array\", \"default\": [] } }
   #   ... { \"type\": \"caption\", \"mode\": \"word_pop\", \"words\": \"$words\" } ...
   rustmotion render -f scenario.json --props words.json";
+
+#[derive(Subcommand)]
+enum IconsAction {
+    /// Download every icon a scenario names into the icon cache. Running this is
+    /// itself the opt-in, so it needs no --allow-remote-icons.
+    Prefetch {
+        /// Path to the JSON scenario file
+        #[arg(short, long)]
+        file: PathBuf,
+    },
+    /// Report which of a scenario's icons are missing from the cache, without
+    /// fetching anything
+    Check {
+        /// Path to the JSON scenario file
+        #[arg(short, long)]
+        file: PathBuf,
+    },
+}
 
 #[derive(Subcommand)]
 enum SkillsAction {
@@ -683,6 +715,10 @@ pub fn run() -> Result<()> {
         set_remote_font_policy(RemoteFontPolicy::Allow);
     }
 
+    if cli.allow_remote_icons {
+        set_remote_icon_policy(RemoteIconPolicy::Allow);
+    }
+
     match cli.command {
         Commands::Render {
             file,
@@ -914,6 +950,10 @@ pub fn run() -> Result<()> {
         }
         Commands::Schema { output } => commands::cmd_schema(output.as_deref()),
         Commands::Info { file } => commands::cmd_info(&file),
+        Commands::Icons { action } => match action {
+            IconsAction::Prefetch { file } => commands::cmd_icons_prefetch(&file, cli.quiet),
+            IconsAction::Check { file } => commands::cmd_icons_check(&file, cli.quiet),
+        },
         Commands::Skills { action } => match action {
             SkillsAction::Install { global } => skills::install(global),
             SkillsAction::Uninstall { global } => skills::uninstall(global),

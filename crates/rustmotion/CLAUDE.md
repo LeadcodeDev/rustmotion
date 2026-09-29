@@ -50,6 +50,32 @@ A face **already in the cache** asks for nothing: the refusal fires at the exact
 moment a request would leave. An offline render that has its fonts keeps working
 without the flag.
 
+## Icons: the network is denied by default too
+
+`icon` resolves `lucide:home` through `api.iconify.design`, and a scenario picks
+that name, so the same argument as fonts applies: the file chooses the target of
+the request. An icon **missing from the cache** (`~/.cache/rustmotion/icons`) is
+refused by name, with the URL that was not called and the path to drop an SVG
+into. An icon already cached asks for nothing, so an offline render that has its
+icons keeps working.
+
+Two ways in, and the first is the one to reach for:
+
+```bash
+rustmotion icons check -f scenario.json      # what is missing, fetches nothing
+rustmotion icons prefetch -f scenario.json   # fill the cache once
+rustmotion render -f scenario.json           # then render offline, no flag
+```
+
+`prefetch` needs no `--allow-remote-icons`: running it *is* the opt-in. The flag
+exists for a one-shot render where filling the cache first is not worth the extra
+command.
+
+> The gate sits **after** the cache read and after the pre-#425 name migration, so
+> a cache filled under the old `{slug}-{colour}-{w}x{h}.svg` naming still resolves
+> offline. Denying the network must not break a render that already has what it
+> needs.
+
 ## Encodage
 
 - ffmpeg is auto-detected and used by default. H.264 output is **8-bit** (`yuv420p`, `high` profile), which QuickTime and Safari play; `--codec h264_10bit` trades that for `yuv420p10le`/`high10`, which is banding-free on dark gradients and refused by both players.
