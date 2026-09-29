@@ -4,6 +4,7 @@ mod skills;
 mod tui;
 
 use clap::{CommandFactory, Parser, Subcommand};
+use rustmotion::engine::renderer::{set_remote_font_policy, RemoteFontPolicy};
 use rustmotion::error::{Result, RustmotionError};
 use rustmotion::schema::ResolvedScenario;
 use std::collections::HashMap;
@@ -27,6 +28,11 @@ struct Cli {
     /// Number of parallel rendering threads (defaults to all cores)
     #[arg(long, global = true)]
     threads: Option<usize>,
+
+    /// Allow fetching a Google font that is not already in the font cache. A scenario
+    /// chooses the target of that request, so it is denied by default.
+    #[arg(long, global = true)]
+    allow_remote_fonts: bool,
 }
 
 #[derive(Subcommand)]
@@ -668,6 +674,10 @@ pub fn run() -> Result<()> {
             .num_threads(threads)
             .build_global()
             .ok();
+    }
+
+    if cli.allow_remote_fonts {
+        set_remote_font_policy(RemoteFontPolicy::Allow);
     }
 
     match cli.command {

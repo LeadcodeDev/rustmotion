@@ -2,6 +2,7 @@ use crate::cli::tui;
 use crate::cli::OutputFormat;
 use rustmotion::encode;
 use rustmotion::engine;
+use rustmotion::engine::renderer::invalidate_font_caches;
 use rustmotion::error::{Result, RustmotionError};
 use rustmotion::schema::ResolvedScenario;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,7 @@ fn clear_all_media_caches() {
     engine::clear_asset_cache();
     engine::gif_cache().clear();
     engine::video_frame_cache().clear();
-    rustmotion_core::engine::renderer::invalidate_font_caches();
+    invalidate_font_caches();
 }
 
 #[allow(clippy::too_many_arguments)]

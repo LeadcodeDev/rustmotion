@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 use crate::components::{ChildComponent, Component};
+use crate::encode::video::slide_scene_spans;
 use crate::schema::{AudioTrack, ResolvedScenario, ViewType};
 
 pub struct TimelineOffsets {
@@ -29,7 +30,7 @@ pub fn timeline_offsets(scenario: &ResolvedScenario) -> TimelineOffsets {
 
         match view.view_type {
             ViewType::Slide => {
-                let spans = crate::encode::video::slide_scene_spans(view, scenario.video.fps);
+                let spans = slide_scene_spans(view, scenario.video.fps);
                 let scene_offsets: Vec<f64> = spans
                     .iter()
                     .map(|span| cursor + span.start as f64 / fps)

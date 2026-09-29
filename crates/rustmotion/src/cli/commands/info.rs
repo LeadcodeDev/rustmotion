@@ -2,6 +2,7 @@ use rustmotion::components::intrinsic::{GradientTextIntrinsic, TextIntrinsic};
 use rustmotion::components::{ChildComponent, Component};
 use rustmotion::core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
 use rustmotion::encode::build_frame_tasks;
+use rustmotion::encode::video::slide_scene_spans;
 use rustmotion::engine::animator::spring_rest_time;
 use rustmotion::engine::render::deserialize_children;
 use rustmotion::error::Result;
@@ -52,7 +53,7 @@ pub fn cmd_info(input: &PathBuf) -> Result<()> {
             view.scenes.len()
         );
         let spans = match view.view_type {
-            schema::ViewType::Slide => rustmotion::encode::video::slide_scene_spans(view, fps),
+            schema::ViewType::Slide => slide_scene_spans(view, fps),
             schema::ViewType::World => Vec::new(),
         };
         for (si, scene) in view.scenes.iter().enumerate() {

@@ -1,7 +1,7 @@
 use crate::schema::{
-    Animation, AnimationEffect, AnimationPreset, CharAnimPreset, EasingType, GlowConfig, Keyframe,
-    KeyframeValue, MotionPathConfig, OrbitConfig, PresetConfig, SpringConfig, TextAnimDirection,
-    TextAnimGranularity, WiggleConfig,
+    Animation, AnimationEffect, AnimationPreset, BurstConfig, CharAnimPreset, EasingType,
+    GlowConfig, Keyframe, KeyframeValue, MotionPathConfig, OrbitConfig, PresetConfig, SpringConfig,
+    TextAnimDirection, TextAnimGranularity, WiggleConfig,
 };
 
 pub const DEFAULT_CHAR_BLUR_SIGMA: f32 = 14.0;
@@ -338,7 +338,7 @@ pub fn shatter_progress(cfg: &crate::schema::ShatterConfig, time: f64) -> Option
     }
 }
 
-pub fn burst_progress(cfg: &crate::schema::BurstConfig, time: f64) -> Option<f32> {
+pub fn burst_progress(cfg: &BurstConfig, time: f64) -> Option<f32> {
     if cfg.duration <= 0.0 {
         return None;
     }
@@ -3270,7 +3270,6 @@ mod repeat_cycle_tests {
 #[cfg(test)]
 mod burst_progress_tests {
     use super::*;
-    use crate::schema::BurstConfig;
 
     fn cfg() -> BurstConfig {
         BurstConfig {

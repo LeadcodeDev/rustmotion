@@ -14,8 +14,10 @@ use crate::css::style::{
 use crate::css::units::{
     parse_origin_component, Length, LengthContext, LengthPercentage, ParsedLength,
 };
+use crate::engine::animator::{burst_progress, burst_stroke_span};
 use crate::engine::box_tree::{BoxKind, BoxNode, NodeId};
 use crate::engine::layout_pass::{BoxLayout, LayoutResult};
+use crate::schema::{AnimationEffect as SchemaAnimationEffect, BurstConfig};
 
 #[derive(Debug, Clone, Copy)]
 pub struct PaintFrame {
@@ -902,12 +904,12 @@ fn paint_shattered_node(
 
 const MAX_BURST_COUNT: u32 = 64;
 
-fn active_burst(css: &CssStyle, time: f64) -> Option<(&crate::schema::BurstConfig, f32)> {
+fn active_burst(css: &CssStyle, time: f64) -> Option<(&BurstConfig, f32)> {
     let cfg = css.animation.iter().find_map(|e| match e {
-        crate::schema::AnimationEffect::Burst(c) => Some(c),
+        SchemaAnimationEffect::Burst(c) => Some(c),
         _ => None,
     })?;
-    crate::engine::animator::burst_progress(cfg, time).map(|progress| (cfg, progress))
+    burst_progress(cfg, time).map(|progress| (cfg, progress))
 }
 
 fn burst_track_start(half_width: f32, half_height: f32, dir: (f32, f32)) -> f32 {
@@ -929,12 +931,7 @@ fn burst_track_start(half_width: f32, half_height: f32, dir: (f32, f32)) -> f32 
     }
 }
 
-fn paint_burst(
-    canvas: &Canvas,
-    box_layout: &BoxLayout,
-    cfg: &crate::schema::BurstConfig,
-    progress: f32,
-) {
+fn paint_burst(canvas: &Canvas, box_layout: &BoxLayout, cfg: &BurstConfig, progress: f32) {
     let count = cfg.count.clamp(1, MAX_BURST_COUNT);
     let length = cfg.length.max(0.0);
     let width = cfg.width.max(0.0);
@@ -962,7 +959,7 @@ fn paint_burst(
         let dir = (angle.cos(), angle.sin());
         let stroke_length = length * (1.0 + (shatter_hash(cfg.seed, i, 12) - 0.5) * jitter);
         let phase = shatter_hash(cfg.seed, i, 13) * jitter * 0.5;
-        let (tail, head) = crate::engine::animator::burst_stroke_span(progress, phase);
+        let (tail, head) = burst_stroke_span(progress, phase);
         if (head - tail) * stroke_length < 0.5 {
             continue;
         }
