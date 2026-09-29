@@ -26,9 +26,7 @@ const SERDE_ALIASES: &[(&str, &str, &[&str])] = &[
     ("CardJustify", "space_evenly", &["space-evenly"]),
     ("AnimationPreset", "float3d", &["float_3d"]),
     ("AnimationEffect", "float3d", &["float_3d"]),
-    ("Component", "progress", &["progress_bar"]),
     ("ComponentBase", "progress", &["progress_bar"]),
-    ("ChildComponent", "progress", &["progress_bar"]),
     ("ChildComponentBase", "progress", &["progress_bar"]),
 ];
 
@@ -63,6 +61,7 @@ const SERDE_FIELD_ALIASES: &[(&str, &str, &[&str])] = &[
     ("BorderRadius", "top-right", &["top_right"]),
     ("BorderRadius", "bottom-right", &["bottom_right"]),
     ("BorderRadius", "bottom-left", &["bottom_left"]),
+    ("GradientTextStop", "position", &["offset"]),
 ];
 
 fn widen_properties_with(value: &mut serde_json::Value, canonical: &str, aliases: &[&str]) {
@@ -318,6 +317,67 @@ mod serde_alias_exposure_tests {
              invalid what the engine accepts. Add each of these to SERDE_ALIASES or \
              SERDE_FIELD_ALIASES in this file:\n  {}",
             missing.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn every_entry_in_the_two_tables_actually_lands_in_the_exported_schema() {
+        let schema = build_schema();
+        let defs = schema
+            .get("definitions")
+            .and_then(|d| d.as_object())
+            .expect("definitions");
+
+        let mut missing: Vec<String> = Vec::new();
+
+        for (definition, canonical, aliases) in SERDE_ALIASES {
+            let Some(entry) = defs.get(*definition) else {
+                continue;
+            };
+            let text = entry.to_string();
+            for alias in *aliases {
+                if !text.contains(&format!("\"{alias}\"")) {
+                    missing.push(format!("{definition}: enum {canonical} lacks {alias}"));
+                }
+            }
+        }
+
+        for (definition, canonical, aliases) in SERDE_FIELD_ALIASES {
+            let Some(entry) = defs.get(*definition) else {
+                missing.push(format!("{definition}: no such definition"));
+                continue;
+            };
+            let text = entry.to_string();
+            for alias in *aliases {
+                if !text.contains(&format!("\"{alias}\"")) {
+                    missing.push(format!(
+                        "{definition}: property {canonical} has no {alias} alongside it"
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "a table entry that names a definition or a canonical the schema does not carry is \
+             inert, and inert is exactly how this drifts — the wider scan over the sources \
+             cannot see it, because an alias string often already appears elsewhere in the \
+             schema as some other type's field name:\n  {}",
+            missing.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn a_gradient_text_stop_accepts_both_spellings_of_its_position() {
+        let schema = build_schema();
+        let stop = schema
+            .pointer("/definitions/GradientTextStop/properties")
+            .and_then(|v| v.as_object())
+            .expect("GradientTextStop carries properties");
+        assert!(
+            stop.contains_key("position") && stop.contains_key("offset"),
+            "the parser accepts offset as an alias, so --strict-attrs must not reject it: {:?}",
+            stop.keys().collect::<Vec<_>>()
         );
     }
 

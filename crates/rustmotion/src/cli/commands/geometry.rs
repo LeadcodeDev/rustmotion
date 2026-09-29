@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use rustmotion::components::box_builder::{
     build_scene_from_refs, component_kind, effective_effects, BuildAnimationCtx,
 };
+use rustmotion::components::connector::RoutingMode;
 use rustmotion::components::intrinsic::{
     CaptionIntrinsic, GradientTextIntrinsic, RichTextIntrinsic, TableIntrinsic, TextIntrinsic,
 };
@@ -231,6 +232,29 @@ fn bbox_of(layout: &BoxLayout) -> BBox {
 
 const ARROW_HEAD_BBOX_PADDING: f32 = 16.0;
 
+fn quadratic_bulge_point(x1: f32, y1: f32, x2: f32, y2: f32, curve: f32) -> (f32, f32) {
+    let mid_x = (x1 + x2) / 2.0;
+    let mid_y = (y1 + y2) / 2.0;
+    let dx = x2 - x1;
+    let dy = y2 - y1;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < f32::EPSILON {
+        return (mid_x, mid_y);
+    }
+    let perp_x = -dy / len * curve * len * 0.3;
+    let perp_y = dx / len * curve * len * 0.3;
+    (mid_x + perp_x, mid_y + perp_y)
+}
+
+fn arrowhead_pad(width: f32, arrow_size: f32, arrow_start: bool, arrow_end: bool) -> f32 {
+    let head_pad = if arrow_start || arrow_end {
+        ARROW_HEAD_BBOX_PADDING + arrow_size.max(0.0)
+    } else {
+        0.0
+    };
+    width.max(0.0) / 2.0 + head_pad
+}
+
 fn endpoint_extent(component: &Component) -> Option<(f32, f32, f32, f32, f32)> {
     match component {
         Component::Line(Line {
@@ -255,8 +279,11 @@ fn endpoint_extent(component: &Component) -> Option<(f32, f32, f32, f32, f32)> {
             cp,
             cp1,
             cp2,
+            curve,
             width,
             arrow_size,
+            arrow_start,
+            arrow_end,
             ..
         }) => {
             let mut min_x = x1.min(*x2);
@@ -272,24 +299,43 @@ fn endpoint_extent(component: &Component) -> Option<(f32, f32, f32, f32, f32)> {
                 min_y = min_y.min(p.y);
                 max_y = max_y.max(p.y);
             }
-            let pad = width.max(0.0) / 2.0 + ARROW_HEAD_BBOX_PADDING + arrow_size.max(0.0);
+            if cp.is_none() && cp1.is_none() && cp2.is_none() {
+                if let Some(curve) = curve {
+                    let (bulge_x, bulge_y) = quadratic_bulge_point(*x1, *y1, *x2, *y2, *curve);
+                    min_x = min_x.min(bulge_x);
+                    max_x = max_x.max(bulge_x);
+                    min_y = min_y.min(bulge_y);
+                    max_y = max_y.max(bulge_y);
+                }
+            }
+            let pad = arrowhead_pad(*width, *arrow_size, *arrow_start, *arrow_end);
             Some((min_x, min_y, max_x, max_y, pad))
         }
         Component::Connector(Connector {
             from,
             to,
+            routing,
+            curvature,
             width,
             arrow_size,
+            arrow_start,
+            arrow_end,
             ..
         }) => {
-            let pad = width.max(0.0) / 2.0 + ARROW_HEAD_BBOX_PADDING + arrow_size.max(0.0);
-            Some((
-                from.x.min(to.x),
-                from.y.min(to.y),
-                from.x.max(to.x),
-                from.y.max(to.y),
-                pad,
-            ))
+            let mut min_x = from.x.min(to.x);
+            let mut max_x = from.x.max(to.x);
+            let mut min_y = from.y.min(to.y);
+            let mut max_y = from.y.max(to.y);
+            if matches!(routing, RoutingMode::Curved) {
+                let (bulge_x, bulge_y) =
+                    quadratic_bulge_point(from.x, from.y, to.x, to.y, *curvature);
+                min_x = min_x.min(bulge_x);
+                max_x = max_x.max(bulge_x);
+                min_y = min_y.min(bulge_y);
+                max_y = max_y.max(bulge_y);
+            }
+            let pad = arrowhead_pad(*width, *arrow_size, *arrow_start, *arrow_end);
+            Some((min_x, min_y, max_x, max_y, pad))
         }
         _ => None,
     }
@@ -529,19 +575,34 @@ fn hint_for_viewport(component: &Component, axis: Axis, bbox: &BBox, vp: (u32, u
             "card width must be ≥ {:.0}px (counter natural width)",
             bbox.w
         ),
-        _ => match axis {
-            Axis::X => format!(
-                "shift x to fit [0..{:.0}], current right edge is {:.0}",
-                vw,
-                bbox.x + bbox.w
-            ),
-            Axis::Y => format!(
-                "shift y to fit [0..{:.0}], current bottom edge is {:.0}",
-                vh,
-                bbox.y + bbox.h
-            ),
-            Axis::Both => "reposition the component to stay inside the viewport".to_string(),
-        },
+        _ => {
+            let eps = 0.5;
+            match axis {
+                Axis::X if bbox.x < -eps => {
+                    format!(
+                        "shift x to fit [0..{:.0}], current left edge is {:.0}",
+                        vw, bbox.x
+                    )
+                }
+                Axis::X => format!(
+                    "shift x to fit [0..{:.0}], current right edge is {:.0}",
+                    vw,
+                    bbox.x + bbox.w
+                ),
+                Axis::Y if bbox.y < -eps => {
+                    format!(
+                        "shift y to fit [0..{:.0}], current top edge is {:.0}",
+                        vh, bbox.y
+                    )
+                }
+                Axis::Y => format!(
+                    "shift y to fit [0..{:.0}], current bottom edge is {:.0}",
+                    vh,
+                    bbox.y + bbox.h
+                ),
+                Axis::Both => "reposition the component to stay inside the viewport".to_string(),
+            }
+        }
     }
 }
 
@@ -1369,6 +1430,9 @@ pub fn check_off_grid_cuts(scenario: &ResolvedScenario) -> Vec<String> {
     }
 
     let tasks = rustmotion::encode::build_frame_tasks(scenario);
+    warnings.extend(rustmotion::encode::video::v2_dropped_transition_warnings(
+        scenario,
+    ));
 
     let mut cut_frame: HashMap<(usize, usize), u32> = HashMap::new();
     for task in &tasks {
@@ -3230,6 +3294,104 @@ mod tests {
                 .any(|v| v.component == "line" && v.kind == ViolationKind::ViewportOverflow && v.axis == Axis::X),
             "a line whose x1 pokes past x=0 must be reported even though its own box (x=0) does not: {:?}",
             violations
+        );
+    }
+
+    #[test]
+    fn an_arrow_with_no_arrowhead_near_the_edge_does_not_false_positive_on_head_padding() {
+        let json = r##"{"video":{"width":1920,"height":1080,"fps":30,"background":"#000000"},
+ "scenes":[{"duration":1.0,"children":[
+  {"type":"arrow","position":"absolute","x":0,"y":0,"x1":2,"y1":500,"x2":100,"y2":500,
+   "arrow_start":false,"arrow_end":false,"color":"#FFFFFF","width":4}]}]}"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .all(|v| !(v.component == "arrow" && v.kind == ViolationKind::ViewportOverflow)),
+            "an arrow with neither arrow_start nor arrow_end must not pay the arrowhead padding \
+             it never draws: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn a_curved_arrow_that_bulges_off_the_top_edge_is_caught() {
+        let json = r##"{"video":{"width":1920,"height":1080,"fps":30,"background":"#000000"},
+ "scenes":[{"duration":1.0,"children":[
+  {"type":"arrow","position":"absolute","x":0,"y":0,"x1":1700,"y1":100,"x2":200,"y2":100,
+   "curve":0.5,"color":"#FFFFFF","width":4}]}]}"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.component == "arrow" && v.kind == ViolationKind::ViewportOverflow),
+            "a `curve` that bulges the arrow's implicit control point above y=0 must be caught, \
+             not silently clipped at render: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn overflow_hint_names_the_left_edge_not_the_right_for_a_negative_x_overflow() {
+        let json = r##"{"video":{"width":1920,"height":1080,"fps":30,"background":"#000000"},
+ "scenes":[{"duration":1.0,"children":[
+  {"type":"shape","shape":"rect","position":"absolute","x":-102,"y":10,
+   "size":{"width":50,"height":50},"fill":"#ff0000"}]}]}"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        let v = violations
+            .iter()
+            .find(|v| v.kind == ViolationKind::ViewportOverflow && v.axis == Axis::X)
+            .unwrap_or_else(|| panic!("expected a ViewportOverflow: {:?}", violations));
+        assert!(
+            v.hint.contains("left edge") && v.hint.contains("-102"),
+            "a shape poking off the left edge at x=-102 must name the left edge in its hint, \
+             not fabricate a right edge: {:?}",
+            v.hint
+        );
+    }
+
+    #[test]
+    fn overflow_hint_names_the_top_edge_not_the_bottom_for_a_negative_y_overflow() {
+        let json = r##"{"video":{"width":1920,"height":1080,"fps":30,"background":"#000000"},
+ "scenes":[{"duration":1.0,"children":[
+  {"type":"shape","shape":"rect","position":"absolute","x":10,"y":-75,
+   "size":{"width":50,"height":50},"fill":"#ff0000"}]}]}"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        let v = violations
+            .iter()
+            .find(|v| v.kind == ViolationKind::ViewportOverflow && v.axis == Axis::Y)
+            .unwrap_or_else(|| panic!("expected a ViewportOverflow: {:?}", violations));
+        assert!(
+            v.hint.contains("top edge") && v.hint.contains("-75"),
+            "a shape poking off the top edge at y=-75 must name the top edge in its hint, \
+             not fabricate a bottom edge: {:?}",
+            v.hint
+        );
+    }
+
+    const V2_COMPOSITED_DROPPED_TRANSITION_JSON: &str = r##"{"timing":"v2",
+ "video":{"width":320,"height":180,"fps":30,"background":"#000000"},
+ "composition":[{"type":"slide","scenes":[
+  {"at":0,"duration":2.0,"background":"#FF0000","children":[]},
+  {"at":0.5,"duration":2.0,"background":"#00FF00",
+   "transition":{"type":"fade","duration":0.2},"children":[]}]}]}"##;
+
+    #[test]
+    fn dropped_v2_transition_warning_is_reported_exactly_once_by_off_grid_cuts() {
+        let scenario = parse(V2_COMPOSITED_DROPPED_TRANSITION_JSON);
+        let warnings = check_off_grid_cuts(&scenario);
+        let dropped_transition_warnings = warnings
+            .iter()
+            .filter(|w| w.contains("both overlaps scene") && w.contains("declares a `transition`"))
+            .count();
+        assert_eq!(
+            dropped_transition_warnings, 1,
+            "expected exactly one dropped-transition warning from the single authoritative \
+             call site, got {dropped_transition_warnings}: {warnings:?}"
         );
     }
 }
