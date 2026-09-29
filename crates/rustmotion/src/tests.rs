@@ -3822,3 +3822,100 @@ mod still_runs_the_audio_analysis_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod icon_render_tests {
+    use crate::encode::video::{build_frame_tasks, render_frame_task, FrameTask};
+    use crate::loader::load_scenario_from_source;
+    use rustmotion_core::engine::renderer::{icon_cache_dir, icon_source_cache_file};
+
+    const W: usize = 160;
+    const H: usize = 160;
+
+    const A_BAR: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4"><path d="M2 12h20"/></svg>"#;
+
+    struct SeededIcon {
+        name: String,
+        file: std::path::PathBuf,
+    }
+
+    impl SeededIcon {
+        fn new(tag: &str) -> Self {
+            let name = format!("rmtest{tag}:bar");
+            let dir = icon_cache_dir();
+            std::fs::create_dir_all(&dir).expect("cache dir");
+            let file = icon_source_cache_file(&dir, &name);
+            std::fs::write(&file, A_BAR).expect("seed the icon so the test needs no network");
+            Self { name, file }
+        }
+    }
+
+    impl Drop for SeededIcon {
+        fn drop(&mut self) {
+            std::fs::remove_file(&self.file).ok();
+        }
+    }
+
+    fn render_first_frame(icon: &str) -> Vec<u8> {
+        let json = format!(
+            r##"{{
+              "version": "1.0",
+              "video": {{ "width": {W}, "height": {H}, "fps": 30, "background": "#FFFFFF" }},
+              "scenes": [{{ "duration": 1.0, "children": [
+                {{ "type": "icon", "icon": "{icon}",
+                   "style": {{ "position": "absolute", "left": 38, "top": 38,
+                              "width": 84, "height": 84, "color": "#2563EB" }} }}
+              ]}}]
+            }}"##
+        );
+        let scenario = load_scenario_from_source(None, Some(&json)).expect("load");
+        crate::engine::preload::preload_scenario_assets(&scenario).expect("preload");
+        let tasks = build_frame_tasks(&scenario);
+        let task = tasks
+            .iter()
+            .find(|t| matches!(t, FrameTask::Normal { .. }))
+            .expect("a normal frame");
+        render_frame_task(&scenario.video, &scenario, task).expect("render")
+    }
+
+    fn blue_pixels(frame: &[u8]) -> usize {
+        (0..W * H)
+            .filter(|i| {
+                let p = i * 4;
+                frame[p] < 120 && frame[p + 2] > 150
+            })
+            .count()
+    }
+
+    #[test]
+    fn an_icon_actually_paints_its_glyph_into_the_frame() {
+        let seeded = SeededIcon::new("paint");
+        let frame = render_first_frame(&seeded.name);
+        let painted = blue_pixels(&frame);
+        assert!(
+            painted > 100,
+            "the icon painted {painted} coloured pixels. Rewriting its width left a stray quote, \
+             so the SVG did not parse, so nothing was drawn — and the only sign was a warning on \
+             stderr with a zero exit code"
+        );
+    }
+
+    #[test]
+    fn the_icon_takes_the_colour_the_scenario_asks_for() {
+        let seeded = SeededIcon::new("colour");
+        let frame = render_first_frame(&seeded.name);
+        let mut found = None;
+        for i in 0..W * H {
+            let p = i * 4;
+            if frame[p] < 120 && frame[p + 2] > 150 && frame[p + 3] > 250 {
+                found = Some((frame[p], frame[p + 1], frame[p + 2]));
+                break;
+            }
+        }
+        let (r, g, b) = found.expect("an opaque coloured pixel");
+        assert!(
+            r < 80 && g < 140 && b > 200,
+            "currentColor must become the declared #2563EB, got ({r}, {g}, {b})"
+        );
+    }
+}

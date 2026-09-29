@@ -67,7 +67,7 @@ pub fn icon_cache_dir() -> PathBuf {
     base.join("rustmotion").join("icons")
 }
 
-fn icon_source_cache_file(cache_dir: &Path, icon: &str) -> PathBuf {
+pub fn icon_source_cache_file(cache_dir: &Path, icon: &str) -> PathBuf {
     cache_dir.join(format!("{}.svg", icon.replace(':', "_")))
 }
 
@@ -89,7 +89,7 @@ fn set_root_attribute(svg: &str, attribute: &str, value: &str) -> String {
                     "{}{}\"{}",
                     &tag[..value_start],
                     value,
-                    &tag[value_start + value_len..]
+                    &tag[value_start + value_len + 1..]
                 ),
                 None => tag.to_string(),
             }
@@ -110,6 +110,42 @@ fn recolour_and_resize(source: &[u8], hex_color: &str, width: u32, height: u32) 
         String::from_utf8_lossy(source).replace("currentColor", &format!("#{hex_color}"));
     let sized = set_root_attribute(&coloured, "width", &width.to_string());
     set_root_attribute(&sized, "height", &height.to_string()).into_bytes()
+}
+
+fn legacy_icon_source(cache_dir: &Path, icon: &str) -> Option<Vec<u8>> {
+    let slug = icon.replace(':', "_");
+    let prefix = format!("{slug}-");
+    let entries = std::fs::read_dir(cache_dir).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_str()?;
+        let Some(rest) = name.strip_prefix(&prefix) else {
+            continue;
+        };
+        let Some(rest) = rest.strip_suffix(".svg") else {
+            continue;
+        };
+        let Some((colour, size)) = rest.split_once('-') else {
+            continue;
+        };
+        if colour.len() != 6 || !colour.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue;
+        }
+        let Some((w, h)) = size.split_once('x') else {
+            continue;
+        };
+        if w.parse::<u32>().is_err() || h.parse::<u32>().is_err() {
+            continue;
+        }
+        let baked = std::fs::read_to_string(entry.path()).ok()?;
+        let restored = baked
+            .replace(&format!("#{}", colour.to_lowercase()), "currentColor")
+            .replace(&format!("#{}", colour.to_uppercase()), "currentColor");
+        if restored.contains("currentColor") {
+            return Some(restored.into_bytes());
+        }
+    }
+    None
 }
 
 const ICON_FETCH_ATTEMPTS: u32 = 4;
@@ -177,13 +213,19 @@ pub fn fetch_icon_svg_in(
 
     let source = match std::fs::read(&source_file) {
         Ok(data) if !data.is_empty() => data,
-        _ => {
-            let fetched = fetch_icon_source(icon, prefix, name)?;
-            if std::fs::create_dir_all(cache_dir).is_ok() {
-                let _ = std::fs::write(&source_file, &fetched);
+        _ => match legacy_icon_source(cache_dir, icon) {
+            Some(migrated) => {
+                let _ = std::fs::write(&source_file, &migrated);
+                migrated
             }
-            fetched
-        }
+            None => {
+                let fetched = fetch_icon_source(icon, prefix, name)?;
+                if std::fs::create_dir_all(cache_dir).is_ok() {
+                    let _ = std::fs::write(&source_file, &fetched);
+                }
+                fetched
+            }
+        },
     };
 
     Ok(recolour_and_resize(&source, &hex_color, width, height))
@@ -738,6 +780,94 @@ mod icon_source_cache_tests {
             dir.join("lucide_check.svg"),
             "one entry per icon: naming it by colour and size is what filled a cache with 20 \
              copies of the same glyph and made a colour change hit the network"
+        );
+    }
+
+    fn a_cache_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "rm_legacy_icons_{}_{}_{tag}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("cache dir");
+        dir
+    }
+
+    #[test]
+    fn a_file_left_by_the_old_naming_is_migrated_instead_of_refetched() {
+        let dir = a_cache_dir("migrate");
+        let baked = LUCIDE_CHECK.replace("currentColor", "#3B6FD4");
+        std::fs::write(dir.join("lucide_check-3b6fd4-26x26.svg"), &baked).expect("seed");
+
+        let migrated = legacy_icon_source(&dir, "lucide:check")
+            .expect("674 of these sit in a real cache; an offline render must be able to use one");
+        let text = String::from_utf8(migrated).unwrap();
+        assert!(
+            text.contains("currentColor"),
+            "the baked colour has to come back out, or the icon can never be recoloured: {text}"
+        );
+        assert!(!text.contains("3B6FD4"), "got {text}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn migration_survives_an_icon_whose_own_name_contains_a_dash() {
+        let dir = a_cache_dir("dashed");
+        let baked = LUCIDE_CHECK.replace("currentColor", "#8b5cf6");
+        std::fs::write(dir.join("lucide_arrow-down-8b5cf6-176x176.svg"), &baked).expect("seed");
+        assert!(
+            legacy_icon_source(&dir, "lucide:arrow-down").is_some(),
+            "the colour and size have to be parsed from the right, not from the first dash"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_unrelated_file_is_not_mistaken_for_a_legacy_entry() {
+        let dir = a_cache_dir("unrelated");
+        std::fs::write(dir.join("lucide_check-notes.svg"), LUCIDE_CHECK).expect("seed");
+        std::fs::write(dir.join("lucide_checkmark.svg"), LUCIDE_CHECK).expect("seed");
+        assert!(
+            legacy_icon_source(&dir, "lucide:check").is_none(),
+            "only a name ending in -{{6 hex}}-{{w}}x{{h}} is a legacy entry"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_rewritten_icon_still_parses_as_svg() {
+        let out = recolour_and_resize(LUCIDE_CHECK.as_bytes(), "2563eb", 84, 84);
+        let text = String::from_utf8(out.clone()).unwrap();
+        assert!(
+            !text.contains("\"\""),
+            "the rewrite must not leave the previous value's closing quote behind: {text}"
+        );
+        usvg::Tree::from_data(&out, &usvg::Options::default()).unwrap_or_else(|e| {
+            panic!(
+                "a rewritten icon has to parse, or nothing renders and the only sign is a \
+                 warning on stderr: {e}\n{text}"
+            )
+        });
+    }
+
+    #[test]
+    fn rewriting_an_attribute_that_already_has_a_value_replaces_it_exactly_once() {
+        let source = r#"<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path d="M4 12h16"/></svg>"#;
+        let out = String::from_utf8(recolour_and_resize(source.as_bytes(), "000000", 84, 96))
+            .expect("utf8");
+        assert_eq!(
+            out.matches("width=").count(),
+            1,
+            "one width attribute, not two: {out}"
+        );
+        assert!(out.contains(r#"width="84""#), "got {out}");
+        assert!(out.contains(r#"height="96""#), "got {out}");
+        assert!(
+            !out.contains("1em"),
+            "the 1em Iconify ships must be gone: {out}"
         );
     }
 

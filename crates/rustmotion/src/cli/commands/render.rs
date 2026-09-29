@@ -62,7 +62,9 @@ pub fn cmd_render(
 
     let start = std::time::Instant::now();
 
-    if !scenario.fonts.is_empty() {
+    if frame.is_some() {
+        engine::preload::preload_scenario_assets(&scenario)?;
+    } else if !scenario.fonts.is_empty() {
         engine::renderer::load_custom_fonts(&scenario.fonts);
     }
 
