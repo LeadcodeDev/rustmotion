@@ -417,6 +417,29 @@ fn wipe_reveal_rect(direction: &Direction, w: f32, h: f32, progress: f32) -> Rec
     }
 }
 
+const WIPE_FIXED_EDGE_MARGIN_FEATHER_FACTOR: f32 = 6.0;
+const WIPE_FIXED_EDGE_MARGIN_FLOOR: f32 = 16.0;
+
+fn wipe_fixed_edge_margin(feather: f32) -> f32 {
+    feather.max(0.0) * WIPE_FIXED_EDGE_MARGIN_FEATHER_FACTOR + WIPE_FIXED_EDGE_MARGIN_FLOOR
+}
+
+fn wipe_feathered_reveal_rect(
+    direction: &Direction,
+    w: f32,
+    h: f32,
+    progress: f32,
+    feather: f32,
+) -> Rect {
+    let margin = wipe_fixed_edge_margin(feather);
+    match direction {
+        Direction::Left => Rect::from_ltrb(-margin, -margin, w * progress, h + margin),
+        Direction::Right => Rect::from_ltrb(w * (1.0 - progress), -margin, w + margin, h + margin),
+        Direction::Up => Rect::from_ltrb(-margin, -margin, w + margin, h * progress),
+        Direction::Down => Rect::from_ltrb(-margin, h * (1.0 - progress), w + margin, h + margin),
+    }
+}
+
 fn wipe(
     frame_a: &[u8],
     frame_b: &[u8],
@@ -461,8 +484,9 @@ fn wipe(
         return surface_to_pixels(surface, width, height);
     }
 
+    let feathered_reveal = wipe_feathered_reveal_rect(&direction, w, h, progress, feather);
     let mut builder = PathBuilder::new();
-    builder.add_rect(reveal, None, None);
+    builder.add_rect(feathered_reveal, None, None);
     let path = builder.detach();
     composite_through_mask(
         frame_a,
@@ -652,7 +676,7 @@ fn clock_wipe(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, progress:
 }
 
 const IRIS_PILL_OVERSHOOT: f32 = 1.45;
-const IRIS_PILL_CORNER_FRACTION: f32 = 0.2;
+const IRIS_PILL_CORNER_FRACTION: f32 = 1.0;
 
 fn iris_max_radius(
     origin: (f32, f32),
@@ -845,7 +869,11 @@ fn mask_shape_to_local_path(shape: &MaskShape) -> Option<skia_safe::Path> {
     }
 }
 
-fn scaled_mask_path(local: &skia_safe::Path, scale: f32, origin: (f32, f32)) -> skia_safe::Path {
+pub(crate) fn scaled_mask_path(
+    local: &skia_safe::Path,
+    scale: f32,
+    origin: (f32, f32),
+) -> skia_safe::Path {
     let bounds = *local.bounds();
     let cx = (bounds.left + bounds.right) / 2.0;
     let cy = (bounds.top + bounds.bottom) / 2.0;
@@ -1010,7 +1038,7 @@ fn mask_transition(
     )
 }
 
-fn blob_local_path(lobes: u32, wobble: f32, seed: u32) -> skia_safe::Path {
+pub(crate) fn blob_local_path(lobes: u32, wobble: f32, seed: u32) -> skia_safe::Path {
     let n = lobes.max(3);
     let wobble = wobble.clamp(0.0, 0.95);
     let points: Vec<(f32, f32)> = (0..n)
@@ -1780,5 +1808,97 @@ mod pixel_dissolve_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod wipe_fixed_edge_tests {
+    use super::*;
+
+    const W: u32 = 1280;
+    const H: u32 = 720;
+
+    fn frames() -> (Vec<u8>, Vec<u8>) {
+        let a: Vec<u8> = (0..W * H).flat_map(|_| [200u8, 200, 200, 255]).collect();
+        let b: Vec<u8> = (0..W * H).flat_map(|_| [40u8, 40, 40, 255]).collect();
+        (a, b)
+    }
+
+    fn pixel(buf: &[u8], x: u32, y: u32) -> [u8; 4] {
+        let base = ((y * W + x) * 4) as usize;
+        [buf[base], buf[base + 1], buf[base + 2], buf[base + 3]]
+    }
+
+    #[test]
+    fn a_wide_feather_and_band_color_do_not_leak_onto_the_three_fixed_edges_of_a_left_wipe() {
+        let (a, b) = frames();
+        let opts = TransitionOptions {
+            feather: 320.0,
+            band_color: Some("#FF8CC6".to_string()),
+            ..TransitionOptions::default()
+        };
+        let out = apply_transition(&a, &b, W, H, 0.8, &TransitionType::WipeLeft, &opts);
+
+        assert_eq!(
+            pixel(&out, 640, 3),
+            [40, 40, 40, 255],
+            "the top edge never moves for a left wipe — a pixel well inside the revealed area \
+             but close to y=0 must be the exact incoming colour, not softened or tinted pink \
+             just because it happens to sit near the frame's own fixed top border"
+        );
+        assert_eq!(
+            pixel(&out, 640, H - 4),
+            [40, 40, 40, 255],
+            "the bottom edge never moves for a left wipe either — same leak, opposite border"
+        );
+        assert_eq!(
+            pixel(&out, 2, 360),
+            [40, 40, 40, 255],
+            "the left edge is the wipe's own starting edge, always flush with the frame's left \
+             border — it must never show a blended or tinted pixel, only the moving right edge \
+             may"
+        );
+    }
+
+    #[test]
+    fn the_moving_edge_still_feathers_normally_once_the_fixed_edges_are_excluded() {
+        let (a, b) = frames();
+        let opts = TransitionOptions {
+            feather: 320.0,
+            ..TransitionOptions::default()
+        };
+        let out = apply_transition(&a, &b, W, H, 0.8, &TransitionType::WipeLeft, &opts);
+        let moving_edge_x = (W as f32 * 0.8) as u32;
+        let blended = pixel(&out, moving_edge_x, 360);
+        assert!(
+            blended[0] != 200 && blended[0] != 40,
+            "the wipe's own moving reveal boundary must still show a blended pixel from a wide \
+             feather, got {blended:?} — the fixed-edge fix must not have flattened the real \
+             moving edge along with the fake ones"
+        );
+    }
+}
+
+#[cfg(test)]
+mod iris_pill_shape_tests {
+    use super::*;
+
+    #[test]
+    fn a_pill_with_aspect_one_degenerates_into_a_true_circle_not_a_barely_rounded_square() {
+        let origin = (100.0, 100.0);
+        let radius = 50.0;
+        let path = iris_mask_path(origin, IrisShape::Pill, 1.0, radius);
+        let beyond_the_radius_on_the_diagonal = radius * 1.2 / std::f32::consts::SQRT_2;
+        let corner_point = (
+            origin.0 + beyond_the_radius_on_the_diagonal,
+            origin.1 + beyond_the_radius_on_the_diagonal,
+        );
+        assert!(
+            !path.contains(corner_point),
+            "a pill with aspect 1.0 must degenerate into a circle — a point just beyond the \
+             radius on the diagonal must fall outside it; the old 0.2 corner fraction left a \
+             barely-rounded square whose corner reached out to radius*sqrt(2), well past this \
+             point"
+        );
     }
 }
