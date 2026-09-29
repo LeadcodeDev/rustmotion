@@ -46,3 +46,15 @@ The seven `char_*` presets (`char_scale_in`, `char_fade_in`, `char_wave`, `char_
 ## A note on `char_blur_in`
 
 It goes through the same resolution path as its six siblings: it **inherits** `stagger` from a parent container and works inside a `timeline` step. (That wasn't always the case.)
+
+## `rotate_from`, les deux jitters, et `reflow`
+
+| Champ | Rôle | Défaut |
+|---|---|---|
+| `rotate_from` (+ `rotate_origin`) | Inclinaison de départ en degrés, redressée à 0 à la fin de l'animation de l'unité. `rotate_origin: "center"` (défaut) ou `"edge"` — charnière sur le bord d'attaque, c'est ce qui donne l'escalier. Inerte sur `char_rotate_in`, qui possède déjà cet axe. | absent |
+| `scale_jitter` / `baseline_jitter` (+ `seed`) | Bruit déterministe par unité sur la taille et la ligne de base, qui retombe à 0 à la fin. Indépendant de `jitter`, qui ne décale que le timing — les trois tirent du même hash sous des sels différents, donc ils ne bougent pas en bloc pour une même graine. | absent |
+| `reflow` (+ `reflow_easing`) | Une unité pas encore démarrée ne contribue aucune largeur à sa ligne, et la contribution d'une unité qui démarre entre via `reflow_easing`. Une ligne centrée reste donc centrée pendant qu'elle s'écrit, au lieu de réserver sa largeur finale dès la première frame. | `false` |
+
+`reflow` modifie **ce qu'une unité occupe**, pas ce qu'elle peint : les glyphes se dessinent à pleine taille, seule leur position dans la ligne s'anime. Un glyphe peut donc chevaucher brièvement son voisin pendant la transition — c'est le prix à payer pour que chaque preset garde son propre visuel intact.
+
+> `reflow` **n'a aucun effet sur `rich_text`**, dont le rendu d'animation par caractère calcule ses positions de tokens et ses fonds de pastille en une passe, avant l'animation. Le validateur le signale plutôt que de laisser le champ paraître actif. Pour une ligne centrée qui doit rester centrée pendant qu'elle s'écrit, c'est `text` ou `gradient_text`.

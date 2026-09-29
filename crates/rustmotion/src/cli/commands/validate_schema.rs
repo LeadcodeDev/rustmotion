@@ -170,6 +170,8 @@ fn validate_children(
                 if let AnimationEffect::MotionPath(cfg) = effect {
                     check_motion_path_config(cfg, &p, errors, warnings);
                 }
+
+                check_reflow_reaches_this_component(&child.component, effect, &p, warnings);
             }
         }
 
@@ -798,6 +800,38 @@ fn check_transition_ignored_fields(
         "{path}.transition: type \"{type_name}\" ignores {field_word} {field_list} — accepted \
          by the schema but without effect on this transition type."
     ));
+}
+
+fn char_timing(effect: &AnimationEffect) -> Option<&CharAnimationTiming> {
+    match effect {
+        AnimationEffect::CharScaleIn(t)
+        | AnimationEffect::CharFadeIn(t)
+        | AnimationEffect::CharWave(t)
+        | AnimationEffect::CharBounce(t)
+        | AnimationEffect::CharRotateIn(t)
+        | AnimationEffect::CharSlideUp(t)
+        | AnimationEffect::CharBlurIn(t) => Some(t),
+        _ => None,
+    }
+}
+
+fn check_reflow_reaches_this_component(
+    component: &Component,
+    effect: &AnimationEffect,
+    path: &str,
+    warnings: &mut Vec<String>,
+) {
+    if !matches!(component, Component::RichText(_)) {
+        return;
+    }
+    if char_timing(effect).is_some_and(|t| t.reflow) {
+        warnings.push(format!(
+            "{path}: reflow has no effect on rich_text. Its char animation lays out from token \
+             positions computed once, together with the pill backgrounds, so a unit that has \
+             not started still holds its slot. Use text or gradient_text where a centred line \
+             has to stay centred while it is written."
+        ));
+    }
 }
 
 fn check_spring_config(spring: &SpringConfig, path: &str, errors: &mut Vec<String>) {
@@ -2185,6 +2219,68 @@ mod mask_transition_message_tests {
         })));
         assert!(
             !warnings.iter().any(|w| w.contains("in pixels")),
+            "got {warnings:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod reflow_reach_tests {
+    use super::*;
+
+    fn warnings_for(component: serde_json::Value) -> Vec<String> {
+        let child: ChildComponent = serde_json::from_value(component).expect("component");
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 6.0, &mut errors, &mut warnings);
+        warnings
+    }
+
+    fn with_reflow(kind: &str) -> serde_json::Value {
+        let mut v = serde_json::json!({
+            "type": kind,
+            "style": { "animation": [
+                { "name": "char_fade_in", "duration": 0.8, "reflow": true }
+            ]}
+        });
+        if kind == "rich_text" {
+            v["spans"] = serde_json::json!([{ "text": "Rustmotion" }]);
+        } else {
+            v["content"] = serde_json::json!("Rustmotion");
+        }
+        v
+    }
+
+    #[test]
+    fn reflow_on_rich_text_is_named_instead_of_being_accepted_and_inert() {
+        let warnings = warnings_for(with_reflow("rich_text"));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("no effect on rich_text")),
+            "rich_text lays out from token positions computed once, so reflow cannot move \
+             them — a field the validator accepts must either work or say so: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn reflow_on_text_is_left_alone_because_it_works_there() {
+        let warnings = warnings_for(with_reflow("text"));
+        assert!(
+            !warnings.iter().any(|w| w.contains("no effect")),
+            "got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_rich_text_char_animation_without_reflow_is_not_warned_about() {
+        let warnings = warnings_for(serde_json::json!({
+            "type": "rich_text",
+            "spans": [{ "text": "Rustmotion" }],
+            "style": { "animation": [{ "name": "char_fade_in", "duration": 0.8 }] }
+        }));
+        assert!(
+            !warnings.iter().any(|w| w.contains("no effect")),
             "got {warnings:?}"
         );
     }
