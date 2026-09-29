@@ -1,11 +1,11 @@
-# Rule: `burst` — l'éclaboussure de traits autour d'un élément qui apparaît
+# Rule: `burst` — the ring of strokes an element throws when it pops
 
-`burst` (`style.animation`) peint une couronne de traits courts qui partent vers l'extérieur juste au large de la boîte du nœud, puis se résorbent. C'est l'accent qu'on met sur une pastille, un badge ou une coche au moment où elle *pop* — l'équivalent graphique du petit « tchac ».
+`burst` (`style.animation`) paints a ring of short strokes that shoot outward from just off the node's own box edge, then retract. It is the accent on a pill, a badge or a checkmark at the moment it *pops* — the graphic equivalent of the little "tchak".
 
 ```json
 {
   "type": "badge",
-  "text": "Livré",
+  "text": "Shipped",
   "style": {
     "animation": [
       { "name": "pop_in", "delay": 0.2, "duration": 0.45 },
@@ -17,47 +17,47 @@
 }
 ```
 
-| Champ | Rôle | Défaut |
+| Field | Role | Default |
 |---|---|---|
-| `delay` | Attente avant le départ des traits (s) | `0` |
-| `duration` | Durée totale aller-retour (s) ; la tête atteint le bout de sa course à mi-parcours | `0.4` |
-| `count` | Nombre de traits dans la couronne (borné en interne à `1..=64`) | `8` |
-| `length` | Longueur de la course de chaque trait, en px, mesurée à partir de `gap` | `40` |
-| `gap` | Distance en px entre le bord de la boîte et le départ de chaque trait | `12` |
-| `width` | Épaisseur du trait en px | `4` |
-| `color` | Couleur du trait (chaîne hex) | `"#FFB020"` |
-| `seed` | Graine du jitter d'angle, de longueur et de phase | `0` |
-| `jitter` | Écart maximal d'un trait par rapport à sa part régulière de la couronne, en fraction de l'espacement entre deux traits ; module aussi la longueur et la phase | `0.2` |
+| `delay` | Wait before the strokes shoot out (s) | `0` |
+| `duration` | Full out-and-back duration (s); the head reaches the far end of its track at the halfway point | `0.4` |
+| `count` | Number of strokes in the ring (clamped internally to `1..=64`) | `8` |
+| `length` | Length of each stroke's track, in px, measured outward from `gap` | `40` |
+| `gap` | Distance in px between the node's box edge and the near end of every stroke | `12` |
+| `width` | Stroke width in px | `4` |
+| `color` | Stroke colour (hex string) | `"#FFB020"` |
+| `seed` | Seed for the per-stroke angle, length and phase jitter | `0` |
+| `jitter` | How far a stroke may stray from its even share of the ring, as a fraction of the spacing between two strokes; it also scales the per-stroke length and phase | `0.2` |
 
-## La tête part, la queue rattrape
+## The head leaves, the tail catches up
 
-Chaque trait est défini par deux extrémités qui parcourent la même piste une fois chacune : la **tête** sort sur la première moitié de la fenêtre (`ease_out`), la **queue** la suit sur la seconde (`ease_in`). Le trait s'allonge, atteint sa pleine longueur à mi-parcours, puis se referme **vers l'extérieur** — il s'envole et disparaît, il ne rentre pas dans la boîte.
+Each stroke is defined by two ends that cross the same track once each: the **head** runs out over the first half of the window (`ease_out`), the **tail** follows over the second (`ease_in`). The stroke lengthens, reaches full length at the halfway point, then closes **outward** — it flies away and vanishes, it does not retract into the box.
 
-Conséquence directe : aux deux bornes de la fenêtre, tête et queue sont au même endroit, donc le trait a une longueur nulle. **La garantie « zéro aux deux bouts » est géométrique ici, pas seulement temporelle.** C'est une nuance qui compte : `burst_progress` court-circuite bien en dehors de `[delay, delay + duration)`, mais même si une frame tombait *dans* la fenêtre à un ULP près de sa borne (ce qui arrive : `delay + duration - delay != duration` en flottant dès que `duration` n'est pas représentable exactement, `0.4` par exemple), le trait mesuré serait de longueur nulle et rien ne serait peint. Les deux protections existent, et elles ne couvrent pas le même cas.
+One consequence matters: at both ends of the window the head and the tail are in the same place, so the stroke has zero length. **The zero-at-both-ends guarantee here is geometric, not only temporal.** `burst_progress` does short-circuit outside `[delay, delay + duration)`, but even if a frame landed *inside* the window within one ULP of its boundary — which happens: `delay + duration - delay != duration` in floating point as soon as `duration` is not exactly representable, `0.4` for instance — the measured stroke would have zero length and nothing would be painted. Both protections exist, and they do not cover the same case.
 
-## Rien de ce qui appartient au nœud n'est touché
+## Nothing that belongs to the node is touched
 
-Les traits sont peints **par-dessus** le nœud, **hors de sa boîte**, après son propre rendu, à l'intérieur de sa transformation. Trois conséquences :
+The strokes are painted **over** the node, **outside its box**, after its own render and inside its transform. Three consequences:
 
-- Ils ne prennent **aucune place dans le layout** — un `burst` ne pousse jamais un voisin en flex.
-- Ils suivent le nœud : si celui-ci tourne ou se déplace (`pop_in`, `transform`), la couronne tourne et se déplace avec lui.
-- `gap` garantit que rien ne mord sur la boîte. `gap: 0` colle les traits au bord ; une valeur négative est ramenée à `0`, jamais un chevauchement.
+- They take **no layout space** — a `burst` never pushes a flex neighbour.
+- They follow the node: if it rotates or moves (`pop_in`, `transform`), the ring rotates and moves with it.
+- `gap` guarantees nothing bites into the box. `gap: 0` puts the strokes against the edge; a negative value is clamped to `0`, never an overlap.
 
-La couronne peut en revanche sortir du **viewport** si le nœud est près d'un bord. Le validateur de géométrie ne la voit pas (il inspecte les boîtes de layout, et `burst` n'en a pas) : c'est à la mise en page de laisser `gap + length` de marge autour du nœud.
+The ring can still leave the **viewport** if the node sits near an edge. The geometry validator does not see it (it inspects layout boxes, and a `burst` has none): it is up to the layout to leave `gap + length` of margin around the node.
 
-## Le budget d'animation s'applique
+## The animation budget applies
 
-Comme [shatter.md](shatter.md), `burst` entre dans le calcul de [animation-completion-budget.md](animation-completion-budget.md) : `start_at + delay + duration ≤ scene_duration`. Ce n'est pas un preset de sortie exempté.
+Like [shatter.md](shatter.md), `burst` counts toward [animation-completion-budget.md](animation-completion-budget.md): `start_at + delay + duration ≤ scene_duration`. It is not an exempt exit preset.
 
-En pratique on le déclenche **légèrement après** l'entrée qu'il accentue, pas en même temps : l'éclaboussure doit répondre au *pop*, pas le précéder. Dans l'exemple ci-dessus, `pop_in` part à `0.2` et `burst` à `0.28`.
+In practice it fires **slightly after** the entry it accents, not at the same time: the splash answers the pop, it does not precede it. In the example above, `pop_in` starts at `0.2` and `burst` at `0.28`.
 
-## Cas dégénérés
+## Degenerate cases
 
-- `count: 0` est traité comme `1` — un unique trait, ce qui ressemble davantage à un accident qu'à un éclat.
-- `length: 0` ou `width: 0` n'affiche rien du tout : il n'y a pas d'erreur, l'effet est simplement inerte.
-- `jitter: 0` donne une couronne parfaitement régulière, qui lit comme un soleil de schéma technique ; `jitter: 1` autorise un trait à empiéter sur le créneau de son voisin, ce qui lit comme une projection. Entre les deux, `0.2` à `0.35` est la plage qui a l'air « dessinée à la main ».
-- `duration` nulle ou négative désactive l'effet à chaque frame, comme `chromatic_aberration` et `shatter`.
+- `count: 0` is treated as `1` — a single stroke, which reads more like an accident than a burst.
+- `length: 0` or `width: 0` paints nothing at all: no error, the effect is simply inert.
+- `jitter: 0` gives a perfectly regular ring, which reads like a technical-diagram sunburst; `jitter: 1` lets a stroke encroach on its neighbour's slot, which reads like a spatter. In between, `0.2` to `0.35` is the range that looks hand-drawn.
+- A zero or negative `duration` disables the effect on every frame, like `chromatic_aberration` and `shatter`.
 
-## Ce n'est pas `emitter`
+## It is not `emitter`
 
-`burst` est **borné** : un aller-retour, `count` traits, puis plus rien. `emitter` ([emitter-lifecycle.md](emitter-lifecycle.md)) est un **flux continu** : des particules naissent, voyagent, meurent et renaissent tant que la scène dure. Un badge qui apparaît → `burst`. Un tunnel de warp ou un champ d'étoiles → `emitter`.
+`burst` is **bounded**: one round trip, `count` strokes, then nothing. `emitter` ([emitter-lifecycle.md](emitter-lifecycle.md)) is a **continuous stream**: particles are born, travel, die and are reborn for as long as the scene lasts. A badge appearing → `burst`. A warp tunnel or a starfield → `emitter`.
