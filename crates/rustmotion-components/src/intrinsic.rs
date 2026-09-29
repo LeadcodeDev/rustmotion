@@ -733,22 +733,17 @@ impl IntrinsicMeasure for RichTextIntrinsic {
     }
 }
 
-use rustmotion_core::engine::animator::{ease, ResolvedCharAnimation};
+use rustmotion_core::engine::animator::ResolvedCharAnimation;
 use rustmotion_core::engine::renderer::{draw_text_with_fallback, paint_from_hex};
-use rustmotion_core::schema::{CharAnimPreset, TextAlign, TextAnimGranularity};
+use rustmotion_core::schema::{CharAnimPreset, RotateOrigin, TextAlign, TextAnimGranularity};
 use skia_safe::{Canvas, Paint};
 
 pub fn unit_progress(cfg: &ResolvedCharAnimation, idx: usize, time: f64) -> f32 {
-    let unit_start = cfg.unit_start(idx);
-    let unit_end = unit_start + cfg.duration as f64;
-    let raw_t = if time <= unit_start {
-        0.0
-    } else if time >= unit_end {
-        1.0
-    } else {
-        (time - unit_start) / (unit_end - unit_start)
-    };
-    ease(raw_t, &cfg.easing) as f32
+    cfg.unit_progress(idx, time)
+}
+
+pub fn reflow_progress(cfg: &ResolvedCharAnimation, idx: usize, time: f64) -> f32 {
+    cfg.reflow_progress(idx, time)
 }
 
 fn ink_paint(cfg: &ResolvedCharAnimation, paint: &Paint, t: f32) -> Option<Paint> {
@@ -798,6 +793,30 @@ pub fn apply_text_anim_preset(
             canvas.scale((s, s));
             canvas.translate((-center_x, -center_y));
         }
+    }
+    if let Some(from_deg) = cfg.rotate_from {
+        if !matches!(preset, CharAnimPreset::RotateIn) {
+            let angle = from_deg as f32 * (1.0 - t.clamp(0.0, 1.0));
+            let (px, py) = match cfg.rotate_origin {
+                RotateOrigin::Center => (center_x, center_y),
+                RotateOrigin::Edge => (cursor_x, center_y),
+            };
+            canvas.translate((px, py));
+            canvas.rotate(angle, None);
+            canvas.translate((-px, -py));
+        }
+    }
+    let scale_jitter_delta = cfg.scale_jitter_delta(unit_idx);
+    if scale_jitter_delta.abs() > 1e-6 {
+        let js = 1.0 + scale_jitter_delta * (1.0 - t.clamp(0.0, 1.0));
+        canvas.translate((center_x, center_y));
+        canvas.scale((js, js));
+        canvas.translate((-center_x, -center_y));
+    }
+    let baseline_jitter_delta = cfg.baseline_jitter_delta(unit_idx);
+    if baseline_jitter_delta.abs() > 1e-6 {
+        let jy = baseline_jitter_delta * font_size * (1.0 - t.clamp(0.0, 1.0));
+        canvas.translate((0.0, jy));
     }
 
     match preset {
@@ -948,6 +967,215 @@ pub fn apply_text_anim_preset(
 }
 
 #[allow(clippy::too_many_arguments)]
+struct ReflowWordToken {
+    text: String,
+    is_space: bool,
+    full_width: f32,
+}
+
+fn tokenize_reflow_words(
+    line: &str,
+    font: &Font,
+    emoji_font: &Option<Font>,
+    letter_spacing: f32,
+) -> Vec<ReflowWordToken> {
+    let mut toks = Vec::new();
+    let mut chars = line.chars().peekable();
+    while chars.peek().is_some() {
+        let mut spaces = String::new();
+        while let Some(&c) = chars.peek() {
+            if c.is_whitespace() {
+                spaces.push(c);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        if !spaces.is_empty() {
+            let full_width = measure_text_with_fallback(&spaces, font, emoji_font, letter_spacing);
+            toks.push(ReflowWordToken {
+                text: spaces,
+                is_space: true,
+                full_width,
+            });
+        }
+        let mut word = String::new();
+        while let Some(&c) = chars.peek() {
+            if c.is_whitespace() {
+                break;
+            }
+            word.push(c);
+            chars.next();
+        }
+        if !word.is_empty() {
+            let full_width = measure_text_with_fallback(&word, font, emoji_font, letter_spacing);
+            toks.push(ReflowWordToken {
+                text: word,
+                is_space: false,
+                full_width,
+            });
+        }
+    }
+    toks
+}
+
+fn reflowed_word_width(
+    tok: &ReflowWordToken,
+    idx: usize,
+    char_anim: &ResolvedCharAnimation,
+    time: f64,
+) -> f32 {
+    if tok.is_space {
+        tok.full_width
+    } else {
+        tok.full_width * reflow_progress(char_anim, idx, time)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_reflowing_word_line(
+    canvas: &Canvas,
+    font: &Font,
+    emoji_font: &Option<Font>,
+    paint: &Paint,
+    letter_spacing: f32,
+    align: &TextAlign,
+    align_width: f32,
+    line_y: f32,
+    line: &str,
+    char_anim: &ResolvedCharAnimation,
+    time: f64,
+    base_idx: usize,
+) -> usize {
+    let toks = tokenize_reflow_words(line, font, emoji_font, letter_spacing);
+
+    let mut word_counter = 0usize;
+    let effective_width: f32 = toks
+        .iter()
+        .map(|tok| {
+            let width = if tok.is_space {
+                tok.full_width
+            } else {
+                let idx = base_idx + word_counter;
+                word_counter += 1;
+                reflowed_word_width(tok, idx, char_anim, time)
+            };
+            width
+        })
+        .sum();
+
+    let line_x = match align {
+        TextAlign::Left => 0.0,
+        TextAlign::Center => (align_width - effective_width) / 2.0,
+        TextAlign::Right => align_width - effective_width,
+    };
+
+    let mut cursor_x = line_x;
+    word_counter = 0;
+    for tok in &toks {
+        if tok.is_space {
+            draw_text_with_fallback(
+                canvas, &tok.text, font, emoji_font, 0.0, cursor_x, line_y, paint,
+            );
+            cursor_x += tok.full_width;
+            continue;
+        }
+        let idx = base_idx + word_counter;
+        word_counter += 1;
+        let t = unit_progress(char_anim, idx, time);
+        let draw_width = reflowed_word_width(tok, idx, char_anim, time);
+
+        canvas.save();
+        apply_text_anim_preset(
+            canvas,
+            &tok.text,
+            font,
+            emoji_font,
+            paint,
+            cursor_x,
+            line_y,
+            draw_width,
+            letter_spacing,
+            char_anim,
+            t,
+            time,
+            idx,
+            font.size(),
+        );
+        canvas.restore();
+
+        cursor_x += draw_width;
+    }
+    base_idx + word_counter
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_reflowing_char_line(
+    canvas: &Canvas,
+    font: &Font,
+    emoji_font: &Option<Font>,
+    paint: &Paint,
+    letter_spacing: f32,
+    align: &TextAlign,
+    align_width: f32,
+    line_y: f32,
+    line: &str,
+    char_anim: &ResolvedCharAnimation,
+    time: f64,
+    base_idx: usize,
+) -> usize {
+    let chars_list: Vec<char> = line.chars().collect();
+    let widths: Vec<f32> = chars_list
+        .iter()
+        .map(|ch| {
+            let (w, _) = font.measure_str(ch.to_string(), None);
+            w + letter_spacing
+        })
+        .collect();
+
+    let effective_width: f32 = widths
+        .iter()
+        .enumerate()
+        .map(|(i, w)| w * reflow_progress(char_anim, base_idx + i, time))
+        .sum();
+
+    let line_x = match align {
+        TextAlign::Left => 0.0,
+        TextAlign::Center => (align_width - effective_width) / 2.0,
+        TextAlign::Right => align_width - effective_width,
+    };
+
+    let mut cursor_x = line_x;
+    for (i, ch) in chars_list.iter().enumerate() {
+        let idx = base_idx + i;
+        let ch_str = ch.to_string();
+        let t = unit_progress(char_anim, idx, time);
+        let draw_width = widths[i] * reflow_progress(char_anim, idx, time);
+
+        canvas.save();
+        apply_text_anim_preset(
+            canvas,
+            &ch_str,
+            font,
+            emoji_font,
+            paint,
+            cursor_x,
+            line_y,
+            draw_width,
+            0.0,
+            char_anim,
+            t,
+            time,
+            idx,
+            font.size(),
+        );
+        canvas.restore();
+
+        cursor_x += draw_width;
+    }
+    base_idx + chars_list.len()
+}
+
 pub fn render_char_animation(
     canvas: &Canvas,
     font: &Font,
@@ -970,13 +1198,49 @@ pub fn render_char_animation(
             continue;
         }
 
+        let line_y = line_idx as f32 * line_height_val + baseline_offset;
+
+        if char_anim.reflow {
+            global_unit_idx = if is_word_mode {
+                paint_reflowing_word_line(
+                    canvas,
+                    font,
+                    emoji_font,
+                    paint,
+                    letter_spacing,
+                    &align,
+                    align_width,
+                    line_y,
+                    line,
+                    char_anim,
+                    time,
+                    global_unit_idx,
+                )
+            } else {
+                paint_reflowing_char_line(
+                    canvas,
+                    font,
+                    emoji_font,
+                    paint,
+                    letter_spacing,
+                    &align,
+                    align_width,
+                    line_y,
+                    line,
+                    char_anim,
+                    time,
+                    global_unit_idx,
+                )
+            };
+            continue;
+        }
+
         let advance_width = measure_text_with_fallback(line, font, emoji_font, letter_spacing);
         let line_x = match align {
             TextAlign::Left => 0.0,
             TextAlign::Center => (align_width - advance_width) / 2.0,
             TextAlign::Right => align_width - advance_width,
         };
-        let line_y = line_idx as f32 * line_height_val + baseline_offset;
 
         if is_word_mode {
             let mut cursor_x = line_x;

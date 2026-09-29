@@ -1,7 +1,7 @@
 use crate::schema::{
     Animation, AnimationEffect, AnimationPreset, BurstConfig, CharAnimPreset, EasingType,
-    GlowConfig, Keyframe, KeyframeValue, MotionPathConfig, OrbitConfig, PresetConfig, SpringConfig,
-    TextAnimDirection, TextAnimGranularity, WiggleConfig,
+    GlowConfig, Keyframe, KeyframeValue, MotionPathConfig, OrbitConfig, PresetConfig, RotateOrigin,
+    SpringConfig, TextAnimDirection, TextAnimGranularity, WiggleConfig,
 };
 
 pub const DEFAULT_CHAR_BLUR_SIGMA: f32 = 14.0;
@@ -40,7 +40,27 @@ pub struct ResolvedCharAnimation {
     pub jitter: f32,
     pub seed: u32,
     pub ink_from: Option<String>,
+    pub rotate_from: Option<f32>,
+    pub rotate_origin: RotateOrigin,
+    pub scale_jitter: f32,
+    pub baseline_jitter: f32,
+    pub reflow: bool,
+    pub reflow_easing: EasingType,
 }
+
+fn unit_rand_signed(idx: usize, seed: u32, salt: u64) -> f64 {
+    let mut h = (idx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (seed as u64) ^ salt;
+    h ^= h >> 30;
+    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 27;
+    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^= h >> 31;
+    let unit = (h >> 11) as f64 / (1u64 << 53) as f64;
+    unit * 2.0 - 1.0
+}
+
+const BASELINE_JITTER_SALT: u64 = 0xB522_9E17_C2A1_0D4F;
+const SCALE_JITTER_SALT: u64 = 0x5A1E_3B7C_9F02_88D1;
 
 impl ResolvedCharAnimation {
     pub fn unit_start(&self, idx: usize) -> f64 {
@@ -48,15 +68,45 @@ impl ResolvedCharAnimation {
         if self.jitter.abs() < 1e-6 || self.stagger.abs() < 1e-6 {
             return even;
         }
-        let mut h = (idx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (self.seed as u64);
-        h ^= h >> 30;
-        h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        h ^= h >> 27;
-        h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
-        h ^= h >> 31;
-        let unit = (h >> 11) as f64 / (1u64 << 53) as f64;
-        let nudge = (unit * 2.0 - 1.0) * self.jitter as f64 * self.stagger as f64;
+        let nudge = unit_rand_signed(idx, self.seed, 0) * self.jitter as f64 * self.stagger as f64;
         (even + nudge).max(self.delay as f64)
+    }
+
+    fn raw_unit_progress(&self, idx: usize, time: f64) -> f32 {
+        let unit_start = self.unit_start(idx);
+        let unit_end = unit_start + self.duration as f64;
+        if time <= unit_start {
+            0.0
+        } else if time >= unit_end {
+            1.0
+        } else {
+            ((time - unit_start) / (unit_end - unit_start)) as f32
+        }
+    }
+
+    pub fn unit_progress(&self, idx: usize, time: f64) -> f32 {
+        ease(self.raw_unit_progress(idx, time) as f64, &self.easing) as f32
+    }
+
+    pub fn reflow_progress(&self, idx: usize, time: f64) -> f32 {
+        ease(
+            self.raw_unit_progress(idx, time) as f64,
+            &self.reflow_easing,
+        ) as f32
+    }
+
+    pub fn scale_jitter_delta(&self, idx: usize) -> f32 {
+        if self.scale_jitter.abs() < 1e-6 {
+            return 0.0;
+        }
+        (unit_rand_signed(idx, self.seed, SCALE_JITTER_SALT) as f32) * self.scale_jitter
+    }
+
+    pub fn baseline_jitter_delta(&self, idx: usize) -> f32 {
+        if self.baseline_jitter.abs() < 1e-6 {
+            return 0.0;
+        }
+        (unit_rand_signed(idx, self.seed, BASELINE_JITTER_SALT) as f32) * self.baseline_jitter
     }
 }
 
@@ -129,6 +179,12 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
                         jitter: t.jitter.unwrap_or(0.0) as f32,
                         seed: t.seed.unwrap_or(0),
                         ink_from: t.ink_from.clone(),
+                        rotate_from: t.rotate_from.map(|r| r as f32),
+                        rotate_origin: t.rotate_origin,
+                        scale_jitter: t.scale_jitter.unwrap_or(0.0) as f32,
+                        baseline_jitter: t.baseline_jitter.unwrap_or(0.0) as f32,
+                        reflow: t.reflow,
+                        reflow_easing: t.reflow_easing.clone(),
                     });
                 }
                 AnimationEffect::Glow(config) => {
@@ -3019,6 +3075,12 @@ mod char_animation_tuning_tests {
             jitter,
             seed,
             ink_from: None,
+            rotate_from: None,
+            rotate_origin: RotateOrigin::default(),
+            scale_jitter: 0.0,
+            baseline_jitter: 0.0,
+            reflow: false,
+            reflow_easing: EasingType::default(),
         }
     }
 

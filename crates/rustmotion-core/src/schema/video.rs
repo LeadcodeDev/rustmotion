@@ -465,6 +465,50 @@ pub struct CharAnimationTiming {
     /// streamed tokens read as unsettled before the eye accepts them.
     #[serde(default)]
     pub ink_from: Option<String>,
+    /// Tilt (degrees) each unit starts at, straightening to 0 by the end of
+    /// its own animation — the "staircase word reveal" where every letter
+    /// settles from a lean. Composes with the preset instead of replacing
+    /// it, the same rule `scale_from` follows; `char_rotate_in` already
+    /// owns a rotation curve and ignores this. Unset means no tilt (the
+    /// historical behaviour).
+    #[serde(default)]
+    pub rotate_from: Option<f64>,
+    /// Pivot `rotate_from` turns each unit around. Only meaningful
+    /// alongside `rotate_from`.
+    #[serde(default)]
+    pub rotate_origin: RotateOrigin,
+    /// Deterministic per-unit size noise: each unit is additionally born at
+    /// `1.0 ± scale_jitter` and converges to its own normal scale by the
+    /// end of its animation, on top of whatever the preset already does —
+    /// "letters born at different sizes, then aligning". Derived from
+    /// `seed` and the unit's index, like `jitter`; unset means no size
+    /// noise (the historical behaviour).
+    #[serde(default)]
+    pub scale_jitter: Option<f64>,
+    /// Deterministic per-unit baseline noise, as a fraction of `font-size`:
+    /// each unit is additionally born offset by up to
+    /// `±baseline_jitter × font-size` from its laid-out baseline and settles
+    /// onto it by the end of its animation. Derived from `seed` and the
+    /// unit's index, like `jitter`; unset means no baseline noise (the
+    /// historical behaviour).
+    #[serde(default)]
+    pub baseline_jitter: Option<f64>,
+    /// When true, a unit that hasn't started its own animation yet
+    /// contributes no width to its line, and one that's mid-animation
+    /// contributes a share eased in by `reflow_easing` — so the line grows
+    /// as units arrive instead of reserving its final width from the first
+    /// frame. Combined with `text-align: center`, this is what keeps a
+    /// centred line centred while it's being written instead of growing
+    /// from a fixed left edge. Default `false` keeps the historical
+    /// behaviour: every unit's slot is reserved from frame one, only its
+    /// paint (opacity/position/scale/blur) animates.
+    #[serde(default)]
+    pub reflow: bool,
+    /// Easing curve for the width a unit contributes to its line while
+    /// `reflow` is on — independent from `easing`, which times the unit's
+    /// own visual entrance. Only meaningful alongside `reflow`.
+    #[serde(default)]
+    pub reflow_easing: EasingType,
 }
 
 impl Default for CharAnimationTiming {
@@ -483,6 +527,12 @@ impl Default for CharAnimationTiming {
             jitter: None,
             seed: None,
             ink_from: None,
+            rotate_from: None,
+            rotate_origin: RotateOrigin::default(),
+            scale_jitter: None,
+            baseline_jitter: None,
+            reflow: false,
+            reflow_easing: EasingType::default(),
         }
     }
 }
@@ -563,6 +613,22 @@ impl TextAnimDirection {
             Self::Right => (-travel, 0.0),
         }
     }
+}
+
+/// Pivot a `rotate_from` tilt turns around. Only meaningful alongside
+/// `rotate_from`; ignored otherwise.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RotateOrigin {
+    /// The unit's own visual centre — the same pivot `char_scale_in`,
+    /// `char_bounce` and `char_rotate_in` already turn around (default).
+    #[default]
+    Center,
+    /// The unit's leading edge, at the text baseline — where the previous
+    /// unit ends and this one begins. Turning around this point instead of
+    /// the centre reads as each unit hinging open from where it's typed,
+    /// the "staircase word reveal" look.
+    Edge,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
