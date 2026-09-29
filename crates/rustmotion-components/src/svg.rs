@@ -9,10 +9,10 @@ use skia_safe::{
 };
 
 use rustmotion_core::css::CssStyle;
-use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::animator::{ease, AnimatedProperties};
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::asset_cache;
-use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::engine::renderer::{asset_cache, interpolate_path_data};
+use rustmotion_core::schema::{SvgPathMorph, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -58,6 +58,11 @@ pub struct Svg {
     /// unchanged), `fill` sweeps a mask across each path's full painted shape.
     #[serde(default)]
     pub reveal: SvgReveal,
+    /// Animates a single path's `d` attribute inside this inline SVG document
+    /// between keyframe shapes. Independent of `draw`/`draw_progress`: it
+    /// changes the geometry that gets drawn, not how much of it is revealed.
+    #[serde(default)]
+    pub path_morph: Option<SvgPathMorph>,
 }
 
 fn default_draw_stroke_width() -> f32 {
@@ -474,31 +479,26 @@ impl Painter for Svg {
         canvas: &Canvas,
         layout: &BoxLayout,
         props: &AnimatedProperties,
-        _ctx: &PaintCtx,
+        ctx: &PaintCtx,
     ) {
+        if let Some(morph) = &self.path_morph {
+            self.paint_with_path_morph(canvas, layout, props, ctx, morph);
+            return;
+        }
+
         let draw_active = self.draw
             || (props.draw_progress >= 0.0 && props.draw_progress < 1.0)
-            || props.draw_start > 0.0;
+            || props.draw_start > 0.0
+            || props.draw_offset.abs() > 0.0005;
 
         if draw_active {
-            let progress = if props.draw_progress >= 0.0 {
-                props.draw_progress
-            } else {
-                1.0
-            };
+            let (window_start, window_end) = draw_window(props);
 
-            if progress <= 0.0 {
+            if window_end <= window_start {
                 return;
             }
 
-            let svg_data = if let Some(ref src) = self.src {
-                match std::fs::read(src) {
-                    Ok(d) => d,
-                    Err(_) => return,
-                }
-            } else if let Some(ref data) = self.data {
-                data.as_bytes().to_vec()
-            } else {
+            let Some(svg_data) = self.raw_svg_data() else {
                 return;
             };
 
@@ -510,7 +510,7 @@ impl Painter for Svg {
 
             let svg_size = tree.size();
 
-            if progress >= 1.0 {
+            if window_end >= 1.0 && window_start <= 0.0 {
                 self.paint_resvg(canvas, layout, &svg_data, &tree, svg_size);
             } else if self.reveal == SvgReveal::Fill {
                 let Some(full_image) = self.cached_full_image(layout) else {
@@ -521,7 +521,7 @@ impl Painter for Svg {
                     tree.root(),
                     svg_size,
                     layout,
-                    progress,
+                    window_end,
                     self.draw_overlap,
                     &full_image,
                 );
@@ -531,8 +531,8 @@ impl Painter for Svg {
                     tree.root(),
                     svg_size,
                     layout,
-                    progress,
-                    props.draw_start.max(0.0),
+                    window_end,
+                    window_start,
                     self.draw_stroke_width,
                     self.draw_overlap,
                 );
@@ -543,7 +543,229 @@ impl Painter for Svg {
     }
 }
 
+fn draw_window(props: &AnimatedProperties) -> (f32, f32) {
+    let progress = if props.draw_progress >= 0.0 {
+        props.draw_progress.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let draw_start = props.draw_start.max(0.0);
+    let draw_offset = props.draw_offset;
+    let window_start = (draw_start + draw_offset).clamp(0.0, 1.0);
+    let window_end = (progress + draw_offset).clamp(0.0, 1.0);
+    (window_start, window_end)
+}
+
+fn resolve_svg_path_morph(morph: &SvgPathMorph, time: f64) -> Option<String> {
+    let keyframes = &morph.keyframes;
+    let first = keyframes.first()?;
+    if keyframes.len() == 1 {
+        return Some(first.value.clone());
+    }
+    let last = keyframes.last()?;
+    let first_time = first.time;
+    let last_time = last.time;
+    let span = (last_time - first_time).max(1e-9);
+
+    let sample_time = if morph.repeat && time > first_time {
+        let elapsed = time - first_time;
+        let cycle = elapsed.rem_euclid(span);
+        let forward = elapsed.div_euclid(span) as i64 % 2 == 0;
+        if morph.yoyo && !forward {
+            last_time - cycle
+        } else {
+            first_time + cycle
+        }
+    } else {
+        time.clamp(first_time, last_time)
+    };
+
+    let mut lower = first;
+    let mut upper = last;
+    for pair in keyframes.windows(2) {
+        if sample_time >= pair[0].time && sample_time <= pair[1].time {
+            lower = &pair[0];
+            upper = &pair[1];
+            break;
+        }
+    }
+
+    if lower.value == upper.value {
+        return Some(lower.value.clone());
+    }
+    let segment_span = (upper.time - lower.time).max(1e-9);
+    let local_t = ((sample_time - lower.time) / segment_span).clamp(0.0, 1.0);
+    let eased = ease(local_t, &morph.easing) as f32;
+    interpolate_path_data(&lower.value, &upper.value, eased).map(|p| p.to_svg())
+}
+
+fn find_tag_bounds_for_id(source: &str, target_id: &str) -> Option<(usize, usize)> {
+    let needle_double = format!("id=\"{target_id}\"");
+    let needle_single = format!("id='{target_id}'");
+    let id_pos = source
+        .find(&needle_double)
+        .or_else(|| source.find(&needle_single))?;
+    let tag_start = source[..id_pos].rfind('<')?;
+    let tag_end = id_pos + source[id_pos..].find('>')?;
+    Some((tag_start, tag_end))
+}
+
+fn find_d_attribute_value(tag: &str) -> Option<(usize, usize)> {
+    let bytes = tag.as_bytes();
+    let mut i = 0;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'd' && bytes[i + 1] == b'=' {
+            let boundary_ok = i == 0 || bytes[i - 1].is_ascii_whitespace();
+            if boundary_ok {
+                let quote = bytes[i + 2] as char;
+                if quote == '"' || quote == '\'' {
+                    let value_start = i + 3;
+                    if let Some(rel_end) = tag[value_start..].find(quote) {
+                        return Some((value_start, value_start + rel_end));
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn patch_path_d(svg_source: &[u8], target: &str, new_d: &str) -> Option<Vec<u8>> {
+    let source = std::str::from_utf8(svg_source).ok()?;
+    let clean_target = target.strip_prefix('#').unwrap_or(target);
+    let (tag_start, tag_end) = find_tag_bounds_for_id(source, clean_target)?;
+    let tag = &source[tag_start..=tag_end];
+    let (value_start_rel, value_end_rel) = find_d_attribute_value(tag)?;
+
+    let mut patched = String::with_capacity(source.len() + new_d.len());
+    patched.push_str(&source[..tag_start]);
+    patched.push_str(&tag[..value_start_rel]);
+    patched.push_str(new_d);
+    patched.push_str(&tag[value_end_rel..]);
+    patched.push_str(&source[tag_end + 1..]);
+    Some(patched.into_bytes())
+}
+
+fn render_svg_to_image(
+    svg_data: &[u8],
+    target_w_opt: Option<u32>,
+    target_h_opt: Option<u32>,
+) -> Option<skia_safe::Image> {
+    let opt = svg_parse_options();
+    let tree = usvg::Tree::from_data(svg_data, &opt).ok()?;
+    warn_on_unresolved_svg_text(svg_data, &tree);
+
+    let svg_size = tree.size();
+    let target_w = target_w_opt.unwrap_or(svg_size.width() as u32);
+    let target_h = target_h_opt.unwrap_or(svg_size.height() as u32);
+
+    let mut pixmap = tiny_skia::Pixmap::new(target_w, target_h)?;
+    let scale_x = target_w as f32 / svg_size.width();
+    let scale_y = target_h as f32 / svg_size.height();
+    let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+    let img_data = skia_safe::Data::new_copy(pixmap.data());
+    let img_info = ImageInfo::new(
+        (target_w as i32, target_h as i32),
+        ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    skia_safe::images::raster_from_data(&img_info, img_data, target_w as usize * 4)
+}
+
 impl Svg {
+    fn raw_svg_data(&self) -> Option<Vec<u8>> {
+        if let Some(ref src) = self.src {
+            std::fs::read(src).ok()
+        } else {
+            self.data.as_ref().map(|d| d.as_bytes().to_vec())
+        }
+    }
+
+    fn paint_with_path_morph(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        props: &AnimatedProperties,
+        ctx: &PaintCtx,
+        morph: &SvgPathMorph,
+    ) {
+        let Some(raw) = self.raw_svg_data() else {
+            return;
+        };
+        let patched = resolve_svg_path_morph(morph, ctx.time)
+            .and_then(|d| patch_path_d(&raw, &morph.target, &d))
+            .unwrap_or(raw);
+
+        let draw_active = self.draw
+            || (props.draw_progress >= 0.0 && props.draw_progress < 1.0)
+            || props.draw_start > 0.0
+            || props.draw_offset.abs() > 0.0005;
+
+        let target_w_opt = if layout.width > 0.0 {
+            Some(layout.width as u32)
+        } else {
+            None
+        };
+        let target_h_opt = if layout.height > 0.0 {
+            Some(layout.height as u32)
+        } else {
+            None
+        };
+
+        if !draw_active {
+            let Some(img) = render_svg_to_image(&patched, target_w_opt, target_h_opt) else {
+                return;
+            };
+            let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
+            canvas.draw_image_rect(img, None, dst, &Paint::default());
+            return;
+        }
+
+        let (window_start, window_end) = draw_window(props);
+        if window_end <= window_start {
+            return;
+        }
+
+        let opt = svg_parse_options();
+        let Ok(tree) = usvg::Tree::from_data(&patched, &opt) else {
+            return;
+        };
+        warn_on_unresolved_svg_text(&patched, &tree);
+        let svg_size = tree.size();
+
+        if window_end >= 1.0 && window_start <= 0.0 {
+            self.paint_resvg(canvas, layout, &patched, &tree, svg_size);
+        } else if self.reveal == SvgReveal::Fill {
+            let Some(full_image) = render_svg_to_image(&patched, target_w_opt, target_h_opt) else {
+                return;
+            };
+            paint_fill_reveal(
+                canvas,
+                tree.root(),
+                svg_size,
+                layout,
+                window_end,
+                self.draw_overlap,
+                &full_image,
+            );
+        } else {
+            paint_draw_on(
+                canvas,
+                tree.root(),
+                svg_size,
+                layout,
+                window_end,
+                window_start,
+                self.draw_stroke_width,
+                self.draw_overlap,
+            );
+        }
+    }
+
     fn paint_static(&self, canvas: &Canvas, layout: &BoxLayout) {
         let Some(img) = self.cached_full_image(layout) else {
             return;
@@ -705,6 +927,7 @@ mod tests {
             draw_stroke_width: default_draw_stroke_width(),
             draw_overlap: 0.0,
             reveal: SvgReveal::Fill,
+            path_morph: None,
         }
     }
 
@@ -814,6 +1037,7 @@ mod tests {
             draw_stroke_width: default_draw_stroke_width(),
             draw_overlap: 0.0,
             reveal: SvgReveal::Stroke,
+            path_morph: None,
         }
     }
 
@@ -943,6 +1167,7 @@ mod tests {
             draw_stroke_width: default_draw_stroke_width(),
             draw_overlap: 0.0,
             reveal: SvgReveal::Stroke,
+            path_morph: None,
         }
     }
 
@@ -1087,6 +1312,263 @@ mod tests {
             render(false),
             "with draw_progress at rest the draw branch short-circuits to the finished mark, \
              so the flag changes nothing — which is why validate now refuses it"
+        );
+    }
+}
+
+#[cfg(test)]
+mod path_drawing_regression_tests {
+    use super::*;
+    use rustmotion_core::engine::layout_pass::Insets;
+    use rustmotion_core::schema::{EasingType, SvgPathMorphKeyframe};
+
+    const SIZE: i32 = 100;
+
+    fn ctx() -> PaintCtx {
+        PaintCtx {
+            time: 0.0,
+            scenario_time: 0.0,
+            scene_duration: 1.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: SIZE as u32,
+            video_height: SIZE as u32,
+            stagger_offset: 0.0,
+        }
+    }
+
+    fn ctx_at(time: f64) -> PaintCtx {
+        PaintCtx { time, ..ctx() }
+    }
+
+    fn layout() -> BoxLayout {
+        BoxLayout {
+            x: 0.0,
+            y: 0.0,
+            width: SIZE as f32,
+            height: SIZE as f32,
+            border: Insets::default(),
+            padding: Insets::default(),
+        }
+    }
+
+    fn horizontal_stroke_svg() -> Svg {
+        Svg {
+            src: None,
+            data: Some(
+                "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>\
+                 <path d='M10 50 L90 50' stroke='#000000' stroke-width='8' \
+                 stroke-linecap='butt' fill='none'/></svg>"
+                    .to_string(),
+            ),
+            timing: Default::default(),
+            style: Default::default(),
+            timeline: Vec::new(),
+            stagger: None,
+            draw: false,
+            draw_stroke_width: default_draw_stroke_width(),
+            draw_overlap: 0.0,
+            reveal: SvgReveal::Stroke,
+            path_morph: None,
+        }
+    }
+
+    fn read_alpha(surface: &mut skia_safe::Surface) -> Vec<u8> {
+        let info = skia_safe::ImageInfo::new(
+            (SIZE, SIZE),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (SIZE * SIZE * 4) as usize];
+        let ok = surface.read_pixels(&info, &mut buf, (SIZE * 4) as usize, (0, 0));
+        assert!(ok, "pixel read should succeed");
+        buf
+    }
+
+    fn render(svg: &Svg, props: &AnimatedProperties) -> Vec<u8> {
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((SIZE, SIZE)).expect("raster surface");
+        svg.paint_content(surface.canvas(), &layout(), props, &ctx());
+        read_alpha(&mut surface)
+    }
+
+    fn render_at(svg: &Svg, props: &AnimatedProperties, time: f64) -> Vec<u8> {
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((SIZE, SIZE)).expect("raster surface");
+        svg.paint_content(surface.canvas(), &layout(), props, &ctx_at(time));
+        read_alpha(&mut surface)
+    }
+
+    fn alpha_at(buf: &[u8], x: i32, y: i32) -> u8 {
+        buf[((y * SIZE + x) * 4 + 3) as usize]
+    }
+
+    #[test]
+    fn draw_start_erases_the_head_of_an_already_finished_svg_stroke() {
+        let svg = horizontal_stroke_svg();
+        let props = AnimatedProperties {
+            draw_start: 0.5,
+            ..AnimatedProperties::default()
+        };
+        let buf = render(&svg, &props);
+        assert_eq!(
+            alpha_at(&buf, 20, 50),
+            0,
+            "draw_start=0.5 on a finished (never-animated) svg stroke must erase the head — \
+             the paint_resvg branch used to ignore draw_start entirely once progress was \
+             treated as finished"
+        );
+        assert!(alpha_at(&buf, 80, 50) > 40, "and leave the tail painted");
+    }
+
+    #[test]
+    fn draw_start_absent_matches_draw_start_zero_on_a_finished_stroke() {
+        let svg = horizontal_stroke_svg();
+        let with_zero = render(
+            &svg,
+            &AnimatedProperties {
+                draw_start: 0.0,
+                ..AnimatedProperties::default()
+            },
+        );
+        let absent = render(&svg, &AnimatedProperties::default());
+        assert_eq!(
+            with_zero, absent,
+            "draw_start absent and draw_start 0 must both paint the whole finished stroke"
+        );
+    }
+
+    #[test]
+    fn draw_offset_marches_the_drawn_window_along_the_path() {
+        let svg = horizontal_stroke_svg();
+        let at_start = render(
+            &svg,
+            &AnimatedProperties {
+                draw_progress: 0.3,
+                ..AnimatedProperties::default()
+            },
+        );
+        let shifted = render(
+            &svg,
+            &AnimatedProperties {
+                draw_progress: 0.3,
+                draw_offset: 0.5,
+                ..AnimatedProperties::default()
+            },
+        );
+        assert!(
+            alpha_at(&at_start, 20, 50) > 40,
+            "with no offset, the window starts at the path's own beginning"
+        );
+        assert_eq!(
+            alpha_at(&shifted, 20, 50),
+            0,
+            "draw_offset=0.5 must march the window forward, leaving the path's start empty"
+        );
+        assert!(
+            alpha_at(&shifted, 70, 50) > 40,
+            "and paint further along the path instead"
+        );
+    }
+
+    fn two_path_svg() -> Svg {
+        Svg {
+            src: None,
+            data: Some(
+                "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>\
+                 <path id='static' d='M10 10 L20 10' stroke='#00FF00' stroke-width='4' \
+                 fill='none'/>\
+                 <path id='morphed' d='M10 90 L20 90' stroke='#FF0000' stroke-width='6' \
+                 fill='none'/></svg>"
+                    .to_string(),
+            ),
+            timing: Default::default(),
+            style: Default::default(),
+            timeline: Vec::new(),
+            stagger: None,
+            draw: false,
+            draw_stroke_width: default_draw_stroke_width(),
+            draw_overlap: 0.0,
+            reveal: SvgReveal::Stroke,
+            path_morph: Some(SvgPathMorph {
+                target: "morphed".to_string(),
+                keyframes: vec![
+                    SvgPathMorphKeyframe {
+                        time: 0.0,
+                        value: "M10 90 L20 90".to_string(),
+                    },
+                    SvgPathMorphKeyframe {
+                        time: 1.0,
+                        value: "M80 90 L90 90".to_string(),
+                    },
+                ],
+                easing: EasingType::Linear,
+                repeat: false,
+                yoyo: false,
+            }),
+        }
+    }
+
+    fn red_alpha_at(buf: &[u8], x: i32, y: i32) -> u8 {
+        let idx = ((y * SIZE + x) * 4) as usize;
+        if buf[idx] > 150 && buf[idx + 1] < 60 && buf[idx + 2] < 60 {
+            buf[idx + 3]
+        } else {
+            0
+        }
+    }
+
+    #[test]
+    fn path_morph_moves_the_targeted_path_and_leaves_the_other_path_alone() {
+        let svg = two_path_svg();
+        let start_buf = render_at(&svg, &AnimatedProperties::default(), 0.0);
+        let end_buf = render_at(&svg, &AnimatedProperties::default(), 1.0);
+
+        assert!(
+            red_alpha_at(&start_buf, 15, 90) > 40,
+            "at t=0 the morphed (red) path must be at its first keyframe position"
+        );
+        assert_eq!(
+            red_alpha_at(&start_buf, 85, 90),
+            0,
+            "and not yet at its last keyframe position"
+        );
+        assert!(
+            red_alpha_at(&end_buf, 85, 90) > 40,
+            "at t=1 the morphed (red) path must have reached its last keyframe position"
+        );
+        assert_eq!(
+            red_alpha_at(&end_buf, 15, 90),
+            0,
+            "and left its first keyframe position"
+        );
+    }
+
+    #[test]
+    fn a_target_with_no_matching_id_falls_back_to_the_original_document_instead_of_panicking() {
+        let mut svg = two_path_svg();
+        svg.path_morph = Some(SvgPathMorph {
+            target: "does-not-exist".to_string(),
+            keyframes: vec![
+                SvgPathMorphKeyframe {
+                    time: 0.0,
+                    value: "M10 90 L20 90".to_string(),
+                },
+                SvgPathMorphKeyframe {
+                    time: 1.0,
+                    value: "M80 90 L90 90".to_string(),
+                },
+            ],
+            easing: EasingType::Linear,
+            repeat: false,
+            yoyo: false,
+        });
+        let buf = render_at(&svg, &AnimatedProperties::default(), 0.5);
+        assert!(
+            red_alpha_at(&buf, 15, 90) > 40,
+            "an unmatched target must render the untouched document rather than panic or \
+             blank the frame"
         );
     }
 }

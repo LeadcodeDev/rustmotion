@@ -192,6 +192,39 @@ fn validate_children(
                         p
                     ));
                 }
+                if let Some(morph) = &svg.path_morph {
+                    let kfs: Vec<(f64, String)> = morph
+                        .keyframes
+                        .iter()
+                        .map(|k| (k.time, k.value.clone()))
+                        .collect();
+                    check_path_morph_keyframes(&kfs, &p, "path_morph", errors);
+
+                    let source_bytes = if let Some(ref src) = svg.src {
+                        std::fs::read(src).ok()
+                    } else {
+                        svg.data.as_ref().map(|d| d.as_bytes().to_vec())
+                    };
+                    let target_found = match source_bytes
+                        .as_deref()
+                        .and_then(|b| std::str::from_utf8(b).ok())
+                    {
+                        Some(source) => {
+                            let clean = morph.target.strip_prefix('#').unwrap_or(&morph.target);
+                            source.contains(&format!("id=\"{clean}\""))
+                                || source.contains(&format!("id='{clean}'"))
+                        }
+                        None => true,
+                    };
+                    if !target_found {
+                        errors.push(format!(
+                            "{}: path_morph.target '{}' does not match any element id in this \
+                             inline SVG document (path_morph_target_not_found) — the field \
+                             would silently have no effect.",
+                            p, morph.target
+                        ));
+                    }
+                }
             }
             Component::Icon(icon) => {
                 if let Some((prefix, name)) = icon.icon.split_once(':') {
@@ -241,7 +274,42 @@ fn validate_children(
                 }
                 validate_children(&container.children, &p, scene_duration, errors, warnings);
             }
+            Component::Shape(shape) => {
+                if let Some(morph) = &shape.path_morph {
+                    let kfs: Vec<(f64, String)> = morph
+                        .keyframes
+                        .iter()
+                        .map(|k| (k.time, k.value.clone()))
+                        .collect();
+                    check_path_morph_keyframes(&kfs, &p, "path_morph", errors);
+                }
+            }
             _ => {}
+        }
+    }
+}
+
+fn check_path_morph_keyframes(
+    keyframes: &[(f64, String)],
+    path: &str,
+    label: &str,
+    errors: &mut Vec<String>,
+) {
+    for pair in keyframes.windows(2) {
+        let (t0, v0) = &pair[0];
+        let (t1, v1) = &pair[1];
+        if v0 == v1 {
+            continue;
+        }
+        if rustmotion::engine::renderer::interpolate_path_data(v0, v1, 0.5).is_none() {
+            errors.push(format!(
+                "{path}: {label} keyframe at time {t0} ('{v0}') and keyframe at time {t1} \
+                 ('{v1}') have different path command structures \
+                 (path_morph_structure_mismatch) — interpolating a path needs the same command \
+                 sequence (same M/L/C/Z order and point count) on every keyframe. Rewrite both \
+                 keyframes with matching commands, or split the animation into segments that \
+                 each only move an already-shared structure."
+            ));
         }
     }
 }
@@ -1500,6 +1568,138 @@ mod motion_path_validation_tests {
         assert!(
             errors.iter().all(|e| !e.contains("animation finishes at")),
             "a looping motion_path must not be budget-checked, like orbit/wiggle: {errors:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod path_morph_validation_tests {
+    use super::*;
+
+    const TWO_PATH_SVG: &str = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>\
+        <path id='p1' d='M10 10 L20 10' stroke='#000000' fill='none'/></svg>";
+
+    #[test]
+    fn a_structure_mismatched_shape_path_morph_is_a_named_validation_error() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "shape",
+            "shape": "rect",
+            "fill": "#ff0000",
+            "path_morph": {
+                "keyframes": [
+                    { "time": 0.0, "value": "M0 0 L10 0 L10 10 Z" },
+                    { "time": 1.0, "value": "M0 0 L10 0 L10 10 L5 15 L0 10 Z" }
+                ]
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("path_morph_structure_mismatch")),
+            "a structure mismatch between path_morph keyframes must be a named validation \
+             error, not just a render-time stderr warning: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_structure_matched_shape_path_morph_has_no_error() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "shape",
+            "shape": "rect",
+            "fill": "#ff0000",
+            "path_morph": {
+                "keyframes": [
+                    { "time": 0.0, "value": "M0 0 L10 0 L10 10 Z" },
+                    { "time": 1.0, "value": "M0 0 L20 0 L20 20 Z" }
+                ]
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors
+                .iter()
+                .all(|e| !e.contains("path_morph_structure_mismatch")),
+            "matching command structure must not be flagged: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_structure_mismatched_svg_path_morph_is_a_named_validation_error() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "svg",
+            "data": TWO_PATH_SVG,
+            "path_morph": {
+                "target": "p1",
+                "keyframes": [
+                    { "time": 0.0, "value": "M10 10 L20 10" },
+                    { "time": 1.0, "value": "M10 10 L20 10 L20 20" }
+                ]
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("path_morph_structure_mismatch")),
+            "expected a structure-mismatch error for svg path_morph: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_svg_path_morph_target_that_matches_no_id_is_a_named_validation_error() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "svg",
+            "data": TWO_PATH_SVG,
+            "path_morph": {
+                "target": "does-not-exist",
+                "keyframes": [
+                    { "time": 0.0, "value": "M10 10 L20 10" },
+                    { "time": 1.0, "value": "M10 10 L30 10" }
+                ]
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("path_morph_target_not_found")),
+            "an unmatched target must be named, not a silent no-op: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_svg_path_morph_target_that_matches_an_id_has_no_error() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "svg",
+            "data": TWO_PATH_SVG,
+            "path_morph": {
+                "target": "#p1",
+                "keyframes": [
+                    { "time": 0.0, "value": "M10 10 L20 10" },
+                    { "time": 1.0, "value": "M10 10 L30 10" }
+                ]
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors.iter().all(|e| !e.contains("path_morph_target")),
+            "a leading '#' must still match the bare id attribute: {errors:?}"
         );
     }
 }

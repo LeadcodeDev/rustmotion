@@ -650,6 +650,7 @@ const KNOWN_MOTION_PROPERTIES: &[&str] = &[
     "clip_path_progress",
     "letter_spacing",
     "draw_start",
+    "draw_offset",
 ];
 
 fn validate_motion_property<E: serde::de::Error>(value: &str) -> Result<(), E> {
@@ -705,6 +706,45 @@ pub struct KeyframesConfig {
     pub duration: f64,
     #[serde(default, rename = "loop")]
     pub repeat: bool,
+}
+
+/// Animates the `d` attribute of one `<path>` inside an inline `svg`
+/// document between keyframe shapes, the `svg` counterpart to `shape`'s
+/// `path_morph`. An SVG document typically holds several paths, unlike
+/// `shape`'s single implicit path, so `target` names which one this track
+/// drives.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SvgPathMorph {
+    /// The `id` attribute of the `<path>` element inside the inline SVG
+    /// document this track drives, with or without a leading `#`. No match
+    /// inside the document is a validate-time error, not a silent no-op.
+    pub target: String,
+    /// At least one keyframe; a single keyframe holds that shape statically.
+    pub keyframes: Vec<SvgPathMorphKeyframe>,
+    /// Applied within each segment between two consecutive keyframes.
+    #[serde(default)]
+    pub easing: EasingType,
+    /// Loops back to the first keyframe once `time` passes the last one,
+    /// instead of holding the last shape forever.
+    #[serde(default)]
+    pub repeat: bool,
+    /// Only with `repeat`: alternates direction each cycle instead of
+    /// snapping back to the first keyframe.
+    #[serde(default)]
+    pub yoyo: bool,
+}
+
+/// One stop in a `SvgPathMorph`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SvgPathMorphKeyframe {
+    /// Seconds from scene start, like every other keyframe `time` in this
+    /// schema — not a `0..1` fraction.
+    pub time: f64,
+    /// SVG path data (the `d`-attribute mini-language), replacing the
+    /// target path's own `d` at this keyframe's time.
+    pub value: String,
 }
 
 /// Motion blur configuration.
@@ -1715,6 +1755,85 @@ mod motion_property_tests {
         });
         let effect: AnimationEffect = serde_json::from_value(json).unwrap();
         assert!(matches!(effect, AnimationEffect::Keyframes(_)));
+    }
+
+    #[test]
+    fn draw_offset_is_a_recognized_keyframe_animation_property() {
+        let json = json!({
+            "name": "keyframes",
+            "keyframes": [
+                { "property": "draw_offset", "keyframes": [
+                    { "time": 0.0, "value": 0.0 },
+                    { "time": 1.0, "value": 1.0 }
+                ]}
+            ]
+        });
+        let effect: AnimationEffect = serde_json::from_value(json)
+            .expect("draw_offset must be a known animation property, not rejected as unknown");
+        match effect {
+            AnimationEffect::Keyframes(cfg) => assert_eq!(cfg.keyframes[0].property, "draw_offset"),
+            other => panic!("expected Keyframes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn draw_offset_is_a_recognized_wiggle_property() {
+        let json = json!({
+            "name": "wiggle",
+            "property": "draw_offset",
+            "amplitude": 0.1,
+            "frequency": 1.0
+        });
+        let effect: AnimationEffect = serde_json::from_value(json)
+            .expect("draw_offset must be usable as a wiggle property, not rejected as unknown");
+        match effect {
+            AnimationEffect::Wiggle(cfg) => assert_eq!(cfg.property, "draw_offset"),
+            other => panic!("expected Wiggle, got {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod svg_path_morph_schema_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_target_and_at_least_one_keyframe_parse() {
+        let json = json!({
+            "target": "#outline",
+            "keyframes": [
+                { "time": 0.0, "value": "M0 0 L10 0" },
+                { "time": 1.0, "value": "M0 0 L20 0" }
+            ]
+        });
+        let morph: SvgPathMorph = serde_json::from_value(json).expect("valid SvgPathMorph JSON");
+        assert_eq!(morph.target, "#outline");
+        assert_eq!(morph.keyframes.len(), 2);
+    }
+
+    #[test]
+    fn a_missing_target_is_rejected_rather_than_silently_matching_nothing() {
+        let json = json!({
+            "keyframes": [
+                { "time": 0.0, "value": "M0 0 L10 0" }
+            ]
+        });
+        serde_json::from_value::<SvgPathMorph>(json).expect_err(
+            "target is required — without it there is no path to select inside the document",
+        );
+    }
+
+    #[test]
+    fn an_unknown_field_is_rejected_by_name() {
+        let json = json!({
+            "target": "#outline",
+            "keyframes": [{ "time": 0.0, "value": "M0 0 L10 0" }],
+            "duratoin": 1.0
+        });
+        let err = serde_json::from_value::<SvgPathMorph>(json)
+            .expect_err("a typo'd field must be rejected, not silently ignored");
+        assert!(err.to_string().contains("duratoin"), "got: {err}");
     }
 }
 
