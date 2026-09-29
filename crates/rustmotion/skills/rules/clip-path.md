@@ -4,7 +4,7 @@
 **lui-même** à une forme arbitraire — et contrairement à `overflow`, il emporte le
 fond, la bordure et l'ombre externe avec lui, comme en CSS.
 
-Six formes, toutes résolues contre la **border box** du nœud :
+Sept formes, toutes résolues contre la **border box** du nœud :
 
 | `kind` | Champs | Résolution des `%` |
 |---|---|---|
@@ -14,6 +14,7 @@ Six formes, toutes résolues contre la **border box** du nœud :
 | `ellipse` | `rx` `ry`, `origin` optionnel | `rx` sur la largeur, `ry` sur la hauteur |
 | `polygon` | `points`: `[[x, y], …]` | `x` sur la largeur, `y` sur la hauteur |
 | `path` | `d`: données de chemin SVG | coordonnées relatives au coin haut-gauche de la boîte |
+| `blob` | `radius`, `origin` optionnel, plus `lobes`/`wobble`/`seed` optionnels (mêmes défauts que `transition: { type: "blob" }` — `8`/`0.15`/`11`) | comme `circle` : `sqrt(w² + h²) / √2` |
 
 `origin` prend la même forme que `transform-origin` et vaut le centre par défaut.
 
@@ -56,3 +57,13 @@ En revanche il ne s'interpole pas dans un `timeline`. C'est une propriété de p
 supportée à l'animation — voir [timeline-sequencing.md](timeline-sequencing.md).
 Pour une révélation progressive, animer un `transform` sous un parent
 `overflow: hidden` reste la voie.
+
+## `blob` : la silhouette de la transition, en masque
+
+`blob` fait grandir la même silhouette organique procédurale que la transition
+[`blob`](mask-transition.md) — mêmes `lobes`, `wobble` et `seed`, **le même
+générateur**, pas une seconde implémentation. La différence est ce qui la met à
+l'échelle : `radius` autour de `origin`, au lieu du `progress` d'une transition.
+
+Comme `path` et `node-path`, il n'est pas encore accepté par `kind: "morph"` —
+seuls `inset`, `circle`, `ellipse` et `polygon` interpolent entre deux formes.
