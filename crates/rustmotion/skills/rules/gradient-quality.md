@@ -4,16 +4,21 @@ Dark gradients are prone to color banding (visible steps instead of smooth trans
 
 1. **Linear color space interpolation** for animated background gradients (smoother dark tones)
 2. **Subdivided color stops** (16 intermediate stops between each color pair)
-3. **10-bit H.264** encoding (`yuv420p10le`, `high10` profile) when ffmpeg is available
+3. **Optional 10-bit H.264** encoding (`yuv420p10le`, `high10` profile) behind `--codec h264_10bit`
 4. **Dithering** enabled on all gradient paints
 
 ## Encoding recommendations
 
 | Scenario | Recommendation |
 |---|---|
-| Dark gradient backgrounds | Use `--codec prores` for best quality |
-| General use | Default H.264 10-bit (requires ffmpeg) |
+| Dark gradient backgrounds | `--codec prores` for best quality, or `--codec h264_10bit` for a small file |
+| General use | Default H.264, 8-bit, plays everywhere |
 | No ffmpeg available | Built-in openh264 (8-bit, may show banding on dark gradients) |
+
+10-bit is not the default, and the reason is not quality. `yuv420p10le` in the
+`high10` profile is refused outright by QuickTime and by Safari, so a file that
+looked better was a file a lot of people could not open. `--codec h264_10bit` is
+the same encode it used to do, asked for on purpose.
 
 **GOOD:** Use `gradient_type: "radial"` with at least 3 colors for smooth transitions:
 ```json

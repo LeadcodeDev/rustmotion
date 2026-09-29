@@ -324,7 +324,11 @@ pub enum RustmotionError {
     #[error("Invalid CRF value {value}: must be between 0 and 51")]
     InvalidCrf { value: u8 },
 
-    #[error("Unknown codec '{codec}'. Supported: h264, h265, vp9, prores")]
+    #[error(
+        "Unknown codec '{codec}'. Supported: h264, h264_10bit, h265, vp9, prores\n\
+         h264 is 8-bit and plays everywhere; h264_10bit trades that for banding-free \
+         dark gradients."
+    )]
     UnknownCodec { codec: String },
 
     #[error("Path is not valid UTF-8: '{path}'")]
