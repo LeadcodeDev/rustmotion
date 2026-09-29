@@ -31,7 +31,7 @@ For a product demo or an agent walkthrough — the arrow that moves to a control
 | `tone` | `light` (white arrow, dark outline), `dark`, or `outline` (transparent fill, white outline) |
 | `color` / `outline_color` | Override `tone` |
 | `click_ring` | `subtle` / `standard` / `bold` / `none` |
-| `path` | Waypoints `{time, x, y}` — the pointer **clicks on arrival** at each one |
+| `path` | Waypoints `{time, x, y, click?}` — the pointer clicks on arrival unless the waypoint says `"click": false` |
 | `click_at` | Clicks for a stationary pointer. **Ignored if `path` is present** |
 | `click_duration` | Duration of the click, *and* the pause on the waypoint before moving on |
 | `path_easing` | `ease_in_out` (default), `linear`, `ease_out`, `step` |
@@ -77,3 +77,31 @@ The default `glyph` is the classic arrow. `hand` draws an open hand pointing wit
 `click_glyph` only applies **for the duration of the click** — the same window `click_progress` already computes from `path`'s arrival times or `click_at`. There is no second clock: a hand with no `click_glyph` set still dips on click (the existing scale animation), it just never swaps shape. `grab` with no `glyph: "hand"` is legal but unusual — nothing ever shows it, since the resting glyph never becomes it outside a click.
 
 Because the hotspot is defined per glyph rather than being the geometric centre of its bounding box, switching `glyph` (or swapping to `click_glyph` mid-click) never moves the point a waypoint is aimed at — only the drawn shape around that point changes.
+
+## Travelling through a point without clicking
+
+A waypoint clicks on arrival, which is what you want for the control the
+walkthrough is about and wrong for the corner it rounds on the way there. Set
+`"click": false` on the ones that are only a path:
+
+```json
+"path": [
+  { "time": 0.0, "x": 120, "y": 620 },
+  { "time": 0.6, "x": 500, "y": 620, "click": false },
+  { "time": 1.2, "x": 500, "y": 240 }
+]
+```
+
+The default is `true`, so a scenario written before this field existed is
+unchanged. `click_at` stays ignored while a `path` is present — a pointer that
+should click somewhere says so on the waypoint, not beside it.
+
+## `tone: "outline"` reads on a light frame too
+
+The unfilled tone is a white stroke over a transparent fill. On a white frame
+that was invisible, although the tone exists precisely so the pointer can sit on
+any background without a filled shape competing with what it points at. It now
+carries a dark contour under the white one, so the glyph reads either way.
+
+Setting `outline_color` yourself turns the contour off — you have said what the
+edge should be, and a second edge under it would be a surprise.
