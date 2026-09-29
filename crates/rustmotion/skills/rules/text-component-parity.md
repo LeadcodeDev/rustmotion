@@ -33,7 +33,7 @@ La ligne du dégradé est aussi recalculée : c'est la projection CSS de la boî
 
 ## gradient_text : stops explicites
 
-Champ optionnel `stops`. Il ne partage pas la clé des stops d'un fond : `gradient_text` nomme la position `position`, un `background` la nomme `offset`. Les deux sont une fraction `0..1` de la ligne du dégradé — seul le nom diffère, et le validateur refuse l'autre.
+Champ optionnel `stops`. La position se nomme `position` — c'est la forme canonique, celle que produit la sérialisation. `offset`, le nom qu'utilisent les stops d'un fond, est accepté en entrée comme alias : les deux désignent le même champ, une fraction `0..1` de la ligne du dégradé.
 
 ```json
 { "type": "gradient_text", "content": "Rustmotion", "angle": 90,

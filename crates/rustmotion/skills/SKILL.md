@@ -1529,7 +1529,7 @@ Style: `font-size`, `font-weight`, `font-family`
 
 `angle` follows the CSS convention: `0` points up, `90` points right, growing clockwise.
 
-`stops` places each colour explicitly instead of spreading `colors` evenly along the gradient line. The position key is **`position`**, not the `offset` a background's stops use — the two vocabularies differ, and the validator refuses the wrong one:
+`stops` places each colour explicitly instead of spreading `colors` evenly along the gradient line. The position key is **`position`** — the canonical one. `offset`, the key a background's stops use for the same value, is accepted as an alias:
 
 ```json
 { "type": "gradient_text", "content": "Rustmotion", "angle": 90,

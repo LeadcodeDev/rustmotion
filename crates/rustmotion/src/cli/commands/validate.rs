@@ -14,6 +14,10 @@ fn announced_duration(scenario: &ResolvedScenario) -> f64 {
     rustmotion::encode::build_frame_tasks(scenario).len() as f64 / fps
 }
 
+fn format_duration_seconds(seconds: f64) -> String {
+    format!("{:.3}s", seconds)
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum FixRefusal {
     HtmlSource,
@@ -207,7 +211,7 @@ pub fn cmd_validate(
         "  Resolution: {}x{} @ {}fps",
         loaded.scenario.video.width, loaded.scenario.video.height, loaded.scenario.video.fps
     );
-    eprintln!("  Duration: {:.1}s", total_duration);
+    eprintln!("  Duration: {}", format_duration_seconds(total_duration));
     if !report_out.geom_violations.is_empty() {
         eprintln!("  Geometry warnings: {}", report_out.geom_violations.len());
     }
@@ -544,6 +548,16 @@ mod tests {
         assert!(
             (duration - 3.0).abs() < 1e-6,
             "expected 3.0s with no transitions, got {duration}"
+        );
+    }
+
+    #[test]
+    fn printed_duration_keeps_frame_level_precision_instead_of_rounding_to_one_decimal() {
+        let formatted = format_duration_seconds(2.95);
+        assert_eq!(
+            formatted, "2.950s",
+            "rounding 2.95s to one decimal reads as \"3.0s\", which hides real sub-second \
+             drift from the author; got {formatted}"
         );
     }
 

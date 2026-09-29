@@ -1009,6 +1009,68 @@ fn v2_transition_window(
     Some(starts[incoming]..starts[incoming] + transition_frames[incoming])
 }
 
+fn v2_dropped_transition_warning(i: usize, previous: usize) -> String {
+    format!(
+        "warning: scene {i} both overlaps scene {previous} on the absolute timeline and \
+         declares a `transition`. A transition composites two finished frame \
+         buffers and an overlap composites live scenes; the two cannot both \
+         describe the same frames. The transition is ignored here — remove it, or \
+         move `at` so the scenes no longer overlap."
+    )
+}
+
+fn v2_composited_dropped_transition_warnings(
+    scenes: &[Scene],
+    duration_frames: &[u32],
+    transition_frames: &[u32],
+    starts: &[u32],
+) -> Vec<String> {
+    scenes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, scene)| {
+            if i == 0 || scene.transition.is_none() {
+                return None;
+            }
+            let previous_end = starts[i - 1] + duration_frames[i - 1];
+            if starts[i] + transition_frames[i] < previous_end {
+                Some(v2_dropped_transition_warning(i, i - 1))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+pub fn v2_dropped_transition_warnings(scenario: &Scenario) -> Vec<String> {
+    let fps = scenario.video.fps;
+    if fps == 0 {
+        return Vec::new();
+    }
+    let mut warnings = Vec::new();
+    for view in &scenario.views {
+        if !matches!(view.view_type, ViewType::Slide) {
+            continue;
+        }
+        if view_timing(view) != TimingMode::V2 {
+            continue;
+        }
+        let placement = v2_placement(&view.scenes, fps);
+        if !placement.author_overlaps {
+            continue;
+        }
+        let duration_frames: Vec<u32> = placement.spans.iter().map(SceneSpan::frames).collect();
+        let starts: Vec<u32> = placement.spans.iter().map(|s| s.start).collect();
+        warnings.extend(v2_composited_dropped_transition_warnings(
+            &view.scenes,
+            &duration_frames,
+            &placement.transition_frames,
+            &starts,
+        ));
+    }
+    warnings
+}
+
 fn v2_build_composited(
     tasks: &mut Vec<FrameTask>,
     view_idx: usize,
@@ -1018,22 +1080,6 @@ fn v2_build_composited(
     starts: &[u32],
     fps: u32,
 ) {
-    for (i, scene) in scenes.iter().enumerate() {
-        if i > 0 && scene.transition.is_some() {
-            let previous_end = starts[i - 1] + duration_frames[i - 1];
-            if starts[i] + transition_frames[i] < previous_end {
-                eprintln!(
-                    "warning: scene {i} both overlaps scene {} on the absolute timeline and \
-                     declares a `transition`. A transition composites two finished frame \
-                     buffers and an overlap composites live scenes; the two cannot both \
-                     describe the same frames. The transition is ignored here — remove it, or \
-                     move `at` so the scenes no longer overlap.",
-                    i - 1
-                );
-            }
-        }
-    }
-
     let total_frames = starts
         .iter()
         .zip(duration_frames)
@@ -2055,6 +2101,56 @@ mod timing_v2_tests {
                 .any(|t| matches!(t, FrameTask::SlideTransition { .. })),
             "a 0.2s transition cannot describe a 1.5s overlap, so the overlap wins and the \
              transition is dropped — loudly, which the warning covers"
+        );
+    }
+
+    #[test]
+    fn v2_dropped_transition_warnings_reports_the_drop_exactly_once() {
+        let scenario = load(
+            r##"{
+            "video": {"width": 32, "height": 32, "fps": 30},
+            "timing": "v2",
+            "composition": [{"type": "slide", "scenes": [
+                {"at": 0, "duration": 2.0, "children": []},
+                {"at": 0.5, "duration": 2.0,
+                 "transition": {"type": "fade", "duration": 0.2}, "children": []}
+            ]}]
+        }"##,
+        );
+        let warnings = v2_dropped_transition_warnings(&scenario);
+        assert_eq!(
+            warnings.len(),
+            1,
+            "one scene both overlaps its predecessor and declares a transition, so exactly one \
+             warning must come out of this pure, single-call-site function: {warnings:?}"
+        );
+        assert!(
+            warnings[0].contains("scene 1") && warnings[0].contains("scene 0"),
+            "the warning must name the overlapping pair: {:?}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn v2_build_composited_no_longer_prints_the_dropped_transition_warning_itself() {
+        let scenario = load(
+            r##"{
+            "video": {"width": 32, "height": 32, "fps": 30},
+            "timing": "v2",
+            "composition": [{"type": "slide", "scenes": [
+                {"at": 0, "duration": 2.0, "children": []},
+                {"at": 0.5, "duration": 2.0,
+                 "transition": {"type": "fade", "duration": 0.2}, "children": []}
+            ]}]
+        }"##,
+        );
+        let tasks = build_frame_tasks(&scenario);
+        assert!(
+            !tasks
+                .iter()
+                .any(|t| matches!(t, FrameTask::SlideTransition { .. })),
+            "building the tasks must still drop the transition frames (behaviour unchanged); \
+             only the diagnostic side effect moved to v2_dropped_transition_warnings"
         );
     }
 

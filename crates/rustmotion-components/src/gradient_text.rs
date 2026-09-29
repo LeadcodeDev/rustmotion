@@ -35,6 +35,9 @@ pub struct GradientTextStop {
     /// Hex color at this stop, e.g. `"#7C3AED"`.
     pub color: String,
     /// Position along the gradient line, from `0.0` (first stop) to `1.0` (last).
+    /// `offset`, the name a background's gradient stops use for the same
+    /// value, is also accepted.
+    #[serde(alias = "offset")]
     pub position: f32,
 }
 
@@ -978,6 +981,18 @@ mod tests {
             "moving the middle stop from its even-spacing position (0.5) to 0.9 must move the \
              ramp: the text's midpoint should read far less green than the even-spacing case \
              (even={mid_even:?}, skewed={mid_skewed:?})"
+        );
+    }
+
+    #[test]
+    fn a_stop_written_with_offset_deserializes_the_same_as_one_written_with_position() {
+        let json = r##"{"color": "#7C3AED", "offset": 0.7}"##;
+        let stop: GradientTextStop =
+            serde_json::from_str(json).expect("offset must be accepted as an alias for position");
+        assert_eq!(
+            stop.position, 0.7,
+            "a stop using the background gradient's `offset` vocabulary must resolve to the \
+             same `position` field gradient_text reads at paint time"
         );
     }
 
