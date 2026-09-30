@@ -6,7 +6,9 @@ use skia_safe::{Canvas, PaintStyle, Path, PathBuilder, RRect, Rect};
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{paint_from_hex, typeface_with_fallback, wrap_text};
+use rustmotion_core::engine::renderer::{
+    paint_from_hex, subpixel_font, typeface_with_fallback, wrap_text,
+};
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
@@ -157,7 +159,7 @@ impl Callout {
         let family = self.style.font_family.as_deref().unwrap_or("Inter");
         let typeface = typeface_with_fallback(family, font_style)?;
 
-        let font = skia_safe::Font::from_typeface(typeface, font_size);
+        let font = subpixel_font(typeface, font_size);
         let (_, metrics) = font.metrics();
         let ascent = -metrics.ascent;
         let line_height = font_size * 1.4;

@@ -7,7 +7,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    parse_hex_color, typeface_with_fallback,
+    parse_hex_color, subpixel_font, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -144,9 +144,8 @@ impl TagCloud {
             let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
                 continue;
             };
-            let font = skia_safe::Font::from_typeface(typeface, font_size);
-            let emoji_font =
-                emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+            let font = subpixel_font(typeface, font_size);
+            let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
 
             let text_width = measure_text_with_fallback(&tag.text, &font, &emoji_font, 0.0);
             let (_, fm_metrics) = font.metrics();
@@ -245,9 +244,8 @@ impl TagCloud {
             let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
                 continue;
             };
-            let font = skia_safe::Font::from_typeface(typeface, pt.font_size);
-            let emoji_font =
-                emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, pt.font_size));
+            let font = subpixel_font(typeface, pt.font_size);
+            let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, pt.font_size));
 
             let text_x = pt.x;
             let text_y = y_offset + pt.y + pt.ascent;

@@ -1289,7 +1289,7 @@ fn apply_default_display(component: &Component, css: &mut CssStyle) {
 
 fn measure_text_line_width(text: &str, font_size: f32, family: &str, bold: bool) -> f32 {
     use rustmotion_core::engine::renderer::{
-        emoji_typeface, measure_text_with_fallback, typeface_with_fallback,
+        emoji_typeface, measure_text_with_fallback, subpixel_font, typeface_with_fallback,
     };
     let style = if bold {
         skia_safe::FontStyle::bold()
@@ -1299,8 +1299,8 @@ fn measure_text_line_width(text: &str, font_size: f32, family: &str, bold: bool)
     let Ok(typeface) = typeface_with_fallback(family, style) else {
         return 0.0;
     };
-    let font = skia_safe::Font::from_typeface(typeface, font_size);
-    let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+    let font = subpixel_font(typeface, font_size);
+    let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
     measure_text_with_fallback(text, &font, &emoji_font, 0.0)
 }
 

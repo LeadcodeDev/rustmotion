@@ -8,7 +8,7 @@ use rustmotion_core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
 use rustmotion_core::engine::deps::{TextMetrics, TextMetricsProvider};
 use rustmotion_core::engine::renderer::{
     compute_glyph_metrics, emoji_typeface, format_counter_value, measure_text_with_fallback,
-    typeface_with_fallback, wrap_text_with_tracking, GlyphMetric,
+    subpixel_font, typeface_with_fallback, wrap_text_with_tracking, GlyphMetric,
 };
 
 use crate::badge::{Badge, BadgeSize};
@@ -195,8 +195,8 @@ impl TextIntrinsic {
 
     pub fn text_metrics(&self, content_box_width: f32) -> Option<TextMetrics> {
         let typeface = self.typeface()?;
-        let font = Font::from_typeface(typeface, self.font_size);
-        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, self.font_size));
+        let font = subpixel_font(typeface, self.font_size);
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, self.font_size));
 
         let wrap_at = if self.wrap {
             Some(
@@ -275,8 +275,8 @@ fn wrap_and_measure(
     letter_spacing: f32,
     line_height: f32,
 ) -> (f32, f32) {
-    let font = Font::from_typeface(typeface.clone(), font_size);
-    let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
+    let font = subpixel_font(typeface.clone(), font_size);
+    let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
     let lines = wrap_text_with_tracking(content, &font, &emoji_font, wrap_at, letter_spacing);
     let mut max_w = 0.0f32;
     for line in &lines {

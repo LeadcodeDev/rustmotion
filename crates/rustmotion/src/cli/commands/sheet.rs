@@ -1,6 +1,7 @@
 use crate::cli::OutputFormat;
 use rustmotion::encode;
 use rustmotion::engine;
+use rustmotion::engine::renderer::subpixel_font;
 use rustmotion::error::{Result, RustmotionError};
 use rustmotion::schema::ResolvedScenario;
 use skia_safe::{
@@ -115,7 +116,7 @@ fn compute_layout(
 fn label_font(cell_width: u32) -> Result<Font> {
     let typeface = engine::typeface_with_fallback("", FontStyle::bold())?;
     let size = (cell_width as f32 * 0.06).clamp(14.0, 26.0);
-    Ok(Font::from_typeface(typeface, size))
+    Ok(subpixel_font(typeface, size))
 }
 
 fn draw_timestamp_stamp(

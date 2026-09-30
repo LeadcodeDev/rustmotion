@@ -8,8 +8,8 @@ use rustmotion_core::engine::animator::{ease, AnimatedProperties};
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     build_shape_path, color4f_from_hex, draw_shape_path, draw_text_with_fallback, emoji_typeface,
-    interpolate_path_data, measure_text_with_fallback, paint_from_hex, trim_path_between,
-    typeface_with_fallback, wrap_text_with_tracking,
+    interpolate_path_data, measure_text_with_fallback, paint_from_hex, subpixel_font,
+    trim_path_between, typeface_with_fallback, wrap_text_with_tracking,
 };
 use rustmotion_core::expr::{Computed, Expr, Scope};
 use rustmotion_core::schema::{
@@ -423,8 +423,8 @@ fn render_shape_text(
 
     let typeface = typeface_with_fallback(&text.font_family, font_style)?;
 
-    let font = skia_safe::Font::from_typeface(typeface, text.font_size);
-    let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, text.font_size));
+    let font = subpixel_font(typeface, text.font_size);
+    let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, text.font_size));
     let (_strike_width, metrics) = font.metrics();
     let ascent = -metrics.ascent;
     let line_height = match text.line_height {

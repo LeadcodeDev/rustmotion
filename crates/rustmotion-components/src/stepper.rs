@@ -7,7 +7,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    parse_hex_color, typeface_with_fallback,
+    parse_hex_color, subpixel_font, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -149,19 +149,16 @@ impl Stepper {
         };
 
         let number_font_size = r * 0.9;
-        let number_font = skia_safe::Font::from_typeface(&bold_typeface, number_font_size);
-        let emoji_number_font =
-            emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, number_font_size));
+        let number_font = subpixel_font(&bold_typeface, number_font_size);
+        let emoji_number_font = emoji_typeface().map(|tf| subpixel_font(tf, number_font_size));
 
         let label_font_size = 14.0;
-        let label_font = skia_safe::Font::from_typeface(&typeface, label_font_size);
-        let emoji_label_font =
-            emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, label_font_size));
+        let label_font = subpixel_font(&typeface, label_font_size);
+        let emoji_label_font = emoji_typeface().map(|tf| subpixel_font(tf, label_font_size));
 
         let desc_font_size = 11.0;
-        let desc_font = skia_safe::Font::from_typeface(&typeface, desc_font_size);
-        let emoji_desc_font =
-            emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, desc_font_size));
+        let desc_font = subpixel_font(&typeface, desc_font_size);
+        let emoji_desc_font = emoji_typeface().map(|tf| subpixel_font(tf, desc_font_size));
 
         let is_horizontal = self.orientation == StepperOrientation::Horizontal;
 

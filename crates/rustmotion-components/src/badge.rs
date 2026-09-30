@@ -8,7 +8,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg,
-    measure_text_with_fallback, paint_from_hex, typeface_with_fallback,
+    measure_text_with_fallback, paint_from_hex, subpixel_font, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -134,10 +134,7 @@ impl Badge {
         let font_style = skia_safe::FontStyle::normal();
         let family = self.style.font_family.as_deref().unwrap_or("Inter");
         let typeface = typeface_with_fallback(family, font_style).ok()?;
-        Some(skia_safe::Font::from_typeface(
-            typeface,
-            self.resolved_font_size(ctx),
-        ))
+        Some(subpixel_font(typeface, self.resolved_font_size(ctx)))
     }
 }
 
@@ -239,7 +236,7 @@ impl Badge {
             return;
         };
         let font_size = self.resolved_font_size(ctx);
-        let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
         let mut text_paint = paint_from_hex(text_color);
         text_paint.set_anti_alias(true);
 
@@ -298,9 +295,8 @@ impl Badge {
             else {
                 return;
             };
-            let count_font = skia_safe::Font::from_typeface(count_typeface, count_fs);
-            let count_emoji =
-                emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, count_fs));
+            let count_font = subpixel_font(count_typeface, count_fs);
+            let count_emoji = emoji_typeface().map(|tf| subpixel_font(tf, count_fs));
 
             let count_w = measure_text_with_fallback(&count_text, &count_font, &count_emoji, 0.0);
             let badge_pad = count_fs * 0.4;

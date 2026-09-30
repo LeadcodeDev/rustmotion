@@ -1,7 +1,7 @@
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Font, FontStyle, PaintStyle};
+use skia_safe::{Canvas, FontStyle, PaintStyle};
 
 use rustmotion_core::css::style::{
     FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign,
@@ -11,7 +11,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, format_counter_value, measure_text_with_fallback,
-    paint_from_hex, typeface_with_fallback,
+    paint_from_hex, subpixel_font, typeface_with_fallback,
 };
 use rustmotion_core::schema::{
     EasingType, FontStyleType, FontWeight, Stroke, TextAlign, TextShadow, TimelineStep,
@@ -147,8 +147,8 @@ impl Counter {
 
         let typeface = typeface_with_fallback(font_family, skia_font_style)?;
 
-        let font = Font::from_typeface(typeface, font_size);
-        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
+        let font = subpixel_font(typeface, font_size);
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
         let mut paint = paint_from_hex(color);
         paint.set_alpha_f(1.0);
 

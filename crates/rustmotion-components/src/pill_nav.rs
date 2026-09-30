@@ -7,7 +7,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    typeface_with_fallback,
+    subpixel_font, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -106,16 +106,13 @@ impl PillNav {
         };
         let family = self.style.font_family.as_deref().unwrap_or("Inter");
         let typeface = typeface_with_fallback(family, font_style).ok()?;
-        Some(skia_safe::Font::from_typeface(
-            typeface,
-            self.resolved_font_size(ctx),
-        ))
+        Some(subpixel_font(typeface, self.resolved_font_size(ctx)))
     }
 
     fn compute_tab_layout(&self, ctx: &PaintCtx) -> Option<(f32, Vec<f32>, Vec<f32>)> {
         let font = self.make_font(false, ctx)?;
         let font_size = self.resolved_font_size(ctx);
-        let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
         let h_pad = font_size * 1.2;
 
         let mut tab_widths: Vec<f32> = Vec::new();
@@ -217,7 +214,7 @@ impl PillNav {
             return;
         };
         let font_size = self.resolved_font_size(ctx);
-        let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
         let (_, metrics) = font.metrics();
         let text_y = (h + (-metrics.ascent)) / 2.0;
 

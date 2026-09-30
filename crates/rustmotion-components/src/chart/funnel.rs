@@ -3,6 +3,7 @@ use skia_safe::{Canvas, PaintStyle, PathBuilder};
 
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+    subpixel_font,
 };
 
 use super::axes::contrast_text_color;
@@ -41,8 +42,7 @@ impl Chart {
         let Some(font) = self.make_label_font() else {
             return Ok(());
         };
-        let emoji_font =
-            emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, self.label_font_size));
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, self.label_font_size));
         let (_, metrics) = font.metrics();
         let ascent = -metrics.ascent;
 
@@ -121,8 +121,7 @@ impl Chart {
         let Some(font) = self.make_label_font() else {
             return Ok(());
         };
-        let emoji_font =
-            emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, self.label_font_size));
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, self.label_font_size));
         let (_, metrics) = font.metrics();
         let ascent = -metrics.ascent;
 
