@@ -113,6 +113,17 @@ fn probe_ffmpeg_encoders() -> HashSet<String> {
     }
 }
 
+fn hevc_sample_entry_tag(codec: &str, output_path: &str) -> Option<&'static str> {
+    let container = std::path::Path::new(output_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    match (codec, container.as_deref()) {
+        ("h265" | "hevc", Some("mp4" | "mov")) => Some("hvc1"),
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn ffmpeg_args(
     width: u32,
@@ -216,6 +227,10 @@ fn ffmpeg_args(
                 );
             }
         }
+    }
+
+    if let Some(tag) = hevc_sample_entry_tag(codec, output_path) {
+        push(&["-tag:v", tag], &mut args);
     }
 
     if audio_input.is_some() {
@@ -926,6 +941,54 @@ mod tests {
     }
 
     #[test]
+    fn hevc_into_an_apple_container_is_tagged_hvc1() {
+        for codec in ["h265", "hevc"] {
+            for (path, hw) in [
+                ("o.mp4", None),
+                ("o.mov", None),
+                ("o.MP4", None),
+                ("o.partial.mp4", None),
+                ("o.mp4", Some("hevc_videotoolbox")),
+                ("o.mp4", Some("hevc_nvenc")),
+                ("o.mov", Some("hevc_qsv")),
+                ("o.mp4", Some("hevc_amf")),
+            ] {
+                let args = ffmpeg_args(320, 240, 30, codec, 23, false, hw, None, path);
+                assert_eq!(
+                    value_after(&args, "-tag:v").as_deref(),
+                    Some("hvc1"),
+                    "{codec} -> {path} (hw {hw:?}): the muxer writes hev1 unless told, and \
+                     AVFoundation opens nothing but hvc1"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hevc_into_matroska_carries_no_sample_entry_tag() {
+        for path in ["o.mkv", "o"] {
+            let args = ffmpeg_args(320, 240, 30, "h265", 23, false, None, None, path);
+            assert!(
+                !args.iter().any(|s| s == "-tag:v"),
+                "{path} is not an ISO-BMFF container, so the tag does not apply: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_other_codec_is_retagged() {
+        for codec in ["h264", "h264_10bit", "vp9", "prores", "not-a-codec"] {
+            for path in ["o.mp4", "o.mov"] {
+                let args = ffmpeg_args(320, 240, 30, codec, 23, false, None, None, path);
+                assert!(
+                    !args.iter().any(|s| s == "-tag:v"),
+                    "{codec} already muxes under a tag its players accept: {args:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn selection_is_a_noop_when_not_requested() {
         assert_eq!(
             select_hardware_encoder(false, "h264", false, |_| true),
@@ -1038,6 +1101,27 @@ Encoders:
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
+    }
+
+    fn ffprobe_video_codec_tag(path: &str) -> Option<String> {
+        let out = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_tag_string",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                path,
+            ])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
     fn ffprobe_stream_duration(path: &str, selector: &str) -> Option<f64> {
@@ -1153,6 +1237,53 @@ Encoders:
         }
 
         let _ = std::fs::remove_file(&wav_path);
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn a_rendered_hevc_mp4_carries_the_hvc1_tag_on_disk() {
+        if !ffmpeg_on_path() || !ffprobe_on_path() {
+            eprintln!("a_rendered_hevc_mp4_carries_the_hvc1_tag_on_disk: ffmpeg/ffprobe not found — skipping");
+            return;
+        }
+        if !super::probe_ffmpeg_encoders().contains("libx265") {
+            eprintln!("a_rendered_hevc_mp4_carries_the_hvc1_tag_on_disk: this ffmpeg has no libx265 — skipping");
+            return;
+        }
+
+        let json = r#"{"video": {"width": 64, "height": 64, "fps": 10},
+                       "scenes": [{"duration": 0.5, "children": []}]}"#;
+        let scenario = crate::loader::load_scenario_from_source(None, Some(json)).expect("load");
+
+        let out = std::env::temp_dir().join(format!(
+            "rm_hvc1_tag_{}_{}.mp4",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&out);
+
+        super::encode_with_ffmpeg(
+            &scenario,
+            out.to_str().unwrap(),
+            true,
+            "h265",
+            None,
+            false,
+            None,
+        )
+        .expect("an h265 render must succeed");
+
+        let tag = ffprobe_video_codec_tag(out.to_str().unwrap())
+            .expect("ffprobe must report a video codec tag");
+        assert_eq!(
+            tag, "hvc1",
+            "hev1 is what the muxer writes by default and what QuickTime, Safari and every \
+             other AVFoundation player refuse to open"
+        );
+
         let _ = std::fs::remove_file(&out);
     }
 
