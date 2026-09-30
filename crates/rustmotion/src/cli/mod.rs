@@ -401,12 +401,30 @@ enum Commands {
         action: SkillsAction,
     },
 
+    /// Open the live preview studio on a scenario
+    #[cfg_attr(not(feature = "studio"), command(hide = true))]
+    Studio {
+        /// Path to a JSON scenario to open directly in the editor
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+
+        /// Workspace directory to scan for scenarios (default: current directory)
+        #[arg(short, long)]
+        dir: Option<PathBuf>,
+    },
+
     /// Generate or install shell completions
     Completions {
         #[command(subcommand)]
         action: CompletionsAction,
     },
 }
+
+#[cfg(not(feature = "studio"))]
+const STUDIO_NOT_BUILT: &str = "\
+this build of rustmotion has no studio: it is behind the `studio` feature, which is \
+off by default because it pulls gpui and a native GUI toolchain. Reinstall with it on:
+  cargo install --git https://github.com/LeadcodeDev/rustmotion --features studio";
 
 const CAPTIONS_EXAMPLES: &str = "\
 Examples:
@@ -963,6 +981,12 @@ pub fn run() -> Result<()> {
             }
             SkillsAction::Show { name } => skills::show(&name),
         },
+        #[cfg(feature = "studio")]
+        Commands::Studio { file, dir } => rustmotion::studio::run_with(file, dir),
+
+        #[cfg(not(feature = "studio"))]
+        Commands::Studio { .. } => Err(RustmotionError::Generic(STUDIO_NOT_BUILT.to_string())),
+
         Commands::Completions { action } => match action {
             CompletionsAction::Generate { shell } => {
                 clap_complete::generate(
