@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Font, FontStyle, Rect};
+use skia_safe::{Canvas, FontStyle, Rect};
 
 use rustmotion_core::css::style::{
     FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
@@ -12,7 +12,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    typeface_with_fallback,
+    subpixel_font, typeface_with_fallback,
 };
 use rustmotion_core::schema::{CaptionStyle, CaptionWord, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -77,8 +77,8 @@ impl Caption {
             return;
         };
 
-        let font = Font::from_typeface(typeface, font_size);
-        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
+        let font = subpixel_font(typeface, font_size);
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
 
         let top_offset = font_size * 1.2;
         canvas.save();

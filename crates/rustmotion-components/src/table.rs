@@ -7,7 +7,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    typeface_with_fallback,
+    subpixel_font, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -96,7 +96,7 @@ impl Table {
 
         let family = self.style.font_family.as_deref().unwrap_or("Inter");
         let typeface = typeface_with_fallback(family, font_style).ok()?;
-        Some(skia_safe::Font::from_typeface(typeface, font_size))
+        Some(subpixel_font(typeface, font_size))
     }
 
     fn resolve_column_widths(&self, total_w: f32, font_size: f32) -> Vec<f32> {
@@ -128,8 +128,8 @@ impl Table {
             let min_col_w = DEFAULT_FONT_SIZE * 8.0 + DEFAULT_CELL_PADDING * 2.0;
             return vec![min_col_w; col_count];
         };
-        let font = skia_safe::Font::from_typeface(typeface, font_size);
-        let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+        let font = subpixel_font(typeface, font_size);
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
         let cell_padding = self.cell_padding;
 
         let mut col_widths: Vec<f32> = vec![0.0; col_count];
@@ -208,7 +208,7 @@ impl Table {
             canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
         }
 
-        let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
         let (_, header_metrics) = header_font.metrics();
         let header_ascent = -header_metrics.ascent;
 

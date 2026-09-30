@@ -7,7 +7,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    typeface_with_fallback,
+    subpixel_font, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -150,9 +150,8 @@ impl Gauge {
             let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
                 return;
             };
-            let font = skia_safe::Font::from_typeface(typeface, font_size);
-            let emoji_font =
-                emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+            let font = subpixel_font(typeface, font_size);
+            let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
 
             let mut text_paint = paint_from_hex(&self.fill_color);
             text_paint.set_anti_alias(true);
@@ -180,9 +179,8 @@ impl Gauge {
             let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
                 return;
             };
-            let font = skia_safe::Font::from_typeface(typeface, font_size);
-            let emoji_font =
-                emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+            let font = subpixel_font(typeface, font_size);
+            let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
 
             let mut label_paint = paint_from_hex("#888888");
             label_paint.set_anti_alias(true);

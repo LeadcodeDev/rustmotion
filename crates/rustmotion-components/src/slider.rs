@@ -8,7 +8,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    typeface_with_fallback,
+    subpixel_font, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -170,8 +170,8 @@ impl From<SliderRaw> for Slider {
 fn slider_value_label_half_width(thumb_size: f32) -> Option<f32> {
     let font_size = (thumb_size * 0.7).max(12.0);
     let typeface = typeface_with_fallback("Inter", skia_safe::FontStyle::normal()).ok()?;
-    let font = skia_safe::Font::from_typeface(typeface, font_size);
-    let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+    let font = subpixel_font(typeface, font_size);
+    let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
     let w = measure_text_with_fallback("100%", &font, &emoji_font, 0.0);
     Some(w / 2.0)
 }
@@ -179,7 +179,7 @@ fn slider_value_label_half_width(thumb_size: f32) -> Option<f32> {
 fn slider_value_label_line_height(thumb_size: f32) -> Option<f32> {
     let font_size = (thumb_size * 0.7).max(12.0);
     let typeface = typeface_with_fallback("Inter", skia_safe::FontStyle::normal()).ok()?;
-    let font = skia_safe::Font::from_typeface(typeface, font_size);
+    let font = subpixel_font(typeface, font_size);
     let (_, metrics) = font.metrics();
     Some(-metrics.ascent + metrics.descent + 4.0)
 }
@@ -275,9 +275,8 @@ impl Slider {
                 canvas.restore();
                 return;
             };
-            let font = skia_safe::Font::from_typeface(typeface, font_size);
-            let emoji_font =
-                emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+            let font = subpixel_font(typeface, font_size);
+            let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
 
             let mut text_paint = paint_from_hex(&self.fill_color);
             text_paint.set_anti_alias(true);

@@ -8,7 +8,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    typeface_with_fallback,
+    subpixel_font, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -90,8 +90,8 @@ impl Marquee {
         let font_style = skia_safe::FontStyle::normal();
         let family = self.style.font_family_or("Inter");
         let typeface = typeface_with_fallback(family, font_style)?;
-        let font = skia_safe::Font::from_typeface(typeface, fs);
-        let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, fs));
+        let font = subpixel_font(typeface, fs);
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, fs));
 
         let separator = self.separator.as_deref().unwrap_or("     ");
         let full_text = format!("{}{}", self.content, separator);

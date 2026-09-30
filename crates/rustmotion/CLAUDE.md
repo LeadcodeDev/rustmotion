@@ -216,6 +216,13 @@ pub trait Painter {
 
 `PaintCtx` contient : `time`, `scene_duration`, `fps`, `frame_index`, `video_width`, `video_height`, `stagger_offset`.
 
+> Every `skia_safe::Font` comes from `renderer::subpixel_font`, never from
+> `Font::from_typeface`. Skia defaults to whole-pixel glyph placement (subpixel off,
+> baseline snapping on), so a text node under a slow translation stepped by 1px while
+> the shape beside it moved by hundredths — the label shivering inside a still card.
+> The constructor is the only place those three settings live; calling Skia directly
+> puts the snapping back for that one component.
+
 ### Structure des crates
 
 ```

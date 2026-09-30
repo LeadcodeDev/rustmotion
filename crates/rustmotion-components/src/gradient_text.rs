@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::gradient::{self, Colors, Gradient};
-use skia_safe::{Canvas, Color4f, Font, FontStyle, Point};
+use skia_safe::{Canvas, Color4f, FontStyle, Point};
 
 use rustmotion_core::css::style::{
     FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
@@ -12,7 +12,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    parse_hex_color, typeface_with_fallback, wrap_text_with_tracking,
+    parse_hex_color, subpixel_font, typeface_with_fallback, wrap_text_with_tracking,
 };
 use rustmotion_core::schema::{TextAlign, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -148,8 +148,8 @@ impl GradientText {
             line_height_val = lh;
         }
 
-        let font = Font::from_typeface(typeface, font_size);
-        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
+        let font = subpixel_font(typeface, font_size);
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
 
         let lines =
             wrap_text_with_tracking(&self.content, &font, &emoji_font, wrap_at, letter_spacing);
@@ -613,16 +613,22 @@ mod tests {
             ));
             let alpha: Vec<u8> = (0..(W * H) as usize).map(|i| buf[i * 4 + 3]).collect();
             let (_, hi) = ink_x_span(&alpha, W, H).expect("must paint");
-            let (mut best_y, mut best_a) = (0i32, 0u8);
-            for y in 0..H {
-                let a = alpha[(y * W + hi) as usize];
-                if a > best_a {
-                    best_a = a;
-                    best_y = y;
-                }
-            }
-            let i = ((best_y * W + hi) * 4) as usize;
-            (buf[i], buf[i + 1], buf[i + 2])
+            let column_peak = |x: i32| {
+                (0..H)
+                    .map(|y| (alpha[(y * W + x) as usize], y))
+                    .max()
+                    .expect("H > 0")
+            };
+            let (peak_a, peak_y, peak_x) = (0..=hi)
+                .rev()
+                .find_map(|x| {
+                    let (a, y) = column_peak(x);
+                    (a >= 200).then_some((a, y, x))
+                })
+                .expect("the last glyph must have a covered column to read a colour from");
+            let i = ((peak_y * W + peak_x) * 4) as usize;
+            let straight = |c: u8| ((c as u32 * 255 + peak_a as u32 / 2) / peak_a as u32) as u8;
+            (straight(buf[i]), straight(buf[i + 1]), straight(buf[i + 2]))
         }
 
         let left = last_glyph_rgb(None);

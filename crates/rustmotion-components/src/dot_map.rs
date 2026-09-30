@@ -7,7 +7,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    typeface_with_fallback,
+    subpixel_font, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -435,9 +435,8 @@ impl DotMap {
         let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
             return;
         };
-        let label_font = skia_safe::Font::from_typeface(typeface, label_font_size);
-        let emoji_font =
-            emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, label_font_size));
+        let label_font = subpixel_font(typeface, label_font_size);
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, label_font_size));
 
         for (i, point) in self.points.iter().enumerate() {
             let dot_alpha = if self.animated {
@@ -626,9 +625,8 @@ impl DotMap {
         let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
             return;
         };
-        let label_font = skia_safe::Font::from_typeface(typeface, label_font_size);
-        let emoji_font =
-            emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, label_font_size));
+        let label_font = subpixel_font(typeface, label_font_size);
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, label_font_size));
 
         for (i, point) in self.points.iter().enumerate() {
             let dot_alpha = if self.animated {

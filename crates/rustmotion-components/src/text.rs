@@ -12,7 +12,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    typeface_with_fallback, wrap_text_with_tracking,
+    subpixel_font, typeface_with_fallback, wrap_text_with_tracking,
 };
 use rustmotion_core::schema::{
     CaretConfig, CaretShape, FontStyleType, FontWeight, Stroke, TextAlign, TextBackground,
@@ -266,8 +266,8 @@ impl Text {
             ..base_ctx
         };
 
-        let font = Font::from_typeface(typeface, font_size);
-        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
+        let font = subpixel_font(typeface, font_size);
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
         let paint = paint_from_hex(color);
 
         let wrap_width = if nowrap { None } else { box_width };
@@ -1085,7 +1085,7 @@ mod tests {
             skia_safe::font_style::Slant::Upright,
         );
         let typeface = typeface_with_fallback("Inter", style).expect("typeface resolves");
-        Font::from_typeface(typeface, px)
+        subpixel_font(typeface, px)
     }
 
     #[test]

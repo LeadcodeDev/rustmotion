@@ -11,7 +11,7 @@ use rustmotion_core::engine::animator::{AnimatedProperties, ResolvedCharAnimatio
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    typeface_with_fallback,
+    subpixel_font, typeface_with_fallback,
 };
 use rustmotion_core::schema::{
     FontStyleType, FontWeight, TextAlign, TextAnimGranularity, TimelineStep,
@@ -118,7 +118,7 @@ fn make_font(
     };
     let skia_style = FontStyle::new(weight_val, skia_safe::font_style::Width::NORMAL, slant);
     let typeface = typeface_with_fallback(family, skia_style).ok()?;
-    Some(Font::from_typeface(typeface, size))
+    Some(subpixel_font(typeface, size))
 }
 
 struct SpanFontInfo {
@@ -291,7 +291,7 @@ impl RichText {
                 .expect("font presence checked during tokenization");
             let emoji_font = emoji_tf
                 .as_ref()
-                .map(|tf| Font::from_typeface(tf.clone(), sf.font.size()));
+                .map(|tf| subpixel_font(tf.clone(), sf.font.size()));
             let tok_width =
                 measure_text_with_fallback(&tok.text, &sf.font, &emoji_font, sf.letter_spacing);
             let space_width = if tok.space_before {
@@ -495,7 +495,7 @@ impl RichText {
         let paint = paint_from_hex(&sf.color);
         let emoji_font = emoji_tf
             .as_ref()
-            .map(|tf| Font::from_typeface(tf.clone(), sf.font.size()));
+            .map(|tf| subpixel_font(tf.clone(), sf.font.size()));
 
         draw_text_with_fallback(
             canvas,
@@ -652,7 +652,7 @@ fn render_rich_text_char_animation(
             let paint = paint_from_hex(&sf.color);
             let emoji_font = emoji_tf
                 .as_ref()
-                .map(|tf| Font::from_typeface(tf.clone(), sf.font.size()));
+                .map(|tf| subpixel_font(tf.clone(), sf.font.size()));
 
             if is_word_mode {
                 let t = crate::intrinsic::unit_progress(char_anim, global_unit_idx, time);
@@ -991,7 +991,7 @@ mod tests {
 
         let typeface =
             typeface_with_fallback("Inter", FontStyle::default()).expect("typeface resolves");
-        let font = Font::from_typeface(typeface, font_px);
+        let font = subpixel_font(typeface, font_px);
         let (_, m) = font.metrics();
         let ascent = -m.ascent;
         let descent = m.descent;
@@ -1371,7 +1371,7 @@ mod tests {
 
     fn inter_font_px(px: f32) -> Font {
         let typeface = typeface_with_fallback("Inter", FontStyle::default()).expect("resolves");
-        Font::from_typeface(typeface, px)
+        subpixel_font(typeface, px)
     }
 
     #[test]

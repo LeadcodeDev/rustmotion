@@ -1,5 +1,7 @@
 use skia_safe::{Canvas, Font, Paint, Point, TextBlob, Typeface};
 
+use super::subpixel_font;
+
 pub fn format_counter_value(
     value: f64,
     decimals: u8,
@@ -323,7 +325,7 @@ fn resolve_run_font<'a>(
             _ => primary,
         },
         RunKind::Fallback(tf) => {
-            *owned = Some(Font::from_typeface(tf.clone(), primary.size()));
+            *owned = Some(subpixel_font(tf.clone(), primary.size()));
             owned.as_ref().unwrap()
         }
     }
@@ -473,7 +475,7 @@ mod tracking_tests {
     fn bold_font(size: f32) -> Font {
         let typeface = typeface_with_fallback("Helvetica", SkFontStyle::bold())
             .expect("host must have a fallback typeface");
-        Font::from_typeface(typeface, size)
+        subpixel_font(typeface, size)
     }
 
     #[test]
@@ -741,7 +743,7 @@ mod emoji_presentation_tests {
     fn helvetica_font(size: f32) -> Font {
         let typeface = typeface_with_fallback("Helvetica", skia_safe::FontStyle::normal())
             .expect("host must have a fallback typeface");
-        Font::from_typeface(typeface, size)
+        subpixel_font(typeface, size)
     }
 
     fn render_and_sample(text: &str, size: f32) -> (usize, f64, f64, f64) {
@@ -749,7 +751,7 @@ mod emoji_presentation_tests {
         const W: i32 = 200;
         const H: i32 = 200;
         let font = helvetica_font(size);
-        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, size));
+        let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, size));
         let mut surface = surfaces::raster_n32_premul((W, H)).unwrap();
         let canvas = surface.canvas();
         canvas.clear(Color::BLACK);
@@ -813,7 +815,7 @@ mod glyph_fallback_tests {
     fn helvetica_font(size: f32) -> Font {
         let typeface = typeface_with_fallback("Helvetica", skia_safe::FontStyle::normal())
             .expect("host must have a fallback typeface");
-        Font::from_typeface(typeface, size)
+        subpixel_font(typeface, size)
     }
 
     #[test]
@@ -866,7 +868,7 @@ mod glyph_fallback_tests {
                  the host has a capable font"
             );
         };
-        let fallback_font = Font::from_typeface(fallback, 32.0);
+        let fallback_font = subpixel_font(fallback, 32.0);
         assert!(
             font_covers(&fallback_font, "\u{4F60}"),
             "resolved fallback typeface must actually cover the code point that triggered it"
@@ -954,7 +956,7 @@ mod glyph_metrics_tests {
     fn test_font(size: f32) -> Font {
         let typeface = typeface_with_fallback("Helvetica", SkFontStyle::default())
             .expect("host must have a fallback typeface");
-        Font::from_typeface(typeface, size)
+        subpixel_font(typeface, size)
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use skia_safe::{FontMgr, FontStyle, Typeface};
+use skia_safe::{Font, FontHinting, FontMgr, FontStyle, Typeface};
 
 use crate::error::{Result, RustmotionError};
 use crate::schema::FontEntry;
@@ -235,6 +235,14 @@ pub fn typeface_with_fallback(family: &str, style: FontStyle) -> Result<Typeface
         return Ok(t);
     }
     Err(RustmotionError::FontNotFound)
+}
+
+pub fn subpixel_font(typeface: impl Into<Typeface>, size: impl Into<Option<f32>>) -> Font {
+    let mut font = Font::from_typeface(typeface, size);
+    font.set_subpixel(true);
+    font.set_baseline_snap(false);
+    font.set_hinting(FontHinting::None);
+    font
 }
 
 pub fn emoji_typeface() -> Option<Typeface> {

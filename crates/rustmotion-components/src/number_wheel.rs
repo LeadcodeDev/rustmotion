@@ -9,7 +9,8 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::{ease, AnimatedProperties};
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, measure_text_with_fallback, paint_from_hex, typeface_with_fallback,
+    draw_text_with_fallback, measure_text_with_fallback, paint_from_hex, subpixel_font,
+    typeface_with_fallback,
 };
 use rustmotion_core::schema::{EasingType, FontStyleType, FontWeight, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -188,7 +189,7 @@ impl NumberWheel {
             FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant),
         )
         .ok()?;
-        Some(Font::from_typeface(typeface, font_size))
+        Some(subpixel_font(typeface, font_size))
     }
 }
 
@@ -210,7 +211,7 @@ impl Painter for NumberWheel {
             return;
         };
         let emoji_font = rustmotion_core::engine::renderer::emoji_typeface()
-            .map(|tf| Font::from_typeface(tf, font_size));
+            .map(|tf| subpixel_font(tf, font_size));
         let own_ctx = rustmotion_core::css::units::LengthContext {
             font_size,
             ..base_ctx

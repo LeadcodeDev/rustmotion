@@ -8,7 +8,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    typeface_with_fallback,
+    subpixel_font, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -144,8 +144,8 @@ impl From<SwitchRaw> for Switch {
 fn switch_label_extra_width(label: &str, height: f32) -> Option<f32> {
     let font_size = (height * 0.5).max(12.0);
     let typeface = typeface_with_fallback("Inter", skia_safe::FontStyle::normal()).ok()?;
-    let font = skia_safe::Font::from_typeface(typeface, font_size);
-    let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+    let font = subpixel_font(typeface, font_size);
+    let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
     let label_w = measure_text_with_fallback(label, &font, &emoji_font, 0.0);
     Some(8.0 + label_w)
 }
@@ -220,9 +220,8 @@ impl Switch {
             let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
                 return;
             };
-            let font = skia_safe::Font::from_typeface(typeface, font_size);
-            let emoji_font =
-                emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+            let font = subpixel_font(typeface, font_size);
+            let emoji_font = emoji_typeface().map(|tf| subpixel_font(tf, font_size));
 
             let mut text_paint = paint_from_hex("#FFFFFF");
             text_paint.set_anti_alias(true);
