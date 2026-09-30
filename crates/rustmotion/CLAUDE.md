@@ -262,26 +262,29 @@ crates/
     └── loader.rs               # Chargement JSON/HTML → ResolvedScenario
 ```
 
-> Les deux binaires vivent dans la crate publiée `rustmotion` : une crate qui
-> n'a qu'une `[lib]` n'installe rien d'exécutable via `cargo install`, et
-> `cargo install --git <url>` **refuse** un dépôt où plus d'un paquet déclare un
-> `[[bin]]` (« multiple packages with binaries found » — ni `default-members` ni
-> `required-features` ne changent ce décompte). C'est pour ça que le studio est
-> un module de cette crate et non un paquet à part : en paquet, il dépendait de
-> `loader`/`encode`, donc en faire une dépendance de `rustmotion` était un cycle,
-> que cargo refuse même optionnel.
+> Both binaries live in the published `rustmotion` crate: a crate with only a
+> `[lib]` installs nothing executable through `cargo install`, and `cargo install
+> --git <url>` **refuses** a repository where more than one package declares a
+> `[[bin]]` ("multiple packages with binaries found" — neither `default-members`
+> nor `required-features` changes that count). That is why the studio is a module
+> of this crate rather than a package of its own: as a package it depended on
+> `loader`/`encode`, so making it a dependency of `rustmotion` was a cycle, which
+> cargo refuses even when optional.
 >
 > ```bash
 > cargo install --git https://github.com/LeadcodeDev/rustmotion                     # CLI
 > cargo install --git https://github.com/LeadcodeDev/rustmotion --features studio   # CLI + studio
 > ```
 >
-> `studio` est hors du build par défaut : il tire gpui et une toolchain GUI, qui
-> ne compilent pas partout où le CLI compile. Il n'y a pas de **sous-commande**
-> `studio` non plus — elle devrait disparaître du `--help` selon le feature.
-> `--workspace` seul ne compile plus le studio : CI passe
-> `--features rustmotion/studio` à clippy et aux tests, sans quoi 11 600 lignes
-> cessent d'être vérifiées en restant vertes.
+> `studio` is out of the default build: it pulls gpui and a GUI toolchain, which
+> do not compile everywhere the CLI does. The `rustmotion studio` subcommand
+> opens the same studio as the `rustmotion-studio` binary, with the same `-f` /
+> `-d`. Without the feature the subcommand still exists but stays out of
+> `--help`, and running it answers with the `cargo install` line that grants it
+> instead of "unrecognized subcommand".
+> `--workspace` alone no longer compiles the studio: CI passes
+> `--features rustmotion/studio` to clippy and to the tests, without which 11,600
+> lines stop being checked while staying green.
 
 ### Aucun commentaire, nulle part
 

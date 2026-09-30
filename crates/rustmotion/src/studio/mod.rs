@@ -8,7 +8,7 @@ pub use app::{run_preview, run_preview_with_error};
 
 use std::path::PathBuf;
 
-use clap::{CommandFactory, Parser};
+use clap::Parser;
 use rustmotion::error::Result;
 use rustmotion::loader::load_scenario;
 
@@ -29,16 +29,15 @@ pub struct Cli {
     dir: Option<PathBuf>,
 }
 
-pub fn command() -> clap::Command {
-    Cli::command()
-}
-
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
-    let workspace = cli
-        .dir
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    match cli.file {
+    run_with(cli.file, cli.dir)
+}
+
+pub fn run_with(file: Option<PathBuf>, dir: Option<PathBuf>) -> Result<()> {
+    let workspace =
+        dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    match file {
         Some(f) => match load_scenario(&f) {
             Ok(scenario) => app::run_preview_root(scenario, None, Some(f), workspace, true, true),
             Err(e) => app::run_preview_root(
