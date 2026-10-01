@@ -6618,7 +6618,7 @@ dependencies = [
 
 [[package]]
 name = "rustmotion"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "boon",
  "clap",
@@ -6657,7 +6657,7 @@ dependencies = [
 
 [[package]]
 name = "rustmotion-components"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "dashmap",
  "gif 0.13.3",
@@ -6676,7 +6676,7 @@ dependencies = [
 
 [[package]]
 name = "rustmotion-core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "cosmic-text",
  "dashmap",
@@ -6698,7 +6698,7 @@ dependencies = [
 
 [[package]]
 name = "rustmotion-html"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "html5ever 0.39.0",
  "markup5ever_rcdom 0.39.0+unofficial",
