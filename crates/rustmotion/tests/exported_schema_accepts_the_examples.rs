@@ -122,3 +122,50 @@ fn a_component_tag_is_not_widened_into_a_placeholder() {
          validator uses to report inside the right branch"
     );
 }
+
+fn rejection_of(child: serde_json::Value) -> String {
+    let (schemas, index) = compiled(exported_schema());
+    let doc = serde_json::json!({
+        "video": { "width": 64, "height": 64, "fps": 30 },
+        "scenes": [{ "duration": 1.0, "children": [child] }]
+    });
+    let err = schemas
+        .validate(&doc, index)
+        .expect_err("this scenario must be rejected");
+    format!("{err:#}")
+}
+
+#[test]
+fn a_rejected_component_is_reported_at_the_property_that_is_wrong() {
+    let typo = rejection_of(serde_json::json!({
+        "type": "text",
+        "content": "hi",
+        "style": { "animation": [{ "name": "fade_in_upp" }] }
+    }));
+    assert!(
+        typo.contains("fade_in_up"),
+        "the report must name the spelling that was meant, not just fail the whole \
+         component:\n{typo}"
+    );
+    assert!(
+        typo.contains("animation"),
+        "the report must reach the property that is wrong:\n{typo}"
+    );
+}
+
+#[test]
+fn a_rejected_directive_is_reported_as_that_directive() {
+    let incomplete = rejection_of(serde_json::json!({ "for-each": [{ "a": 1 }] }));
+    assert!(
+        incomplete.contains("template"),
+        "a `for-each` without its `template` must be reported as the missing key, not as a \
+         component that matched no branch:\n{incomplete}"
+    );
+
+    let misspelt = rejection_of(serde_json::json!({ "use": "card", "propz": {} }));
+    assert!(
+        misspelt.contains("propz"),
+        "the overrides key is `props`; naming the one that was written is the whole value of \
+         discriminating on `use`:\n{misspelt}"
+    );
+}

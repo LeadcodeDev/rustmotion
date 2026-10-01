@@ -129,10 +129,9 @@ fn is_scalar_schema(map: &serde_json::Map<String, serde_json::Value>) -> bool {
     let scalar = |name: &str| matches!(name, "number" | "integer" | "boolean");
     match map.get("type") {
         Some(serde_json::Value::String(name)) => scalar(name),
-        Some(serde_json::Value::Array(names)) => names
-            .iter()
-            .filter_map(|v| v.as_str())
-            .any(|name| scalar(name)),
+        Some(serde_json::Value::Array(names)) => {
+            names.iter().filter_map(|v| v.as_str()).any(scalar)
+        }
         _ => false,
     }
 }
@@ -214,6 +213,104 @@ fn accept_placeholders_where_a_scalar_is_declared(value: &mut serde_json::Value)
     }
 }
 
+fn tag_values(branch: &serde_json::Value, key: &str) -> Option<Vec<String>> {
+    let declared = branch.get("properties")?.get(key)?;
+    if let Some(one) = declared.get("const").and_then(|v| v.as_str()) {
+        return Some(vec![one.to_string()]);
+    }
+    let listed = declared.get("enum")?.as_array()?;
+    let values: Vec<String> = listed
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
+    (!values.is_empty() && values.len() == listed.len()).then_some(values)
+}
+
+fn discriminating_key(branches: &[serde_json::Value]) -> Option<String> {
+    let first = branches.first()?.get("properties")?.as_object()?;
+    for key in first.keys() {
+        let Some(per_branch) = branches
+            .iter()
+            .map(|b| tag_values(b, key))
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
+        let mut seen = std::collections::HashSet::new();
+        if per_branch
+            .iter()
+            .flatten()
+            .all(|value| seen.insert(value.clone()))
+        {
+            return Some(key.clone());
+        }
+    }
+    None
+}
+
+fn steer_tagged_unions_on_their_tag(value: &mut serde_json::Value) {
+    let Some(map) = value.as_object_mut() else {
+        return;
+    };
+    for child in map.values_mut() {
+        match child {
+            serde_json::Value::Array(items) => {
+                for item in items.iter_mut() {
+                    steer_tagged_unions_on_their_tag(item);
+                }
+            }
+            other => steer_tagged_unions_on_their_tag(other),
+        }
+    }
+
+    let union_key = if map.contains_key("oneOf") {
+        "oneOf"
+    } else if map.contains_key("anyOf") {
+        "anyOf"
+    } else {
+        return;
+    };
+    let Some(branches) = map.get(union_key).and_then(|b| b.as_array()).cloned() else {
+        return;
+    };
+    let Some(key) = discriminating_key(&branches) else {
+        return;
+    };
+
+    let every_branch_requires_the_tag = branches.iter().all(|b| {
+        b.get("required")
+            .and_then(|r| r.as_array())
+            .is_some_and(|r| r.iter().any(|v| v.as_str() == Some(key.as_str())))
+    });
+
+    let mut steered: Vec<serde_json::Value> = Vec::with_capacity(branches.len() + 1);
+    let all: Vec<String> = branches
+        .iter()
+        .filter_map(|b| tag_values(b, &key))
+        .flatten()
+        .collect();
+    let mut guard = serde_json::json!({ "properties": { key.clone(): { "enum": all } } });
+    if every_branch_requires_the_tag {
+        guard["required"] = serde_json::json!([key.clone()]);
+    }
+    steered.push(guard);
+    for branch in branches {
+        let Some(values) = tag_values(&branch, &key) else {
+            return;
+        };
+        steered.push(serde_json::json!({
+            "if": {
+                "required": [key.clone()],
+                "properties": { key.clone(): { "enum": values } }
+            },
+            "then": branch
+        }));
+    }
+
+    map.remove(union_key);
+    map.insert("allOf".to_string(), serde_json::Value::Array(steered));
+}
+
 fn build_schema() -> serde_json::Value {
     let mut scenario_schema = schema::generate_json_schema();
     let component_schema = serde_json::to_value(schemars::schema_for!(Component))
@@ -267,6 +364,7 @@ fn build_schema() -> serde_json::Value {
     }
 
     accept_placeholders_where_a_scalar_is_declared(&mut scenario_schema);
+    steer_tagged_unions_on_their_tag(&mut scenario_schema);
     if let Some(defs) = scenario_schema
         .pointer_mut("/definitions")
         .and_then(|d| d.as_object_mut())
@@ -296,11 +394,13 @@ fn wrap_with_directives(defs_obj: &mut serde_json::Map<String, serde_json::Value
             "description": "A concrete component, or a `for-each`/`use` directive that expands \
                 into one or more components before rendering — see CLAUDE.md's \
                 \"Factorisation\" section.",
-            "anyOf": [
-                { "$ref": format!("#/definitions/{base_name}") },
-                { "$ref": "#/definitions/ForEachDirective" },
-                { "$ref": "#/definitions/UseDirective" }
-            ]
+            "if": { "required": ["for-each"] },
+            "then": { "$ref": "#/definitions/ForEachDirective" },
+            "else": {
+                "if": { "required": ["use"] },
+                "then": { "$ref": "#/definitions/UseDirective" },
+                "else": { "$ref": format!("#/definitions/{base_name}") }
+            }
         }),
     );
 }
@@ -635,16 +735,29 @@ mod serde_alias_exposure_tests {
         step(&defs, node, 6)
     }
 
+    fn union_branches(node: &serde_json::Value) -> Vec<&serde_json::Value> {
+        if let Some(branches) = node
+            .get("oneOf")
+            .or_else(|| node.get("anyOf"))
+            .and_then(|b| b.as_array())
+        {
+            return branches.iter().collect();
+        }
+        node.get("allOf")
+            .and_then(|b| b.as_array())
+            .map(|entries| entries.iter().filter_map(|e| e.get("then")).collect())
+            .unwrap_or_default()
+    }
+
     fn preset_animation_branch<'a>(
         schema: &'a serde_json::Value,
         name: &str,
     ) -> &'a serde_json::Value {
-        schema
+        let node = schema
             .pointer("/definitions/AnimationEffect")
-            .and_then(|e| e.get("oneOf").or_else(|| e.get("anyOf")))
-            .and_then(|b| b.as_array())
-            .expect("AnimationEffect is a union")
-            .iter()
+            .expect("AnimationEffect is defined");
+        union_branches(node)
+            .into_iter()
             .find(|branch| {
                 branch
                     .pointer("/properties/name/enum")

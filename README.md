@@ -207,6 +207,13 @@ Prints the JSON Schema for scenario files (editor autocompletion, LLM prompts).
 rustmotion schema -o schema.json
 ```
 
+It describes a scenario as written, templating included: `"delay": "$delay"`
+validates wherever a number is declared, because the engine substitutes before
+it deserializes. A bare string there is still an error — the placeholder has to
+look like one. Each union is steered by its tag (`type` on a component, `name`
+on an animation), so a validator reports the property that is wrong instead of
+failing the whole component against all 54 branches.
+
 ### `rustmotion info`
 
 Shows information about a scenario (duration, scene count, dimensions, ...).
