@@ -1,11 +1,11 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect, SamplingOptions};
+use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{asset_cache, fetch_icon_svg, icon_cache_key};
+use rustmotion_core::engine::renderer::{asset_cache, draw_photo, fetch_icon_svg, icon_cache_key};
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
@@ -91,13 +91,7 @@ impl Painter for Icon {
 
         let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
         let paint = Paint::default();
-        canvas.draw_image_rect_with_sampling_options(
-            img,
-            None,
-            dst,
-            SamplingOptions::from(skia_safe::CubicResampler::mitchell()),
-            &paint,
-        );
+        draw_photo(canvas, img, dst, &paint);
     }
 }
 

@@ -6,6 +6,7 @@ use skia_safe::{Canvas, Paint, PaintStyle, RRect, Rect};
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
+use rustmotion_core::engine::renderer::draw_photo;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, measure_text_with_fallback,
     paint_from_hex, subpixel_font, typeface_with_fallback,
@@ -141,7 +142,7 @@ impl AvatarGroup {
             let offset_y = cy - inner_r + (d - draw_h) / 2.0;
 
             let dst = Rect::from_xywh(offset_x, offset_y, draw_w, draw_h);
-            canvas.draw_image_rect(img, None, dst, &Paint::default());
+            draw_photo(canvas, img, dst, &Paint::default());
             canvas.restore();
         }
 

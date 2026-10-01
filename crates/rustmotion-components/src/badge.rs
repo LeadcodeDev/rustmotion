@@ -6,6 +6,7 @@ use rustmotion_core::css::style::AlignSelf;
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
+use rustmotion_core::engine::renderer::draw_photo;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg,
     measure_text_with_fallback, paint_from_hex, subpixel_font, typeface_with_fallback,
@@ -221,7 +222,7 @@ impl Badge {
 
             let icon_y = (h - icon_size) / 2.0;
             let dst = Rect::from_xywh(x_offset, icon_y, icon_size, icon_size);
-            canvas.draw_image_rect(img, None, dst, &Paint::default());
+            draw_photo(canvas, img, dst, &Paint::default());
 
             let ratio = self.resolved_font_size(ctx) / self.badge_size.params().0;
             x_offset += icon_size + 6.0 * ratio;

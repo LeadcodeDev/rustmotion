@@ -5,6 +5,7 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
+use rustmotion_core::engine::renderer::draw_photo;
 use rustmotion_core::engine::renderer::{
     extract_video_frame, find_closest_frame, probe_video_metadata, video_frame_cache,
 };
@@ -80,10 +81,10 @@ fn draw_fitted(canvas: &Canvas, img: skia_safe::Image, fit: &ImageFit, layout: &
             skia_safe::ClipOp::Intersect,
             true,
         );
-        canvas.draw_image_rect(img, None, dst, &paint);
+        draw_photo(canvas, img, dst, &paint);
         canvas.restore();
     } else {
-        canvas.draw_image_rect(img, None, dst, &paint);
+        draw_photo(canvas, img, dst, &paint);
     }
 }
 

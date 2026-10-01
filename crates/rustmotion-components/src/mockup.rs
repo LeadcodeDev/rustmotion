@@ -6,6 +6,7 @@ use skia_safe::{Canvas, Paint, PaintStyle, PathBuilder, RRect, Rect};
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
+use rustmotion_core::engine::renderer::draw_photo;
 use rustmotion_core::engine::renderer::{asset_cache, paint_from_hex};
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::schema::TimelineStep;
@@ -151,7 +152,7 @@ impl Mockup {
         canvas.save();
         canvas.clip_rect(screen_rect, skia_safe::ClipOp::Intersect, true);
         let dst = Rect::from_xywh(offset_x, offset_y, draw_w, draw_h);
-        canvas.draw_image_rect(img, None, dst, &Paint::default());
+        draw_photo(canvas, img, dst, &Paint::default());
         canvas.restore();
 
         Ok(())

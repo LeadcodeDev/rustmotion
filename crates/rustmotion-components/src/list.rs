@@ -6,6 +6,7 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, PaintStyle, Rect};
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
+use rustmotion_core::engine::renderer::draw_photo;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, paint_from_hex,
     subpixel_font, typeface_with_fallback,
@@ -154,7 +155,7 @@ impl List {
         };
 
         let dst = Rect::from_xywh(x, y, self.icon_size, self.icon_size);
-        canvas.draw_image_rect(img, None, dst, &Paint::default());
+        draw_photo(canvas, img, dst, &Paint::default());
         Ok(())
     }
 }

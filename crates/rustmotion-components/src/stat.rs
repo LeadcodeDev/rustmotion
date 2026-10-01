@@ -8,6 +8,7 @@ use skia_safe::{
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
+use rustmotion_core::engine::renderer::draw_photo;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg,
     measure_text_with_fallback, paint_from_hex, parse_hex_color, subpixel_font,
@@ -276,7 +277,7 @@ impl Stat {
                     if let Some(img) = icon_img {
                         let icon_y = ty - trend_fs * 0.8;
                         let dst = Rect::from_xywh(tx, icon_y, icon_sz as f32, icon_sz as f32);
-                        canvas.draw_image_rect(img, None, dst, &Paint::default());
+                        draw_photo(canvas, img, dst, &Paint::default());
                         tx += icon_sz as f32 + 4.0;
                     }
                 }

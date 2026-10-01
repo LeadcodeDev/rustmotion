@@ -1,7 +1,7 @@
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::asset_cache;
+use rustmotion_core::engine::renderer::{asset_cache, draw_photo};
 use rustmotion_core::error::{Result, RustmotionError};
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -128,6 +128,7 @@ mod native {
     use std::sync::{Arc, OnceLock};
 
     use dashmap::DashMap;
+    use rustmotion_core::engine::renderer::draw_photo;
 
     const CACHE_MAX_ENTRIES: usize = 128;
 
@@ -363,7 +364,7 @@ mod native {
 
         let dst = skia_safe::Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
         let paint = skia_safe::Paint::default();
-        canvas.draw_image_rect(img, None, dst, &paint);
+        draw_photo(canvas, img, dst, &paint);
     }
 
     #[cfg(test)]
@@ -417,7 +418,7 @@ impl Painter for Lottie {
 
             let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
             let paint = Paint::default();
-            canvas.draw_image_rect(img, None, dst, &paint);
+            draw_photo(canvas, img, dst, &paint);
             return;
         }
 
