@@ -2,17 +2,15 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ClipOp, Font, FontStyle, Rect};
 
-use rustmotion_core::css::style::{
-    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign,
-};
+use rustmotion_core::css::style::{FontStyle as CssFontStyle, TextAlign as CssTextAlign};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::{ease, AnimatedProperties};
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, measure_text_with_fallback, paint_from_hex, subpixel_font,
-    typeface_with_fallback,
+    css_font_weight, draw_text_with_fallback, measure_text_with_fallback, paint_from_hex,
+    subpixel_font, typeface_with_fallback,
 };
-use rustmotion_core::schema::{EasingType, FontStyleType, FontWeight, TimelineStep};
+use rustmotion_core::schema::{EasingType, FontStyleType, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// How many full 0-9 revolutions a reel makes before landing.
@@ -165,24 +163,12 @@ impl NumberWheel {
 
     pub(crate) fn build_font(&self, font_size: f32) -> Option<Font> {
         let font_family = self.style.font_family_or("Inter");
-        let weight = match &self.style.font_weight {
-            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => {
-                FontWeight::Bold
-            }
-            Some(CssFontWeight::Number(n)) if *n >= 600 => FontWeight::Bold,
-            Some(CssFontWeight::Number(n)) => FontWeight::Weight(*n),
-            _ => FontWeight::Normal,
-        };
         let slant = match self.style.font_style {
             Some(CssFontStyle::Italic) => skia_safe::font_style::Slant::Italic,
             Some(CssFontStyle::Oblique) => skia_safe::font_style::Slant::Oblique,
             _ => skia_safe::font_style::Slant::Upright,
         };
-        let weight = match weight {
-            FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
-            FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
-            FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
-        };
+        let weight = css_font_weight(self.style.font_weight.as_ref());
         let _ = FontStyleType::Normal;
         let typeface = typeface_with_fallback(
             font_family,

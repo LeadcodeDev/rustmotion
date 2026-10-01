@@ -1,17 +1,17 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use skia_safe::font_style::Weight;
 use skia_safe::{Canvas, Font, FontStyle, Point, RRect, Rect, Typeface};
 
 use rustmotion_core::css::style::{
-    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
-    TextAlign as CssTextAlign, WhiteSpace as CssWhiteSpace,
+    FontStyle as CssFontStyle, TextAlign as CssTextAlign, WhiteSpace as CssWhiteSpace,
 };
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::{AnimatedProperties, ResolvedCharAnimation};
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    subpixel_font, typeface_with_fallback,
+    css_font_weight, draw_text_with_fallback, emoji_typeface, measure_text_with_fallback,
+    paint_from_hex, subpixel_font, typeface_with_fallback,
 };
 use rustmotion_core::schema::{
     FontStyleType, FontWeight, TextAlign, TextAnimGranularity, TimelineStep,
@@ -102,7 +102,7 @@ rustmotion_core::impl_traits!(RichText {
 
 fn make_font(
     family: &str,
-    weight: &FontWeight,
+    weight: Weight,
     font_style_type: &FontStyleType,
     size: f32,
 ) -> Option<Font> {
@@ -111,12 +111,7 @@ fn make_font(
         FontStyleType::Italic => skia_safe::font_style::Slant::Italic,
         FontStyleType::Oblique => skia_safe::font_style::Slant::Oblique,
     };
-    let weight_val = match weight {
-        FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
-        FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
-        FontWeight::Weight(w) => skia_safe::font_style::Weight::from(*w as i32),
-    };
-    let skia_style = FontStyle::new(weight_val, skia_safe::font_style::Width::NORMAL, slant);
+    let skia_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
     let typeface = typeface_with_fallback(family, skia_style).ok()?;
     Some(subpixel_font(typeface, size))
 }
@@ -135,12 +130,7 @@ fn resolve_span_fonts(
 ) -> Vec<Option<SpanFontInfo>> {
     let default_color = style.color_str_or("#FFFFFF");
     let default_family = style.font_family_or("Inter");
-    let default_weight = match &style.font_weight {
-        Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => FontWeight::Bold,
-        Some(CssFontWeight::Number(n)) if *n >= 600 => FontWeight::Bold,
-        Some(CssFontWeight::Number(n)) => FontWeight::Weight(*n),
-        _ => FontWeight::Normal,
-    };
+    let default_weight = css_font_weight(style.font_weight.as_ref());
     let default_font_style = match style.font_style {
         Some(CssFontStyle::Italic) => FontStyleType::Italic,
         Some(CssFontStyle::Oblique) => FontStyleType::Oblique,
@@ -152,7 +142,10 @@ fn resolve_span_fonts(
         .map(|span| {
             let size = span.font_size.unwrap_or(default_size);
             let family = span.font_family.as_deref().unwrap_or(default_family);
-            let weight = span.font_weight.as_ref().unwrap_or(&default_weight);
+            let weight = span
+                .font_weight
+                .as_ref()
+                .map_or(default_weight, |w| Weight::from(w.to_skia_weight()));
             let fstyle = span.font_style.as_ref().unwrap_or(&default_font_style);
             let color = span.color.as_deref().unwrap_or(default_color).to_string();
             let letter_spacing = span.letter_spacing.unwrap_or(default_letter_spacing);

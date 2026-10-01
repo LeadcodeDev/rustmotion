@@ -236,6 +236,16 @@ pub trait Painter {
 > The constructor is the only place those three settings live; calling Skia directly
 > puts the snapping back for that one component.
 
+> A declared `font-weight` becomes a number through `renderer::css_font_weight`, and
+> nowhere else. The mapping used to exist seven times — once for measurement, six
+> times in the painters — and they disagreed: a numeric weight of 600 or more was
+> painted as 700, `bolder` measured 800 and painted 700, `lighter` measured 300 and
+> painted 400. A box measured on one face and painted with a wider one wraps at paint
+> time while keeping a single-line height, so the second line lands on the next
+> sibling. The schema `FontWeight` is still the right input where a component reads
+> one from JSON (`shape`'s embedded text, `rich_text`'s per-span override); it is not
+> a thing to re-encode a `CssStyle` into.
+
 ### Structure des crates
 
 ```

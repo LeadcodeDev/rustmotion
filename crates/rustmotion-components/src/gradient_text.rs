@@ -4,15 +4,15 @@ use skia_safe::gradient::{self, Colors, Gradient};
 use skia_safe::{Canvas, Color4f, FontStyle, Point};
 
 use rustmotion_core::css::style::{
-    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
-    TextAlign as CssTextAlign, WhiteSpace as CssWhiteSpace,
+    FontStyle as CssFontStyle, TextAlign as CssTextAlign, WhiteSpace as CssWhiteSpace,
 };
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    parse_hex_color, subpixel_font, typeface_with_fallback, wrap_text_with_tracking,
+    css_font_weight, draw_text_with_fallback, emoji_typeface, measure_text_with_fallback,
+    paint_from_hex, parse_hex_color, subpixel_font, typeface_with_fallback,
+    wrap_text_with_tracking,
 };
 use rustmotion_core::schema::{TextAlign, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -80,13 +80,7 @@ impl GradientText {
             Some(CssFontStyle::Oblique) => skia_safe::font_style::Slant::Oblique,
             _ => skia_safe::font_style::Slant::Upright,
         };
-        let weight = match &self.style.font_weight {
-            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => {
-                skia_safe::font_style::Weight::BOLD
-            }
-            Some(CssFontWeight::Number(n)) => skia_safe::font_style::Weight::from(*n as i32),
-            _ => skia_safe::font_style::Weight::NORMAL,
-        };
+        let weight = css_font_weight(self.style.font_weight.as_ref());
         let skia_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
 
         typeface_with_fallback(font_family, skia_style).ok()
