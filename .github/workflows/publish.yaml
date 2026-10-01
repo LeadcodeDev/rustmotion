@@ -23,7 +23,8 @@ jobs:
         # asound: required by cpal, which rodio pulls in for preview audio
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libxkbcommon-x11-dev libwayland-dev libxcb-cursor-dev libasound2-dev
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable channel, 2026-09-22
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
 
       # La version se lit via `cargo metadata`, pas en grepant un manifeste : elle
       # est déclarée dans `[workspace.package]` et héritée, donc un `grep

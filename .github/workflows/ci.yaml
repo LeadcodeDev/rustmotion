@@ -13,9 +13,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable channel, 2026-09-22
-        with:
-          components: rustfmt
+      # The version is `rust-toolchain.toml` and nothing else. `rustup toolchain
+      # install` with no argument reads that file, so there is one place to bump
+      # and no way for CI to test a version the working tree does not. Installing
+      # the floating `stable` channel instead is what reddened a green main on
+      # 2026-10-01: rustc 1.99.0 sharpened a clippy lint and no commit had changed.
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
       - name: Check formatting
         run: cargo fmt --all --check
 
@@ -30,9 +34,8 @@ jobs:
         # fonts-dejavu-core: font *files*, not just the libraries. A bare runner has none,
         # and usvg silently drops an <svg>'s <text> when no face resolves.
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libxkbcommon-x11-dev libwayland-dev libxcb-cursor-dev libasound2-dev fonts-dejavu-core
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable channel, 2026-09-22
-        with:
-          components: clippy
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Clippy
         # `--features rustmotion/studio` n'est pas décoratif : le studio est
@@ -53,7 +56,8 @@ jobs:
         # fonts-dejavu-core: font *files*, not just the libraries. A bare runner has none,
         # and usvg silently drops an <svg>'s <text> when no face resolves.
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libxkbcommon-x11-dev libwayland-dev libxcb-cursor-dev libasound2-dev fonts-dejavu-core
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable channel, 2026-09-22
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Run tests
         # Même raison qu'au job clippy : sans le feature, les tests du studio
@@ -64,7 +68,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable channel, 2026-09-22
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked

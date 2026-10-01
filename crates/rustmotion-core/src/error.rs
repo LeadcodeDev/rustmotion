@@ -1,3 +1,5 @@
+#![allow(clippy::redundant_field_names)]
+
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, RustmotionError>;
