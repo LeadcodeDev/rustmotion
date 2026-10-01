@@ -4,19 +4,18 @@ use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, Paint, PaintStyle, Rect};
 
 use rustmotion_core::css::style::{
-    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
-    TextAlign as CssTextAlign, WhiteSpace as CssWhiteSpace,
+    FontStyle as CssFontStyle, TextAlign as CssTextAlign, WhiteSpace as CssWhiteSpace,
 };
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    subpixel_font, typeface_with_fallback, wrap_text_with_tracking,
+    css_font_weight, draw_text_with_fallback, emoji_typeface, measure_text_with_fallback,
+    paint_from_hex, subpixel_font, typeface_with_fallback, wrap_text_with_tracking,
 };
 use rustmotion_core::schema::{
-    CaretConfig, CaretShape, FontStyleType, FontWeight, Stroke, TextAlign, TextBackground,
-    TextShadow, TextState, TextSwapConfig, TimelineStep,
+    CaretConfig, CaretShape, FontStyleType, Stroke, TextAlign, TextBackground, TextShadow,
+    TextState, TextSwapConfig, TimelineStep,
 };
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
@@ -198,14 +197,6 @@ impl Text {
             .as_deref()
             .unwrap_or_else(|| self.style.color_str_or("#FFFFFF"));
         let font_family = self.style.font_family_or("Inter");
-        let font_weight = match &self.style.font_weight {
-            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => {
-                FontWeight::Bold
-            }
-            Some(CssFontWeight::Number(n)) if *n >= 600 => FontWeight::Bold,
-            Some(CssFontWeight::Number(n)) => FontWeight::Weight(*n),
-            _ => FontWeight::Normal,
-        };
         let font_style_type = match self.style.font_style {
             Some(CssFontStyle::Italic) => FontStyleType::Italic,
             Some(CssFontStyle::Oblique) => FontStyleType::Oblique,
@@ -222,11 +213,7 @@ impl Text {
             FontStyleType::Italic => skia_safe::font_style::Slant::Italic,
             FontStyleType::Oblique => skia_safe::font_style::Slant::Oblique,
         };
-        let weight = match font_weight {
-            FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
-            FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
-            FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
-        };
+        let weight = css_font_weight(self.style.font_weight.as_ref());
         let skia_font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
 
         let typeface = typeface_with_fallback(font_family, skia_font_style)?;

@@ -2,17 +2,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, FontStyle, Rect};
 
-use rustmotion_core::css::style::{
-    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
-    WhiteSpace as CssWhiteSpace,
-};
+use rustmotion_core::css::style::{FontStyle as CssFontStyle, WhiteSpace as CssWhiteSpace};
 use rustmotion_core::css::units::LengthContext;
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    subpixel_font, typeface_with_fallback,
+    css_font_weight, draw_text_with_fallback, emoji_typeface, measure_text_with_fallback,
+    paint_from_hex, subpixel_font, typeface_with_fallback,
 };
 use rustmotion_core::schema::{CaptionStyle, CaptionWord, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -289,14 +286,7 @@ impl Caption {
     }
 
     fn resolve_font_style(style: &CssStyle) -> FontStyle {
-        let weight = match &style.font_weight {
-            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => {
-                skia_safe::font_style::Weight::BOLD
-            }
-            Some(CssFontWeight::Number(n)) if *n >= 600 => skia_safe::font_style::Weight::BOLD,
-            Some(CssFontWeight::Number(n)) => skia_safe::font_style::Weight::from(*n as i32),
-            _ => skia_safe::font_style::Weight::NORMAL,
-        };
+        let weight = css_font_weight(style.font_weight.as_ref());
         let slant = match style.font_style {
             Some(CssFontStyle::Italic) => skia_safe::font_style::Slant::Italic,
             Some(CssFontStyle::Oblique) => skia_safe::font_style::Slant::Oblique,
@@ -338,7 +328,7 @@ fn ease_out_back(t: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustmotion_core::css::style::CssStyle;
+    use rustmotion_core::css::style::{CssStyle, FontWeight as CssFontWeight, FontWeightKw};
     use rustmotion_core::css::Length;
     use rustmotion_core::schema::CaptionWord;
 
@@ -659,6 +649,36 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(*Caption::resolve_font_style(&numeric).weight(), 350);
+    }
+
+    #[test]
+    fn resolve_font_style_does_not_collapse_the_heavy_weights_to_bold() {
+        for declared in [600u16, 700, 800, 900] {
+            let style = CssStyle {
+                font_weight: Some(CssFontWeight::Number(declared)),
+                ..Default::default()
+            };
+            assert_eq!(
+                *Caption::resolve_font_style(&style).weight(),
+                i32::from(declared),
+                "a numeric font-weight must be passed through, not rounded to 700"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_font_style_reads_bolder_and_lighter_as_the_measurer_does() {
+        let bolder = CssStyle {
+            font_weight: Some(CssFontWeight::Keyword(FontWeightKw::Bolder)),
+            ..Default::default()
+        };
+        assert_eq!(*Caption::resolve_font_style(&bolder).weight(), 800);
+
+        let lighter = CssStyle {
+            font_weight: Some(CssFontWeight::Keyword(FontWeightKw::Lighter)),
+            ..Default::default()
+        };
+        assert_eq!(*Caption::resolve_font_style(&lighter).weight(), 300);
     }
 
     #[test]

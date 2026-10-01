@@ -2,8 +2,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
+use skia_safe::font_style::Weight;
 use skia_safe::{Font, FontHinting, FontMgr, FontStyle, Typeface};
 
+use crate::css::style::{FontWeight as CssFontWeight, FontWeightKw};
 use crate::error::{Result, RustmotionError};
 use crate::schema::FontEntry;
 
@@ -237,6 +239,16 @@ pub fn typeface_with_fallback(family: &str, style: FontStyle) -> Result<Typeface
     Err(RustmotionError::FontNotFound)
 }
 
+pub fn css_font_weight(weight: Option<&CssFontWeight>) -> Weight {
+    Weight::from(match weight {
+        Some(CssFontWeight::Keyword(FontWeightKw::Bold)) => 700,
+        Some(CssFontWeight::Keyword(FontWeightKw::Bolder)) => 800,
+        Some(CssFontWeight::Keyword(FontWeightKw::Lighter)) => 300,
+        Some(CssFontWeight::Keyword(FontWeightKw::Normal)) | None => 400,
+        Some(CssFontWeight::Number(n)) => i32::from((*n).clamp(1, 1000)),
+    })
+}
+
 pub fn subpixel_font(typeface: impl Into<Typeface>, size: impl Into<Option<f32>>) -> Font {
     let mut font = Font::from_typeface(typeface, size);
     font.set_subpixel(true);
@@ -280,6 +292,53 @@ pub fn fallback_typeface_for_char(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn css_font_weight_passes_numbers_through_and_maps_only_the_keywords() {
+        let cases = [
+            (None, 400),
+            (Some(CssFontWeight::Keyword(FontWeightKw::Normal)), 400),
+            (Some(CssFontWeight::Keyword(FontWeightKw::Bold)), 700),
+            (Some(CssFontWeight::Keyword(FontWeightKw::Bolder)), 800),
+            (Some(CssFontWeight::Keyword(FontWeightKw::Lighter)), 300),
+            (Some(CssFontWeight::Number(100)), 100),
+            (Some(CssFontWeight::Number(350)), 350),
+            (Some(CssFontWeight::Number(600)), 600),
+            (Some(CssFontWeight::Number(800)), 800),
+            (Some(CssFontWeight::Number(900)), 900),
+            (Some(CssFontWeight::Number(0)), 1),
+            (Some(CssFontWeight::Number(5000)), 1000),
+        ];
+        for (declared, expected) in cases {
+            assert_eq!(
+                *css_font_weight(declared.as_ref()),
+                expected,
+                "{declared:?} must resolve to {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_heavy_numeric_weight_selects_its_own_face_not_the_bold_one() {
+        let family = "RmProbeHeavyWeightFamily";
+        register_custom_font_variant(family, vec![8], 800, false);
+        register_custom_font_variant(family, vec![9], 900, false);
+
+        let declared = CssFontWeight::Number(900);
+        let resolved = *css_font_weight(Some(&declared));
+        assert_eq!(resolved, 900);
+        assert_eq!(
+            custom_font_bytes(family, resolved, false),
+            Some(vec![9]),
+            "font-weight 900 must reach the face registered at 900"
+        );
+        assert_eq!(
+            custom_font_bytes(family, 700, false),
+            Some(vec![8]),
+            "asking for 700, which the painter used to do for any weight >= 600, lands on \
+             the 800 face instead"
+        );
+    }
 
     fn local_entry(path: &str) -> FontEntry {
         FontEntry {

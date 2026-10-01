@@ -1,14 +1,16 @@
+use skia_safe::font_style::Weight;
 use skia_safe::{Font, FontStyle as SkFontStyle, Typeface};
 
 use rustmotion_core::css::style::{
-    CssStyle, FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, LineHeight,
-    TextAlign as CssTextAlign, WhiteSpace, TEXT_AUTOFIT_MIN_FONT_PX,
+    CssStyle, FontStyle as CssFontStyle, LineHeight, TextAlign as CssTextAlign, WhiteSpace,
+    TEXT_AUTOFIT_MIN_FONT_PX,
 };
 use rustmotion_core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
 use rustmotion_core::engine::deps::{TextMetrics, TextMetricsProvider};
 use rustmotion_core::engine::renderer::{
-    compute_glyph_metrics, emoji_typeface, format_counter_value, measure_text_with_fallback,
-    subpixel_font, typeface_with_fallback, wrap_text_with_tracking, GlyphMetric,
+    compute_glyph_metrics, css_font_weight, emoji_typeface, format_counter_value,
+    measure_text_with_fallback, subpixel_font, typeface_with_fallback, wrap_text_with_tracking,
+    GlyphMetric,
 };
 
 use crate::badge::{Badge, BadgeSize};
@@ -39,7 +41,7 @@ pub struct TextIntrinsic {
     font_family: Option<String>,
     font_size: f32,
     line_height_resolved: f32,
-    weight: u16,
+    weight: Weight,
     italic: bool,
     letter_spacing: f32,
     max_width: Option<f32>,
@@ -81,7 +83,7 @@ impl TextIntrinsic {
             font_family: style.font_family.clone(),
             font_size,
             line_height_resolved,
-            weight: weight_to_u16(style.font_weight.as_ref()),
+            weight: css_font_weight(style.font_weight.as_ref()),
             italic: matches!(style.font_style, Some(CssFontStyle::Italic)),
             letter_spacing,
             max_width,
@@ -184,8 +186,7 @@ impl TextIntrinsic {
         } else {
             skia_safe::font_style::Slant::Upright
         };
-        let weight = skia_safe::font_style::Weight::from(self.weight as i32);
-        SkFontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant)
+        SkFontStyle::new(self.weight, skia_safe::font_style::Width::NORMAL, slant)
     }
 
     fn typeface(&self) -> Option<Typeface> {
@@ -382,16 +383,6 @@ fn shrink_to_fit(
         }
     }
     lo
-}
-
-fn weight_to_u16(w: Option<&CssFontWeight>) -> u16 {
-    match w {
-        Some(CssFontWeight::Keyword(FontWeightKw::Bold)) => 700,
-        Some(CssFontWeight::Keyword(FontWeightKw::Bolder)) => 800,
-        Some(CssFontWeight::Keyword(FontWeightKw::Lighter)) => 300,
-        Some(CssFontWeight::Keyword(FontWeightKw::Normal)) | None => 400,
-        Some(CssFontWeight::Number(n)) => (*n).clamp(1, 1000),
-    }
 }
 
 pub struct GradientTextIntrinsic(TextIntrinsic);
