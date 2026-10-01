@@ -218,6 +218,17 @@ pub trait Painter {
 
 `PaintCtx` contient : `time`, `scene_duration`, `fps`, `frame_index`, `video_width`, `video_height`, `stagger_offset`.
 
+> A raster bitmap scaled into a destination rect is drawn with
+> `renderer::draw_photo`, not `canvas.draw_image_rect`. Skia's default
+> `SamplingOptions` is nearest neighbour with no mipmaps, so a photo drawn smaller
+> than its source aliased and one drawn larger broke into blocks; a 640px source at
+> 64px is scale 1/10 exactly and rendered solid white. `draw_photo` reads the size
+> the bitmap is finally drawn at off the canvas matrix, camera included, and asks for
+> mipmapped linear when either axis minifies and Mitchell cubic otherwise — cubic
+> consults no mipmaps, so it is only right when enlarging. The point form of
+> `draw_image` places a bitmap at 1:1 and never consults the sampling, which is why
+> the full-frame composites in `transition` are left on it.
+
 > Every `skia_safe::Font` comes from `renderer::subpixel_font`, never from
 > `Font::from_typeface`. Skia defaults to whole-pixel glyph placement (subpixel off,
 > baseline snapping on), so a text node under a slow translation stepped by 1px while
