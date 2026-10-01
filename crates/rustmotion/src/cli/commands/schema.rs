@@ -116,6 +116,104 @@ fn expose_serde_aliases(defs: &mut serde_json::Map<String, serde_json::Value>) {
     }
 }
 
+const PLACEHOLDER_PATTERN: &str = "^\\$[A-Za-z_][A-Za-z0-9_]*$";
+
+const PLACEHOLDER_DESCRIPTION: &str = "A `$name` placeholder, substituted before the scenario is \
+    deserialized — from `config`, from a `for-each` element's fields, or from a `use`'s `props`. \
+    See CLAUDE.md's \"Factorisation\" section.";
+
+fn is_scalar_schema(map: &serde_json::Map<String, serde_json::Value>) -> bool {
+    if map.contains_key("enum") || map.contains_key("const") {
+        return false;
+    }
+    let scalar = |name: &str| matches!(name, "number" | "integer" | "boolean");
+    match map.get("type") {
+        Some(serde_json::Value::String(name)) => scalar(name),
+        Some(serde_json::Value::Array(names)) => names
+            .iter()
+            .filter_map(|v| v.as_str())
+            .any(|name| scalar(name)),
+        _ => false,
+    }
+}
+
+fn accept_a_placeholder_too(value: &mut serde_json::Value) {
+    let Some(map) = value.as_object_mut() else {
+        return;
+    };
+    let description = map.remove("description");
+    let default = map.get("default").cloned();
+    let mut widened = serde_json::json!({
+        "anyOf": [
+            value.clone(),
+            { "$ref": "#/definitions/TemplatePlaceholder" }
+        ]
+    });
+    if let Some(description) = description {
+        widened["description"] = description;
+    }
+    if let Some(default) = default {
+        widened["default"] = default;
+    }
+    *value = widened;
+}
+
+fn accept_placeholders_where_a_scalar_is_declared(value: &mut serde_json::Value) {
+    const SCHEMA_VALUED: &[&str] = &[
+        "additionalProperties",
+        "additionalItems",
+        "not",
+        "if",
+        "then",
+        "else",
+        "propertyNames",
+        "contains",
+    ];
+    const SCHEMA_MAPS: &[&str] = &[
+        "properties",
+        "patternProperties",
+        "definitions",
+        "dependencies",
+    ];
+    const SCHEMA_LISTS: &[&str] = &["allOf", "anyOf", "oneOf"];
+
+    let Some(map) = value.as_object_mut() else {
+        return;
+    };
+    for key in SCHEMA_VALUED {
+        if let Some(child) = map.get_mut(*key) {
+            accept_placeholders_where_a_scalar_is_declared(child);
+        }
+    }
+    for key in SCHEMA_MAPS {
+        if let Some(serde_json::Value::Object(children)) = map.get_mut(*key) {
+            for child in children.values_mut() {
+                accept_placeholders_where_a_scalar_is_declared(child);
+            }
+        }
+    }
+    for key in SCHEMA_LISTS {
+        if let Some(serde_json::Value::Array(children)) = map.get_mut(*key) {
+            for child in children.iter_mut() {
+                accept_placeholders_where_a_scalar_is_declared(child);
+            }
+        }
+    }
+    match map.get_mut("items") {
+        Some(serde_json::Value::Array(children)) => {
+            for child in children.iter_mut() {
+                accept_placeholders_where_a_scalar_is_declared(child);
+            }
+        }
+        Some(child) => accept_placeholders_where_a_scalar_is_declared(child),
+        None => {}
+    }
+
+    if is_scalar_schema(map) {
+        accept_a_placeholder_too(value);
+    }
+}
+
 fn build_schema() -> serde_json::Value {
     let mut scenario_schema = schema::generate_json_schema();
     let component_schema = serde_json::to_value(schemars::schema_for!(Component))
@@ -166,6 +264,21 @@ fn build_schema() -> serde_json::Value {
         scenario_schema.pointer_mut("/definitions/ComponentTemplateDef/properties/template")
     {
         *template = serde_json::json!({ "$ref": "#/definitions/TemplateValue" });
+    }
+
+    accept_placeholders_where_a_scalar_is_declared(&mut scenario_schema);
+    if let Some(defs) = scenario_schema
+        .pointer_mut("/definitions")
+        .and_then(|d| d.as_object_mut())
+    {
+        defs.insert(
+            "TemplatePlaceholder".to_string(),
+            serde_json::json!({
+                "type": "string",
+                "pattern": PLACEHOLDER_PATTERN,
+                "description": PLACEHOLDER_DESCRIPTION
+            }),
+        );
     }
 
     scenario_schema

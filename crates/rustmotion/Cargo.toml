@@ -105,3 +105,6 @@ ffmpeg_integration = []
 ## Re-expose native Lottie decoding (default-on). Activating this feature here
 ## propagates to rustmotion-components so consumers only need to touch rustmotion.
 lottie-native = ["rustmotion-components/lottie-native"]
+
+[dev-dependencies]
+boon = "0.6.1"
