@@ -23,6 +23,8 @@ CLI :
 - `--report r.json` — rapport JSON
 - `--strict-anim` — vérification frame par frame ; ajoute la détection `animated_text_overflow` (transform animé qui sort du viewport à un instant échantillonné). L'échantillonnage s'arrête à `scene.freeze_at`, puisque rien n'est rendu au-delà.
 - `--strict-attrs` — promeut en erreurs les attributs inconnus (détection schéma + did-you-mean, activée par défaut en warnings)
+
+`rustmotion schema` exporte un Draft-7 qui accepte un scénario **templaté** (`"$delay"` passe là où un nombre est déclaré) et qui aiguille chaque union sur son tag, pour qu'un validateur nomme la propriété fautive. Ce que `validate` accepte, le schéma l'accepte : c'est verrouillé par `tests/exported_schema_accepts_the_examples.rs`, qui valide les 15 exemples du dépôt contre ce que la commande imprime vraiment.
 - `--lenient` — warnings au lieu d'errors
 
 ## Google Fonts: the network is denied by default

@@ -28,6 +28,16 @@ const SERDE_ALIASES: &[(&str, &str, &[&str])] = &[
     ("AnimationEffect", "float3d", &["float_3d"]),
     ("ComponentBase", "progress", &["progress_bar"]),
     ("ChildComponentBase", "progress", &["progress_bar"]),
+    (
+        "ComponentBase",
+        "div",
+        &["container", "card", "flex", "grid", "positioned"],
+    ),
+    (
+        "ChildComponentBase",
+        "div",
+        &["container", "card", "flex", "grid", "positioned"],
+    ),
 ];
 
 fn widen_enums_with(value: &mut serde_json::Value, canonical: &str, aliases: &[&str]) {
@@ -106,6 +116,201 @@ fn expose_serde_aliases(defs: &mut serde_json::Map<String, serde_json::Value>) {
     }
 }
 
+const PLACEHOLDER_PATTERN: &str = "^\\$[A-Za-z_][A-Za-z0-9_]*$";
+
+const PLACEHOLDER_DESCRIPTION: &str = "A `$name` placeholder, substituted before the scenario is \
+    deserialized — from `config`, from a `for-each` element's fields, or from a `use`'s `props`. \
+    See CLAUDE.md's \"Factorisation\" section.";
+
+fn is_scalar_schema(map: &serde_json::Map<String, serde_json::Value>) -> bool {
+    if map.contains_key("enum") || map.contains_key("const") {
+        return false;
+    }
+    let scalar = |name: &str| matches!(name, "number" | "integer" | "boolean");
+    match map.get("type") {
+        Some(serde_json::Value::String(name)) => scalar(name),
+        Some(serde_json::Value::Array(names)) => {
+            names.iter().filter_map(|v| v.as_str()).any(scalar)
+        }
+        _ => false,
+    }
+}
+
+fn accept_a_placeholder_too(value: &mut serde_json::Value) {
+    let Some(map) = value.as_object_mut() else {
+        return;
+    };
+    let description = map.remove("description");
+    let default = map.get("default").cloned();
+    let mut widened = serde_json::json!({
+        "anyOf": [
+            value.clone(),
+            { "$ref": "#/definitions/TemplatePlaceholder" }
+        ]
+    });
+    if let Some(description) = description {
+        widened["description"] = description;
+    }
+    if let Some(default) = default {
+        widened["default"] = default;
+    }
+    *value = widened;
+}
+
+fn accept_placeholders_where_a_scalar_is_declared(value: &mut serde_json::Value) {
+    const SCHEMA_VALUED: &[&str] = &[
+        "additionalProperties",
+        "additionalItems",
+        "not",
+        "if",
+        "then",
+        "else",
+        "propertyNames",
+        "contains",
+    ];
+    const SCHEMA_MAPS: &[&str] = &[
+        "properties",
+        "patternProperties",
+        "definitions",
+        "dependencies",
+    ];
+    const SCHEMA_LISTS: &[&str] = &["allOf", "anyOf", "oneOf"];
+
+    let Some(map) = value.as_object_mut() else {
+        return;
+    };
+    for key in SCHEMA_VALUED {
+        if let Some(child) = map.get_mut(*key) {
+            accept_placeholders_where_a_scalar_is_declared(child);
+        }
+    }
+    for key in SCHEMA_MAPS {
+        if let Some(serde_json::Value::Object(children)) = map.get_mut(*key) {
+            for child in children.values_mut() {
+                accept_placeholders_where_a_scalar_is_declared(child);
+            }
+        }
+    }
+    for key in SCHEMA_LISTS {
+        if let Some(serde_json::Value::Array(children)) = map.get_mut(*key) {
+            for child in children.iter_mut() {
+                accept_placeholders_where_a_scalar_is_declared(child);
+            }
+        }
+    }
+    match map.get_mut("items") {
+        Some(serde_json::Value::Array(children)) => {
+            for child in children.iter_mut() {
+                accept_placeholders_where_a_scalar_is_declared(child);
+            }
+        }
+        Some(child) => accept_placeholders_where_a_scalar_is_declared(child),
+        None => {}
+    }
+
+    if is_scalar_schema(map) {
+        accept_a_placeholder_too(value);
+    }
+}
+
+fn tag_values(branch: &serde_json::Value, key: &str) -> Option<Vec<String>> {
+    let declared = branch.get("properties")?.get(key)?;
+    if let Some(one) = declared.get("const").and_then(|v| v.as_str()) {
+        return Some(vec![one.to_string()]);
+    }
+    let listed = declared.get("enum")?.as_array()?;
+    let values: Vec<String> = listed
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
+    (!values.is_empty() && values.len() == listed.len()).then_some(values)
+}
+
+fn discriminating_key(branches: &[serde_json::Value]) -> Option<String> {
+    let first = branches.first()?.get("properties")?.as_object()?;
+    for key in first.keys() {
+        let Some(per_branch) = branches
+            .iter()
+            .map(|b| tag_values(b, key))
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
+        let mut seen = std::collections::HashSet::new();
+        if per_branch
+            .iter()
+            .flatten()
+            .all(|value| seen.insert(value.clone()))
+        {
+            return Some(key.clone());
+        }
+    }
+    None
+}
+
+fn steer_tagged_unions_on_their_tag(value: &mut serde_json::Value) {
+    let Some(map) = value.as_object_mut() else {
+        return;
+    };
+    for child in map.values_mut() {
+        match child {
+            serde_json::Value::Array(items) => {
+                for item in items.iter_mut() {
+                    steer_tagged_unions_on_their_tag(item);
+                }
+            }
+            other => steer_tagged_unions_on_their_tag(other),
+        }
+    }
+
+    let union_key = if map.contains_key("oneOf") {
+        "oneOf"
+    } else if map.contains_key("anyOf") {
+        "anyOf"
+    } else {
+        return;
+    };
+    let Some(branches) = map.get(union_key).and_then(|b| b.as_array()).cloned() else {
+        return;
+    };
+    let Some(key) = discriminating_key(&branches) else {
+        return;
+    };
+
+    let every_branch_requires_the_tag = branches.iter().all(|b| {
+        b.get("required")
+            .and_then(|r| r.as_array())
+            .is_some_and(|r| r.iter().any(|v| v.as_str() == Some(key.as_str())))
+    });
+
+    let mut steered: Vec<serde_json::Value> = Vec::with_capacity(branches.len() + 1);
+    let all: Vec<String> = branches
+        .iter()
+        .filter_map(|b| tag_values(b, &key))
+        .flatten()
+        .collect();
+    let mut guard = serde_json::json!({ "properties": { key.clone(): { "enum": all } } });
+    if every_branch_requires_the_tag {
+        guard["required"] = serde_json::json!([key.clone()]);
+    }
+    steered.push(guard);
+    for branch in branches {
+        let Some(values) = tag_values(&branch, &key) else {
+            return;
+        };
+        steered.push(serde_json::json!({
+            "if": {
+                "required": [key.clone()],
+                "properties": { key.clone(): { "enum": values } }
+            },
+            "then": branch
+        }));
+    }
+
+    map.remove(union_key);
+    map.insert("allOf".to_string(), serde_json::Value::Array(steered));
+}
+
 fn build_schema() -> serde_json::Value {
     let mut scenario_schema = schema::generate_json_schema();
     let component_schema = serde_json::to_value(schemars::schema_for!(Component))
@@ -158,6 +363,22 @@ fn build_schema() -> serde_json::Value {
         *template = serde_json::json!({ "$ref": "#/definitions/TemplateValue" });
     }
 
+    accept_placeholders_where_a_scalar_is_declared(&mut scenario_schema);
+    steer_tagged_unions_on_their_tag(&mut scenario_schema);
+    if let Some(defs) = scenario_schema
+        .pointer_mut("/definitions")
+        .and_then(|d| d.as_object_mut())
+    {
+        defs.insert(
+            "TemplatePlaceholder".to_string(),
+            serde_json::json!({
+                "type": "string",
+                "pattern": PLACEHOLDER_PATTERN,
+                "description": PLACEHOLDER_DESCRIPTION
+            }),
+        );
+    }
+
     scenario_schema
 }
 
@@ -173,11 +394,13 @@ fn wrap_with_directives(defs_obj: &mut serde_json::Map<String, serde_json::Value
             "description": "A concrete component, or a `for-each`/`use` directive that expands \
                 into one or more components before rendering — see CLAUDE.md's \
                 \"Factorisation\" section.",
-            "anyOf": [
-                { "$ref": format!("#/definitions/{base_name}") },
-                { "$ref": "#/definitions/ForEachDirective" },
-                { "$ref": "#/definitions/UseDirective" }
-            ]
+            "if": { "required": ["for-each"] },
+            "then": { "$ref": "#/definitions/ForEachDirective" },
+            "else": {
+                "if": { "required": ["use"] },
+                "then": { "$ref": "#/definitions/UseDirective" },
+                "else": { "$ref": format!("#/definitions/{base_name}") }
+            }
         }),
     );
 }
@@ -286,6 +509,33 @@ mod serde_alias_exposure_tests {
         Some(rest[..close].to_string())
     }
 
+    fn serde_attributes(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut rest = text;
+        while let Some(at) = rest.find("#[serde(") {
+            rest = &rest[at..];
+            let mut depth = 0usize;
+            let mut end = None;
+            for (i, c) in rest.char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(i + 1);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some(end) = end else { break };
+            out.push(rest[..end].split_whitespace().collect::<Vec<_>>().join(" "));
+            rest = &rest[end..];
+        }
+        out
+    }
+
     fn aliases_declared_in_the_sources() -> Vec<DeclaredAlias> {
         let mut files = Vec::new();
         rust_sources(&workspace_root().join("crates"), &mut files);
@@ -294,13 +544,12 @@ mod serde_alias_exposure_tests {
             let Ok(text) = std::fs::read_to_string(&file) else {
                 continue;
             };
-            for line in text.lines() {
-                let trimmed = line.trim_start();
-                if !trimmed.starts_with("#[serde(") || !trimmed.contains("alias = \"") {
+            for attribute in serde_attributes(&text) {
+                if !attribute.contains("alias = \"") {
                     continue;
                 }
-                let renamed_sibling = quoted_value_after(trimmed, "rename");
-                let mut rest = trimmed;
+                let renamed_sibling = quoted_value_after(&attribute, "rename");
+                let mut rest = attribute.as_str();
                 while let Some(at) = rest.find("alias = \"") {
                     rest = &rest[at + "alias = \"".len()..];
                     let Some(close) = rest.find('"') else { break };
@@ -314,6 +563,29 @@ mod serde_alias_exposure_tests {
             }
         }
         found
+    }
+
+    fn some_enum_array_carries_both(
+        value: &serde_json::Value,
+        canonical: &str,
+        alias: &str,
+    ) -> bool {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::Array(variants)) = map.get("enum") {
+                    let has = |want: &str| variants.iter().any(|v| v.as_str() == Some(want));
+                    if has(canonical) && has(alias) {
+                        return true;
+                    }
+                }
+                map.values()
+                    .any(|child| some_enum_array_carries_both(child, canonical, alias))
+            }
+            serde_json::Value::Array(items) => items
+                .iter()
+                .any(|item| some_enum_array_carries_both(item, canonical, alias)),
+            _ => false,
+        }
     }
 
     fn some_properties_object_carries_both(
@@ -354,12 +626,14 @@ mod serde_alias_exposure_tests {
             .filter(|d| match &d.renamed_sibling {
                 Some(canonical) => {
                     !some_properties_object_carries_both(&schema, canonical, &d.alias)
+                        && !some_enum_array_carries_both(&schema, canonical, &d.alias)
                 }
                 None => !flat.contains(&format!("\"{}\"", d.alias)),
             })
             .map(|d| match &d.renamed_sibling {
                 Some(canonical) => format!(
-                    "{} (declared in {}, expected beside {canonical})",
+                    "{} (declared in {}, expected beside {canonical}, as a sibling property or \
+                     as another value of the same enum)",
                     d.alias, d.file
                 ),
                 None => format!("{} (declared in {})", d.alias, d.file),
@@ -420,6 +694,140 @@ mod serde_alias_exposure_tests {
              schema as some other type's field name:\n  {}",
             missing.join("\n  ")
         );
+    }
+
+    fn inline_refs(schema: &serde_json::Value, node: &serde_json::Value) -> serde_json::Value {
+        fn step(
+            defs: &serde_json::Value,
+            node: &serde_json::Value,
+            depth: u8,
+        ) -> serde_json::Value {
+            if depth == 0 {
+                return node.clone();
+            }
+            match node {
+                serde_json::Value::Object(map) => {
+                    if let Some(name) = map
+                        .get("$ref")
+                        .and_then(|r| r.as_str())
+                        .and_then(|r| r.strip_prefix("#/definitions/"))
+                    {
+                        if let Some(target) = defs.get(name) {
+                            return step(defs, target, depth - 1);
+                        }
+                    }
+                    serde_json::Value::Object(
+                        map.iter()
+                            .map(|(k, v)| (k.clone(), step(defs, v, depth - 1)))
+                            .collect(),
+                    )
+                }
+                serde_json::Value::Array(items) => serde_json::Value::Array(
+                    items.iter().map(|v| step(defs, v, depth - 1)).collect(),
+                ),
+                other => other.clone(),
+            }
+        }
+        let defs = schema
+            .get("definitions")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        step(&defs, node, 6)
+    }
+
+    fn union_branches(node: &serde_json::Value) -> Vec<&serde_json::Value> {
+        if let Some(branches) = node
+            .get("oneOf")
+            .or_else(|| node.get("anyOf"))
+            .and_then(|b| b.as_array())
+        {
+            return branches.iter().collect();
+        }
+        node.get("allOf")
+            .and_then(|b| b.as_array())
+            .map(|entries| entries.iter().filter_map(|e| e.get("then")).collect())
+            .unwrap_or_default()
+    }
+
+    fn preset_animation_branch<'a>(
+        schema: &'a serde_json::Value,
+        name: &str,
+    ) -> &'a serde_json::Value {
+        let node = schema
+            .pointer("/definitions/AnimationEffect")
+            .expect("AnimationEffect is defined");
+        union_branches(node)
+            .into_iter()
+            .find(|branch| {
+                branch
+                    .pointer("/properties/name/enum")
+                    .and_then(|e| e.as_array())
+                    .is_some_and(|values| values.iter().any(|v| v.as_str() == Some(name)))
+            })
+            .unwrap_or_else(|| panic!("no AnimationEffect branch tagged {name}"))
+    }
+
+    #[test]
+    fn animation_timing_is_declared_the_way_its_wire_type_parses() {
+        let schema = build_schema();
+        let fade = preset_animation_branch(&schema, "fade_in");
+
+        let required: Vec<&str> = fade
+            .get("required")
+            .and_then(|r| r.as_array())
+            .map(|r| r.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        assert_eq!(
+            required,
+            ["name"],
+            "AnimationTiming carries `repeat: bool` with no serde default, so schemars made              `loop` required — while AnimationTimingWire defaults it"
+        );
+        assert!(
+            fade.pointer("/properties/repeat_count").is_none(),
+            "repeat_count is an output of RepeatSpec::into_parts, not a wire field, and the              wire type is deny_unknown_fields: advertising it hands a generator a key that              drops the whole component"
+        );
+
+        let text =
+            inline_refs(&schema, fade.pointer("/properties/loop").expect("loop")).to_string();
+        assert!(
+            text.contains("boolean") && text.contains("integer"),
+            "`loop` takes a bool or a play count (#330), not a bool alone: {text}"
+        );
+
+        let parses = |v: serde_json::Value| {
+            serde_json::from_value::<rustmotion::schema::AnimationEffect>(v).is_ok()
+        };
+        assert!(parses(serde_json::json!({ "name": "fade_in" })));
+        assert!(parses(serde_json::json!({ "name": "fade_in", "loop": 12 })));
+        assert!(
+            !parses(serde_json::json!({ "name": "fade_in", "repeat_count": 3 })),
+            "if this ever starts parsing, repeat_count belongs back in the schema"
+        );
+    }
+
+    #[test]
+    fn font_weight_is_declared_the_way_its_visitor_parses() {
+        let schema = build_schema();
+        let node = schema
+            .pointer("/definitions/RichTextSpan/properties/font-weight")
+            .expect("a rich_text span carries font-weight");
+        let described = inline_refs(&schema, node).to_string();
+        assert!(
+            described.contains("\"bold\""),
+            "the visitor takes \"bold\"; schemars derived Rust's `Bold` from the variant \
+             name: {described}"
+        );
+        assert!(
+            !described.contains("\"Bold\""),
+            "\"Bold\" is what the derive emitted and what the parser refuses: {described}"
+        );
+
+        let parses = |v: serde_json::Value| {
+            serde_json::from_value::<rustmotion::schema::FontWeight>(v).is_ok()
+        };
+        assert!(parses(serde_json::json!("bold")));
+        assert!(parses(serde_json::json!(700)));
+        assert!(!parses(serde_json::json!("Bold")));
     }
 
     #[test]

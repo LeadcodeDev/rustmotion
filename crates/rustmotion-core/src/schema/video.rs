@@ -207,7 +207,8 @@ pub struct AnimationTiming {
     /// this field. The JSON `"loop"` key this deserializes from accepts
     /// either shape (see [`AnimationTimingWire`]); `repeat` alone can't
     /// tell you which one was written — check `repeat_count` for that.
-    #[serde(rename = "loop")]
+    #[serde(default, rename = "loop")]
+    #[schemars(with = "RepeatSpec")]
     pub repeat: bool,
     /// How many times the animation plays, when the JSON `"loop"` value
     /// was a positive integer rather than a bare bool (issue #330) — e.g.
@@ -219,7 +220,8 @@ pub struct AnimationTiming {
     /// [`RepeatSpec::into_parts`]): there is no visible difference
     /// between "play once" and "loop zero times", so there's no reason to
     /// carry a count that never changes anything downstream.
-    #[serde(default)]
+    #[serde(default, skip)]
+    #[schemars(skip)]
     pub repeat_count: Option<u32>,
     /// Reverse direction on every other play (ping-pong) instead of
     /// snapping back to the start each cycle — GSAP calls this `yoyo`.
@@ -256,7 +258,10 @@ fn default_animation_duration() -> f64 {
     0.8
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// `true` loops forever, `false` plays once, and a positive integer is a
+/// total number of plays (`12` for GSAP's `repeat: 11`). `0` and `1` both
+/// mean "play once".
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 enum RepeatSpec {
     Loop(bool),

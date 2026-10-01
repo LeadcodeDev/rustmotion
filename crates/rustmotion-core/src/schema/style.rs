@@ -61,8 +61,7 @@ pub struct TimelineStep {
     pub style: Option<Box<crate::css::CssStyle>>,
 }
 
-/// Font weight — named ("normal"/"bold") or numeric (100-900)
-#[derive(Debug, Clone, JsonSchema, Default)]
+#[derive(Debug, Clone, Default)]
 pub enum FontWeight {
     #[default]
     Normal,
@@ -88,6 +87,23 @@ impl Serialize for FontWeight {
             FontWeight::Bold => serializer.serialize_str("bold"),
             FontWeight::Weight(w) => serializer.serialize_u16(*w),
         }
+    }
+}
+
+impl schemars::JsonSchema for FontWeight {
+    fn schema_name() -> String {
+        "FontWeight".to_string()
+    }
+
+    fn json_schema(_: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        serde_json::from_value(serde_json::json!({
+            "description": "Font weight — \"normal\", \"bold\", or a number.",
+            "anyOf": [
+                { "type": "string", "enum": ["normal", "bold"] },
+                { "type": "number" }
+            ]
+        }))
+        .expect("FontWeight's schema is a literal written here")
     }
 }
 
