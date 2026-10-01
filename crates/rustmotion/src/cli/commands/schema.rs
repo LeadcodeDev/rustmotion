@@ -28,6 +28,16 @@ const SERDE_ALIASES: &[(&str, &str, &[&str])] = &[
     ("AnimationEffect", "float3d", &["float_3d"]),
     ("ComponentBase", "progress", &["progress_bar"]),
     ("ChildComponentBase", "progress", &["progress_bar"]),
+    (
+        "ComponentBase",
+        "div",
+        &["container", "card", "flex", "grid", "positioned"],
+    ),
+    (
+        "ChildComponentBase",
+        "div",
+        &["container", "card", "flex", "grid", "positioned"],
+    ),
 ];
 
 fn widen_enums_with(value: &mut serde_json::Value, canonical: &str, aliases: &[&str]) {
@@ -286,6 +296,33 @@ mod serde_alias_exposure_tests {
         Some(rest[..close].to_string())
     }
 
+    fn serde_attributes(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut rest = text;
+        while let Some(at) = rest.find("#[serde(") {
+            rest = &rest[at..];
+            let mut depth = 0usize;
+            let mut end = None;
+            for (i, c) in rest.char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(i + 1);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some(end) = end else { break };
+            out.push(rest[..end].split_whitespace().collect::<Vec<_>>().join(" "));
+            rest = &rest[end..];
+        }
+        out
+    }
+
     fn aliases_declared_in_the_sources() -> Vec<DeclaredAlias> {
         let mut files = Vec::new();
         rust_sources(&workspace_root().join("crates"), &mut files);
@@ -294,13 +331,12 @@ mod serde_alias_exposure_tests {
             let Ok(text) = std::fs::read_to_string(&file) else {
                 continue;
             };
-            for line in text.lines() {
-                let trimmed = line.trim_start();
-                if !trimmed.starts_with("#[serde(") || !trimmed.contains("alias = \"") {
+            for attribute in serde_attributes(&text) {
+                if !attribute.contains("alias = \"") {
                     continue;
                 }
-                let renamed_sibling = quoted_value_after(trimmed, "rename");
-                let mut rest = trimmed;
+                let renamed_sibling = quoted_value_after(&attribute, "rename");
+                let mut rest = attribute.as_str();
                 while let Some(at) = rest.find("alias = \"") {
                     rest = &rest[at + "alias = \"".len()..];
                     let Some(close) = rest.find('"') else { break };
@@ -314,6 +350,29 @@ mod serde_alias_exposure_tests {
             }
         }
         found
+    }
+
+    fn some_enum_array_carries_both(
+        value: &serde_json::Value,
+        canonical: &str,
+        alias: &str,
+    ) -> bool {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::Array(variants)) = map.get("enum") {
+                    let has = |want: &str| variants.iter().any(|v| v.as_str() == Some(want));
+                    if has(canonical) && has(alias) {
+                        return true;
+                    }
+                }
+                map.values()
+                    .any(|child| some_enum_array_carries_both(child, canonical, alias))
+            }
+            serde_json::Value::Array(items) => items
+                .iter()
+                .any(|item| some_enum_array_carries_both(item, canonical, alias)),
+            _ => false,
+        }
     }
 
     fn some_properties_object_carries_both(
@@ -354,12 +413,14 @@ mod serde_alias_exposure_tests {
             .filter(|d| match &d.renamed_sibling {
                 Some(canonical) => {
                     !some_properties_object_carries_both(&schema, canonical, &d.alias)
+                        && !some_enum_array_carries_both(&schema, canonical, &d.alias)
                 }
                 None => !flat.contains(&format!("\"{}\"", d.alias)),
             })
             .map(|d| match &d.renamed_sibling {
                 Some(canonical) => format!(
-                    "{} (declared in {}, expected beside {canonical})",
+                    "{} (declared in {}, expected beside {canonical}, as a sibling property or \
+                     as another value of the same enum)",
                     d.alias, d.file
                 ),
                 None => format!("{} (declared in {})", d.alias, d.file),
