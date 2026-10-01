@@ -483,6 +483,127 @@ mod serde_alias_exposure_tests {
         );
     }
 
+    fn inline_refs(schema: &serde_json::Value, node: &serde_json::Value) -> serde_json::Value {
+        fn step(
+            defs: &serde_json::Value,
+            node: &serde_json::Value,
+            depth: u8,
+        ) -> serde_json::Value {
+            if depth == 0 {
+                return node.clone();
+            }
+            match node {
+                serde_json::Value::Object(map) => {
+                    if let Some(name) = map
+                        .get("$ref")
+                        .and_then(|r| r.as_str())
+                        .and_then(|r| r.strip_prefix("#/definitions/"))
+                    {
+                        if let Some(target) = defs.get(name) {
+                            return step(defs, target, depth - 1);
+                        }
+                    }
+                    serde_json::Value::Object(
+                        map.iter()
+                            .map(|(k, v)| (k.clone(), step(defs, v, depth - 1)))
+                            .collect(),
+                    )
+                }
+                serde_json::Value::Array(items) => serde_json::Value::Array(
+                    items.iter().map(|v| step(defs, v, depth - 1)).collect(),
+                ),
+                other => other.clone(),
+            }
+        }
+        let defs = schema
+            .get("definitions")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        step(&defs, node, 6)
+    }
+
+    fn preset_animation_branch<'a>(
+        schema: &'a serde_json::Value,
+        name: &str,
+    ) -> &'a serde_json::Value {
+        schema
+            .pointer("/definitions/AnimationEffect")
+            .and_then(|e| e.get("oneOf").or_else(|| e.get("anyOf")))
+            .and_then(|b| b.as_array())
+            .expect("AnimationEffect is a union")
+            .iter()
+            .find(|branch| {
+                branch
+                    .pointer("/properties/name/enum")
+                    .and_then(|e| e.as_array())
+                    .is_some_and(|values| values.iter().any(|v| v.as_str() == Some(name)))
+            })
+            .unwrap_or_else(|| panic!("no AnimationEffect branch tagged {name}"))
+    }
+
+    #[test]
+    fn animation_timing_is_declared_the_way_its_wire_type_parses() {
+        let schema = build_schema();
+        let fade = preset_animation_branch(&schema, "fade_in");
+
+        let required: Vec<&str> = fade
+            .get("required")
+            .and_then(|r| r.as_array())
+            .map(|r| r.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        assert_eq!(
+            required,
+            ["name"],
+            "AnimationTiming carries `repeat: bool` with no serde default, so schemars made              `loop` required — while AnimationTimingWire defaults it"
+        );
+        assert!(
+            fade.pointer("/properties/repeat_count").is_none(),
+            "repeat_count is an output of RepeatSpec::into_parts, not a wire field, and the              wire type is deny_unknown_fields: advertising it hands a generator a key that              drops the whole component"
+        );
+
+        let text =
+            inline_refs(&schema, fade.pointer("/properties/loop").expect("loop")).to_string();
+        assert!(
+            text.contains("boolean") && text.contains("integer"),
+            "`loop` takes a bool or a play count (#330), not a bool alone: {text}"
+        );
+
+        let parses = |v: serde_json::Value| {
+            serde_json::from_value::<rustmotion::schema::AnimationEffect>(v).is_ok()
+        };
+        assert!(parses(serde_json::json!({ "name": "fade_in" })));
+        assert!(parses(serde_json::json!({ "name": "fade_in", "loop": 12 })));
+        assert!(
+            !parses(serde_json::json!({ "name": "fade_in", "repeat_count": 3 })),
+            "if this ever starts parsing, repeat_count belongs back in the schema"
+        );
+    }
+
+    #[test]
+    fn font_weight_is_declared_the_way_its_visitor_parses() {
+        let schema = build_schema();
+        let node = schema
+            .pointer("/definitions/RichTextSpan/properties/font-weight")
+            .expect("a rich_text span carries font-weight");
+        let described = inline_refs(&schema, node).to_string();
+        assert!(
+            described.contains("\"bold\""),
+            "the visitor takes \"bold\"; schemars derived Rust's `Bold` from the variant \
+             name: {described}"
+        );
+        assert!(
+            !described.contains("\"Bold\""),
+            "\"Bold\" is what the derive emitted and what the parser refuses: {described}"
+        );
+
+        let parses = |v: serde_json::Value| {
+            serde_json::from_value::<rustmotion::schema::FontWeight>(v).is_ok()
+        };
+        assert!(parses(serde_json::json!("bold")));
+        assert!(parses(serde_json::json!(700)));
+        assert!(!parses(serde_json::json!("Bold")));
+    }
+
     #[test]
     fn a_gradient_text_stop_accepts_both_spellings_of_its_position() {
         let schema = build_schema();
