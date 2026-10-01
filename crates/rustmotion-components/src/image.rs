@@ -5,7 +5,7 @@ use skia_safe::{Canvas, Paint, Rect};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::asset_cache;
+use rustmotion_core::engine::renderer::{asset_cache, draw_photo};
 use rustmotion_core::schema::{ImageFit, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
@@ -84,10 +84,10 @@ impl Painter for Image {
                 skia_safe::ClipOp::Intersect,
                 true,
             );
-            canvas.draw_image_rect(img, None, dst, &paint);
+            draw_photo(canvas, img, dst, &paint);
             canvas.restore();
         } else {
-            canvas.draw_image_rect(img, None, dst, &paint);
+            draw_photo(canvas, img, dst, &paint);
         }
     }
 }

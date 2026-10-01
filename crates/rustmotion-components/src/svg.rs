@@ -11,6 +11,7 @@ use skia_safe::{
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::{ease, AnimatedProperties};
 use rustmotion_core::engine::layout_pass::BoxLayout;
+use rustmotion_core::engine::renderer::draw_photo;
 use rustmotion_core::engine::renderer::{asset_cache, interpolate_path_data};
 use rustmotion_core::schema::{SvgPathMorph, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -372,7 +373,7 @@ fn paint_fill_reveal(
             canvas.clip_rect(sweep, None, true);
         }
 
-        canvas.draw_image_rect(full_image, None, image_dst, &paint);
+        draw_photo(canvas, full_image, image_dst, &paint);
         canvas.restore();
     }
 }
@@ -721,7 +722,7 @@ impl Svg {
                 return;
             };
             let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
-            canvas.draw_image_rect(img, None, dst, &Paint::default());
+            draw_photo(canvas, img, dst, &Paint::default());
             return;
         }
 
@@ -773,7 +774,7 @@ impl Svg {
 
         let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
         let paint = Paint::default();
-        canvas.draw_image_rect(img, None, dst, &paint);
+        draw_photo(canvas, img, dst, &paint);
     }
 
     fn cached_full_image(&self, layout: &BoxLayout) -> Option<skia_safe::Image> {
@@ -896,7 +897,7 @@ impl Svg {
 
         let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
         let paint = Paint::default();
-        canvas.draw_image_rect(img, None, dst, &paint);
+        draw_photo(canvas, img, dst, &paint);
 
         let _ = svg_data;
     }

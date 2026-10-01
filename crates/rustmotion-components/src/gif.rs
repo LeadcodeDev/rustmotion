@@ -7,6 +7,7 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
+use rustmotion_core::engine::renderer::draw_photo;
 use rustmotion_core::engine::renderer::gif_cache;
 use rustmotion_core::schema::{ImageFit, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -228,7 +229,7 @@ impl Painter for Gif {
         if let Some(img) = skia_safe::images::raster_from_data(&img_info, data, row_bytes) {
             let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
             let paint = Paint::default();
-            canvas.draw_image_rect(img, None, dst, &paint);
+            draw_photo(canvas, img, dst, &paint);
         }
     }
 }

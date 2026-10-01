@@ -6,7 +6,7 @@ use skia_safe::{Canvas, Paint, PaintStyle, RRect, Rect};
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{asset_cache, paint_from_hex};
+use rustmotion_core::engine::renderer::{asset_cache, draw_photo, paint_from_hex};
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -112,7 +112,7 @@ impl Avatar {
         let offset_y = (h - draw_h) / 2.0;
 
         let dst = Rect::from_xywh(offset_x, offset_y, draw_w, draw_h);
-        canvas.draw_image_rect(img, None, dst, &Paint::default());
+        draw_photo(canvas, img, dst, &Paint::default());
 
         canvas.restore();
 

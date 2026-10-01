@@ -1,7 +1,7 @@
 use crate::cli::OutputFormat;
 use rustmotion::encode;
 use rustmotion::engine;
-use rustmotion::engine::renderer::subpixel_font;
+use rustmotion::engine::renderer::{draw_photo, subpixel_font};
 use rustmotion::error::{Result, RustmotionError};
 use rustmotion::schema::ResolvedScenario;
 use skia_safe::{
@@ -191,7 +191,7 @@ fn compose_grid(cells: &[(f64, image::RgbaImage)], layout: &GridLayout) -> Resul
             .ok_or(RustmotionError::PixelImage)?;
 
         let dst = Rect::from_xywh(x, y, layout.cell_width as f32, layout.cell_height as f32);
-        canvas.draw_image_rect(&sk_img, None, dst, &Paint::default());
+        draw_photo(canvas, &sk_img, dst, &Paint::default());
         canvas.draw_rect(dst, &border_paint);
 
         draw_timestamp_stamp(canvas, &font, *t, x, y, layout.cell_height as f32);

@@ -1,5 +1,5 @@
 use crate::engine::animator::ease;
-use crate::engine::renderer::{color4f_from_hex, paint_from_hex};
+use crate::engine::renderer::{color4f_from_hex, draw_photo, paint_from_hex};
 use crate::schema::{
     EasingType, IrisRing, IrisShape, MaskShape, PanBackground, PixelDissolveOrder, Transition,
     TransitionCorner, TransitionDirection, TransitionType, ZoomBlurOrigin,
@@ -1461,9 +1461,7 @@ pub fn camera_pan_transition(
 
 fn render_layer(img: &skia_safe::Image, dest: Rect, width: u32, height: u32) -> Option<Vec<u8>> {
     let mut surface = create_skia_surface(width, height)?;
-    surface
-        .canvas()
-        .draw_image_rect(img, None, dest, &Paint::default());
+    draw_photo(surface.canvas(), img, dest, &Paint::default());
     Some(surface_to_pixels(surface, width, height))
 }
 
